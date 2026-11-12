@@ -16,7 +16,7 @@ runtime:
   working_dir: "{{workspace}}"
   tmux_name: soul-{{alias}}
   cli: {{cli}}
-  # codex_skip_git_repo_check: true  # codex 在多仓聚合目录运行时显式开启
+{{capture_line}}  # codex_skip_git_repo_check: true  # codex 在多仓聚合目录运行时显式开启
 
 cognition:
   history_lookback_days: 2

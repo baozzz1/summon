@@ -1,12 +1,13 @@
-//! codex / traex 的模型目录:面板候选与默认模型的事实源。
+//! codex / traex 与走 CLI 的 cursor 的模型目录:面板候选与默认模型的事实源。
 //!
-//! 目录归 backend 管(app-server 的 `model/list`)。daemon 在独立线程按需刷新，
+//! 目录归 backend 管(codex / traex 是 app-server 的 `model/list`,走 CLI 的 cursor 是
+//! `cursor-agent models`)。daemon 在独立线程按需刷新，
 //! 面板读取账号隔离的缓存；onboard/bind 等一次性命令同步查询。
 //!
 //! 缓存按 **账号** 分桶,不按 chat、也不按 cli kind。
 //!
 //! 不按 chat:目录是账号级的,与哪条会话无关 —— 一个 agent 的任一 chat 开过会话,它所有 chat
-//! 的面板都能拿到真实候选。这是它与 cursor(目录只随 ACP 会话下发)的差别。
+//! 的面板都能拿到真实候选。这是它与走 ACP 的 cursor(目录只随会话下发)的差别。
 //!
 //! 不按 cli kind:同一个 cli 下,配了 `runtime.env` 的 `CODEX_HOME` 或 `runtime.cli_cmd` 的
 //! agent 连的是另一个账号,目录可以完全不同。串了的后果是 A 的面板列出 B 账号才有的模型,
@@ -24,7 +25,7 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use summon_core::driver::CliDriver;
-use summon_core::registry::Agent;
+use summon_core::registry::{Agent, CaptureMode};
 
 use crate::observe::log::log;
 
@@ -36,6 +37,8 @@ use crate::codex::codex_app_server::{
 /// `model/list` 两步,所以最坏等两倍 —— onboard/bind 是人在终端前等着的命令,不能更宽。
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+/// `cursor-agent models` 要联网问账号目录,本机实测约 2s;后台线程里跑,给足余量。
+const CURSOR_MODELS_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// 这个 CLI 的模型目录是否由 backend 自报。traex 是 codex 的 fork,协议同构,走同一条路。
 pub fn reports_catalog(cli: &str) -> bool {
@@ -43,6 +46,45 @@ pub fn reports_catalog(cli: &str) -> bool {
         CliDriver::from_kind(cli),
         CliDriver::Codex | CliDriver::Traex
     )
+}
+
+/// 这个 agent 的目录由谁报:codex / traex 走 app-server,走 CLI 的 cursor 读 `cursor-agent models`。
+/// 走 ACP 的 cursor 目录随会话下发(见 `rpc_pool`),不在这里。
+fn agent_reports_catalog(agent: &Agent) -> bool {
+    match CliDriver::from_kind(agent.cli_kind()) {
+        CliDriver::Codex | CliDriver::Traex => true,
+        CliDriver::Cursor => agent.capture_mode() == CaptureMode::CliSession,
+        _ => false,
+    }
+}
+
+/// 后台刷新线程起不起:cursor 无论眼下走哪条通道都起,agent.yaml 热改成 CLI 后不用重启就有目录;
+/// 每次刷新前再按 [`agent_reports_catalog`] 判一遍。
+fn may_report_catalog(cli: &str) -> bool {
+    matches!(
+        CliDriver::from_kind(cli),
+        CliDriver::Codex | CliDriver::Traex | CliDriver::Cursor
+    )
+}
+
+/// 解析 `cursor-agent models` 的输出:每个模型一行 `<id> - <显示名>`,默认那项显示名带
+/// `(default)`;表头、空行与末尾的 `Tip:` 提示都不是 `<id> - ` 形状,跳过。
+pub(crate) fn parse_cursor_models_output(out: &str) -> CodexModelCatalog {
+    let mut catalog = CodexModelCatalog::default();
+    for line in out.lines().map(str::trim) {
+        let Some((id, name)) = line.split_once(" - ") else {
+            continue;
+        };
+        let id = id.trim();
+        if id.is_empty() || id.chars().any(char::is_whitespace) {
+            continue;
+        }
+        if catalog.default_model.is_none() && name.trim_end().ends_with("(default)") {
+            catalog.default_model = Some(id.to_string());
+        }
+        catalog.models.push(id.to_string());
+    }
+    catalog
 }
 
 fn store() -> &'static Mutex<HashMap<String, CodexModelCatalog>> {
@@ -98,7 +140,7 @@ pub fn record_for_agent(agent: &Agent, catalog: CodexModelCatalog) {
 
 /// 这个 agent 的目录。daemon 起来后它还没开过会话 → `None`,调用方回退配置桶。
 pub fn cached_for_agent(agent: &Agent) -> Option<CodexModelCatalog> {
-    if !reports_catalog(agent.cli_kind()) {
+    if !agent_reports_catalog(agent) {
         return None;
     }
     let scope = agent_scope(agent);
@@ -174,7 +216,7 @@ pub fn start_refreshing(agent: &Agent) -> Option<CatalogRefresher> {
 }
 
 fn start_refreshing_with_interval(agent: &Agent, interval: Duration) -> Option<CatalogRefresher> {
-    if !reports_catalog(agent.cli_kind()) {
+    if !may_report_catalog(agent.cli_kind()) {
         return None;
     }
     let (tx, rx) = mpsc::sync_channel(1);
@@ -209,7 +251,7 @@ fn refresh_loop(rx: mpsc::Receiver<Agent>, mailbox: &RefreshMailbox, interval: D
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
-        if !reports_catalog(agent.cli_kind()) {
+        if !agent_reports_catalog(&agent) {
             continue;
         }
         let config = agent_probe_config(&agent);
@@ -221,6 +263,14 @@ fn refresh_loop(rx: mpsc::Receiver<Agent>, mailbox: &RefreshMailbox, interval: D
             continue;
         }
         last_attempt = Some((scope.clone(), Instant::now()));
+        if CliDriver::from_kind(agent.cli_kind()) == CliDriver::Cursor {
+            match cursor_cli_models(&config, mailbox) {
+                Ok(Some(catalog)) => record(format!("refresh:{scope}"), catalog),
+                Ok(None) => break,
+                Err(error) => log(&summon_i18n::format!("rc7a1e0d93d", agent.name)),
+            }
+            continue;
+        }
         let outcome = CodexAppServerClient::spawn(config).and_then(|mut client| {
             {
                 let mut active = mailbox
@@ -246,6 +296,74 @@ fn refresh_loop(rx: mpsc::Receiver<Agent>, mailbox: &RefreshMailbox, interval: D
         match outcome {
             Ok(catalog) => record(format!("refresh:{scope}"), catalog),
             Err(error) => log(&summon_i18n::format!("r02c0d61a86", agent.name)),
+        }
+    }
+}
+
+/// 用 agent 自己的 CLI 与环境跑一次 `cursor-agent models`。停机或超时就杀掉它,不让刷新线程
+/// 卡住 dispatcher 的退出。
+///
+/// 停机打断时返回 `Ok(None)`,不算刷新失败。stdout 也按同一个截止时间等:cursor-agent 若留下
+/// 继承了 stdout 的后代进程,管道迟迟不关,读线程就地丢弃,不让刷新线程跟着卡住。
+fn cursor_cli_models(
+    config: &CodexAppServerConfig,
+    mailbox: &RefreshMailbox,
+) -> Result<Option<CodexModelCatalog>, String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new(&config.program)
+        .arg("models")
+        .env_clear()
+        .envs(config.env.iter().map(|(key, value)| (key, value)))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(summon_i18n::text!("rc7a1e0d93e").to_string());
+    };
+    let (out_tx, out_rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut out = String::new();
+        // 读失败按空输出处理,解析出空目录不会覆盖已有缓存。
+        let _ = stdout.read_to_string(&mut out);
+        // 等的一方已超时走了就没人收,丢掉即可。
+        let _ = out_tx.send(out);
+    });
+    let deadline = Instant::now() + CURSOR_MODELS_TIMEOUT;
+    let timed_out = || summon_i18n::format!("rc7a1e0d93c", CURSOR_MODELS_TIMEOUT.as_secs());
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                let stopped = mailbox.stopped.load(Ordering::Acquire);
+                if stopped || Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return if stopped { Ok(None) } else { Err(timed_out()) };
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    if !status.success() {
+        return Err(summon_i18n::format!("rc7a1e0d93b", status));
+    }
+    loop {
+        if mailbox.stopped.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(timed_out());
+        }
+        match out_rx.recv_timeout(left.min(Duration::from_millis(100))) {
+            Ok(out) => return Ok(Some(parse_cursor_models_output(&out))),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(Some(Default::default())),
         }
     }
 }
@@ -320,6 +438,73 @@ pub fn upstream_default_model(cli: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CURSOR_MODELS_OUTPUT: &str = "Available models\n\nauto - Auto (default)\n\
+gpt-5.6-sol-xhigh - GPT-5.6 Sol Extra High\ngemini-4-carbon-high - Gemini 4 Carbon High\n\n\
+Tip: use --model <id> (or /model <id> in interactive mode) to switch. Parameterized models \
+also accept quoted overrides, e.g. --model 'claude-opus-4-8[context=1m,effort=high]'.\n";
+
+    #[test]
+    fn cursor_models_output_parses_ids_and_the_default() {
+        let catalog = parse_cursor_models_output(CURSOR_MODELS_OUTPUT);
+        assert_eq!(
+            catalog.models,
+            ["auto", "gpt-5.6-sol-xhigh", "gemini-4-carbon-high"]
+        );
+        assert_eq!(catalog.default_model.as_deref(), Some("auto"));
+    }
+
+    fn cursor_agent(name: &str, capture: Option<&str>) -> (Agent, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = tmp.path().join("fake-cursor-agent");
+        crate::test_support::write_test_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\n[ \"$1\" = models ] || exit 2\ncat <<'EOF'\n{CURSOR_MODELS_OUTPUT}EOF\n"
+            ),
+        );
+        let capture_line = capture
+            .map(|c| format!("  capture: {c}\n"))
+            .unwrap_or_default();
+        let yaml = format!(
+            "name: {name}\nstatus: active\nruntime:\n  cli: cursor\n  cli_cmd: {}\n{capture_line}",
+            script.display()
+        );
+        let mut agent: Agent = serde_yaml::from_str(&yaml).unwrap();
+        agent.dir = tmp.path().to_path_buf();
+        (agent, tmp)
+    }
+
+    #[test]
+    fn cli_cursor_agents_get_the_full_cursor_agent_models_catalog() {
+        let (agent, _tmp) = cursor_agent("cursor-cli-catalog", Some("cli"));
+        let refresher = start_refreshing_with_interval(&agent, Duration::ZERO).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while cached_for_agent(&agent).is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let catalog = cached_for_agent(&agent).expect("CLI 模式的 cursor 应拿到目录");
+        assert_eq!(
+            catalog.models,
+            ["auto", "gpt-5.6-sol-xhigh", "gemini-4-carbon-high"]
+        );
+        assert_eq!(catalog.default_model.as_deref(), Some("auto"));
+        drop(refresher);
+    }
+
+    #[test]
+    fn acp_cursor_agents_keep_reading_the_session_catalog() {
+        let (agent, _tmp) = cursor_agent("cursor-acp-catalog", None);
+        assert!(!agent_reports_catalog(&agent));
+        record(
+            agent_scope(&agent),
+            parse_cursor_models_output(CURSOR_MODELS_OUTPUT),
+        );
+        assert!(
+            cached_for_agent(&agent).is_none(),
+            "ACP 的候选只认会话下发的目录"
+        );
+    }
 
     fn catalog_agent(name: &str) -> (Agent, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();

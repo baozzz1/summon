@@ -149,10 +149,20 @@ impl EventRecord {
     /// 入站用户消息记录(kind=`user_input`)。events.jsonl 原本只 tee agent 输出,加这条让
     /// `agents tail` 也能看到「是哪条用户消息触发了本轮」;ts/seq 由 IO 源盖。
     pub fn user_input(text: &str, ts_ms: u64, seq: u64) -> Self {
+        Self::note("user_input", text, ts_ms, seq)
+    }
+
+    /// 会话建立时 provider 下发的候选模型(kind=`model_catalog`)。只供 `agents tail` 排查
+    /// 「面板 / 开跑前检查认的是哪份目录」,不是 agent 输出,读轮的消费方一律跳过它。
+    pub fn model_catalog(text: &str, ts_ms: u64, seq: u64) -> Self {
+        Self::note("model_catalog", text, ts_ms, seq)
+    }
+
+    fn note(kind: &str, text: &str, ts_ms: u64, seq: u64) -> Self {
         Self {
             ts: ts_ms,
             seq,
-            kind: "user_input".to_string(),
+            kind: kind.to_string(),
             text: Some(text.to_string()),
             tool: None,
             tool_id: None,
@@ -243,6 +253,11 @@ fn render_body(rec: &EventRecord, color: bool) -> Option<String> {
         "thinking" => {
             let t = one_line(rec.text.as_deref().unwrap_or(""), 200);
             Some(format!("{:<10} {}", "thinking", paint(&t, "2;37", color))) // dim
+        }
+        // 目录要整份看得到才有排查价值,不按 200 字截断。
+        "model_catalog" => {
+            let t = rec.text.as_deref().unwrap_or("").trim();
+            Some(format!("{:<10} {}", "models", paint(t, "33", color))) // 黄
         }
         "tool_use" => {
             let name = rec.tool.as_deref().unwrap_or("?");
@@ -1459,6 +1474,27 @@ mod tests {
         assert_eq!(
             (u.input, u.output, u.cache_read, u.cache_write),
             (100, 20, 8000, 5)
+        );
+    }
+
+    #[test]
+    fn model_catalog_record_renders_every_candidate_untruncated() {
+        let models: Vec<String> = (0..60).map(|i| format!("model-{i:02}")).collect();
+        let text = models.join(", ");
+        let rec = EventRecord::model_catalog(&text, 1000, 1);
+        assert_eq!(rec.kind, "model_catalog");
+        let line = render_line(&rec, false);
+        assert!(line.contains("models"), "应有 models 标签");
+        assert!(
+            line.contains("model-00") && line.contains("model-59"),
+            "候选不能被截断"
+        );
+        let mut grouper = TailGrouper::for_driver(crate::driver::CliDriver::Cursor, false);
+        let out = grouper.push(&rec);
+        assert!(
+            out.iter()
+                .any(|o| matches!(o, TailOut::Line(l) if l.contains("model-59"))),
+            "tail 流式归并也要原样输出这一行"
         );
     }
 

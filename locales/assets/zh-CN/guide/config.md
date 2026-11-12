@@ -215,7 +215,7 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 | `runtime` 字段 | 用途 / 默认 |
 | --- | --- |
 | `cli` / `cli_cmd` | backend 种类 / 自定义可执行命令；优先用 onboard 配置 |
-| `capture` | 仅 Cursor 可用 `cli`（或 `exec`）选择 CLI Session，默认 ACP；两种通道的 SID 不互通 |
+| `capture` | 仅 Cursor 可用 `cli`（或 `exec`）选择 CLI Session，不写时走 ACP；onboard / bind / `agents add` 新建的 Cursor agent 会写上 `cli`。两种通道的 SID 不互通 |
 | `working_dir` / `chat_working_dirs` | 默认目录 / 按 chat 绑定目录；`/cd` 保存的目录优先 |
 | `resume` | 继承全局 `resume_sessions`；显式布尔值覆盖 |
 | `model_context_window` | Codex/Traex 上下文窗口 token 数；不配时跟随 CLI |

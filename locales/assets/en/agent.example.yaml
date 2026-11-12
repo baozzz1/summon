@@ -16,7 +16,7 @@ runtime:
   working_dir: "{{workspace}}"
   tmux_name: soul-{{alias}}
   cli: {{cli}}
-  # codex_skip_git_repo_check: true  # Explicitly allow multi-repository directories.
+{{capture_line}}  # codex_skip_git_repo_check: true  # Explicitly allow multi-repository directories.
 
 cognition:
   history_lookback_days: 2

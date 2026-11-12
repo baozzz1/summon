@@ -627,10 +627,10 @@ models: []
 
 # 按 CLI 分桶的模型候选,**冷启兜底用**。
 #
-# 面板候选的事实源是各 backend 自报的目录 —— cursor 随 ACP 会话下发 `availableModels`,
+# 面板候选的事实源是各 backend 自报的目录 —— cursor 走 ACP 时随会话下发,走 CLI 时读 `cursor-agent models`,
 # codex/traex 走 app-server 的 `model/list`。上游今天加一个模型,开一条新会话就能在面板上点到,
 # 这张表不用动。它只在「目录还没抓到」时顶上:daemon 刚起、这台机器还没开过该 CLI 的会话。
-# 所以这里挑的是各家族一个稳定代表,不追新、不求穷举。cursor 只认会话目录,这里不给它兜底。
+# 所以这里挑的是各家族一个稳定代表,不追新、不求穷举。cursor 只认它自己报的目录,这里不给它兜底。
 # claude 是例外 —— 它没有列模型的接口,面板候选只有这张表。
 #
 # 模型 id 必须是**该 CLI 自己认的写法**:
@@ -658,9 +658,9 @@ models_by_cli:
     - gpt-5.6-terra
     - gpt-5.6-luna
     - gpt-5.5
-  # cursor 不带内置候选:各人账号能用的模型不同,候选只认 ACP 会话下发的目录。目录没拿到
-  # (会话还没建、服务端没给、或走 `runtime.capture: cli`)时面板就没有模型按钮,onboard 不写
-  # model 行、由 cursor-agent 用自己的默认 —— 内置一份猜的表会把「目录没拿到」掩盖成「点了起不来」。
+  # cursor 不带内置候选:各人账号能用的模型不同。走 CLI 时候选读 `cursor-agent models`,走 ACP
+  # 时只认会话下发的目录;目录没拿到时面板就没有模型按钮,onboard 不写 model 行、由 cursor-agent
+  # 用自己的默认 —— 内置一份猜的表会把「目录没拿到」掩盖成「点了起不来」。
   # 要固定候选,在 `~/.summon/config.yaml` 的 `messaging.models_by_cli.cursor` 里配。
   # traex(traecli,codex 的 fork)同理不带内置候选:它有哪些模型取决于接入的网关,以它经
   # `model/list` 自报的目录为准。要在抓到目录之前就有候选,在 `~/.summon/config.yaml` 的

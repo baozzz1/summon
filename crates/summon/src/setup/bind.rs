@@ -169,14 +169,10 @@ pub(crate) fn effective_model(
         })
 }
 
-/// 把 `cursor-agent models` 的输出切成 model id 列表(每行 trim,去空行)。纯函数,可单测。
+/// 把 `cursor-agent models` 的输出切成 model id 列表。
 /// cursor 的 model 列表会随版本漂移,故只用于「不在表里 → 友好告警」,不 fail-closed。
 pub(crate) fn parse_cursor_models(out: &str) -> Vec<String> {
-    out.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
-        .collect()
+    crate::codex::model_catalog::parse_cursor_models_output(out).models
 }
 
 /// cursor model 串是否在 `cursor-agent models` 的活列表里(membership 判定,纯函数)。
@@ -254,6 +250,14 @@ pub(crate) fn render_agent_yaml(s: &AgentSpec) -> String {
         Some(e) => format!("effort: {e}\n"),
         None => String::new(),
     };
+    // 新建的 cursor agent 默认走 `cursor-agent -p`:模型名直接认 `cursor-agent models` 的目录,
+    // 每轮带 token 用量。只写进新 agent.yaml;缺省值仍是 ACP,存量 agent 的会话不受影响
+    // (两条通道的会话 id 不互通,改缺省会让它们全部断上下文)。
+    let capture_line = if cli == "cursor" {
+        "  capture: cli\n"
+    } else {
+        ""
+    };
     render_template(
         agent_example_yaml(),
         &[
@@ -267,6 +271,7 @@ pub(crate) fn render_agent_yaml(s: &AgentSpec) -> String {
             ("secret_env", secret_env),
             ("workspace", workspace),
             ("cli", cli),
+            ("capture_line", capture_line),
         ],
     )
 }
@@ -1085,6 +1090,33 @@ mod tests {
     }
 
     #[test]
+    fn new_cursor_agents_default_to_the_cli_capture_and_others_do_not() {
+        let spec = |cli| AgentSpec {
+            alias: "nemo",
+            display: "nemo",
+            role: "测试",
+            model: None,
+            effort: None,
+            cli,
+            workspace: "~/ws",
+            id_env: "FEISHU_NEMO_APP_ID",
+            secret_env: "FEISHU_NEMO_APP_SECRET",
+            active: true,
+        };
+        let cursor: summon_core::registry::Agent =
+            serde_yaml::from_str(&render_agent_yaml(&spec("cursor"))).unwrap();
+        assert_eq!(
+            cursor.capture_mode(),
+            summon_core::registry::CaptureMode::CliSession
+        );
+        for cli in ["claude", "codex"] {
+            let y = render_agent_yaml(&spec(cli));
+            assert!(!y.contains("capture:"), "{cli} 不该写 capture 行:\n{y}");
+            serde_yaml::from_str::<summon_core::registry::Agent>(&y).unwrap();
+        }
+    }
+
+    #[test]
     fn yaml_omits_model_line_when_no_default_available() {
         let spec = AgentSpec {
             alias: "nemo",
@@ -1424,7 +1456,9 @@ mod tests {
 
     #[test]
     fn cursor_models_parse_and_membership() {
-        let out = "claude-opus-4-8-high\n  gpt-5.5-extra-high  \n\ncomposer-1\n";
+        let out = "Available models\n\nclaude-opus-4-8-high - Opus 4.8 High\n  \
+gpt-5.5-extra-high - GPT-5.5 Extra High (default)  \n\ncomposer-1 - Composer 1\n\n\
+Tip: use --model <id> to switch.\n";
         let list = parse_cursor_models(out);
         assert_eq!(
             list,

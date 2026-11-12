@@ -2359,9 +2359,10 @@ pub(super) fn uses_rpc_model(agent: &Agent) -> bool {
 
 /// `/model` 面板的候选模型:一律以 backend 自报的目录为准,配置桶只剩冷启兜底。
 ///
-/// 两家 backend 报目录的方式不同,所以取数分两路 ——
-/// cursor 的目录随 ACP 会话下发(`availableModels`),只对**这条会话**有效;
-/// codex/traex 的目录按账号作用域共享，由后台按需刷新。
+/// backend 报目录的方式不同,所以取数分两路 ——
+/// 走 ACP 的 cursor 目录随会话下发(`configOptions` 的 `model` 轴),只对**这条会话**有效;
+/// codex/traex 与走 CLI 的 cursor 的目录按账号作用域共享，由后台按需刷新
+/// (后者跑 `cursor-agent models`)。
 /// claude 没有列模型的接口,只能留在配置桶里。
 pub(crate) fn model_candidates(agent: &Agent, tag: &str, from_config: Vec<String>) -> Vec<String> {
     if uses_rpc_model(agent) {

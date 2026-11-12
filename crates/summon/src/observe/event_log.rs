@@ -97,6 +97,19 @@ pub fn append_user_input(base: &std::path::Path, tag: &str, text: &str, stamp: E
     }
 }
 
+/// best-effort:把会话建立时 provider 下发的候选模型追加进该 chat 的 events.jsonl,
+/// 供 `agents tail` 显示。失败 log-ignore —— 观测落盘绝不影响建会话。
+pub fn append_model_catalog(base: &Path, tag: &str, text: &str, stamp: EventStamp) {
+    match EventSink::open(base, tag, stamp) {
+        Ok(mut sink) => {
+            sink.seq += 1;
+            let rec = EventRecord::model_catalog(text, now_ms(), sink.seq).with_stamp(&sink.stamp);
+            sink.write_record(&rec);
+        }
+        Err(e) => crate::observe::log::log(&summon_i18n::format!("r5e0c4a7d21")),
+    }
+}
+
 /// 当前 unix 毫秒;时钟回拨(早于 EPOCH)兜底 0。
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -169,6 +182,21 @@ mod tests {
         assert_eq!(r1.tool.as_deref(), Some("Read"));
         assert!(r1.tool_input.is_some(), "tool_input 应落盘");
         assert!(r1.ts >= r0.ts, "ts 单调不减");
+    }
+
+    #[test]
+    fn model_catalog_note_lands_in_the_chat_event_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = EventStamp {
+            agent: Some("a1".into()),
+            ..EventStamp::default()
+        };
+        append_model_catalog(dir.path(), "g-a", "gpt-5.6-sol, composer-2.5", stamp);
+        let content = std::fs::read_to_string(dir.path().join("threads/g-a/events.jsonl")).unwrap();
+        let rec: EventRecord = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(rec.kind, "model_catalog");
+        assert_eq!(rec.text.as_deref(), Some("gpt-5.6-sol, composer-2.5"));
+        assert_eq!(rec.agent.as_deref(), Some("a1"));
     }
 
     #[test]

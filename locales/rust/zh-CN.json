@@ -6888,5 +6888,12 @@
   "r0238105a1a": "不能分析:{reason}",
   "r91a7b5428d": "分析失败:{reason}",
   "r3c8310c412": "转录里出现不带正文的入队记录(claude 多半在压缩上下文),送达等待放宽到消费窗:{}",
-  "range.relative.invalid": "请选择有效的相对时长：小时数须为正整数，起点不早于 1970-01-01，且不可同时指定日期"
+  "range.relative.invalid": "请选择有效的相对时长：小时数须为正整数，起点不早于 1970-01-01，且不可同时指定日期",
+  "r5e0c4a7d21": "events.jsonl 候选模型记录打开失败(忽略): {e}",
+  "r7b3e91c0f4": "(没有)",
+  "r9d4f2a6b18": "ACP 下发 · model 参数 {} 个: {} · availableModels {} 个: {} · 当前: {}",
+  "rc7a1e0d93b": "cursor-agent models 异常退出:{}",
+  "rc7a1e0d93c": "cursor-agent models {} 秒内没有结束",
+  "rc7a1e0d93d": "[{}] cursor-agent models 后台刷新失败: {error}",
+  "rc7a1e0d93e": "cursor-agent models 没有输出管道"
 }

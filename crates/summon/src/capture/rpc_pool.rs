@@ -957,6 +957,29 @@ fn cursor_config_vector_mismatches(
         .collect()
 }
 
+/// `agents tail` 里那行候选模型:两份目录都列全,`/session` 与开跑前检查认的是 `model` 参数
+/// 那份,`availableModels` 是旧式目录;缺哪份就明说缺,排查时才分得清是没下发还是下发了空的。
+fn cursor_catalog_note(opened: &crate::capture::cursor_acp::CursorAcpSession) -> String {
+    let none = summon_i18n::text!("r7b3e91c0f4");
+    let list = |models: &[String]| {
+        if models.is_empty() {
+            none.to_string()
+        } else {
+            models.join(", ")
+        }
+    };
+    let axis = cursor_model_axis_values(&opened.config_options).unwrap_or_default();
+    let current = opened.current_model_id.as_deref().unwrap_or(none);
+    summon_i18n::format!(
+        "r9d4f2a6b18",
+        axis.len(),
+        list(&axis),
+        opened.available_models.len(),
+        list(&opened.available_models),
+        current
+    )
+}
+
 /// Cursor 动态目录里 `model` 轴的全部可选值；没有这条轴或它为空时为 None。
 ///
 /// 每轮收敛按这份目录校验模型，`/session` 的候选与保存校验也必须读同一份，否则面板能存下
@@ -3354,6 +3377,16 @@ impl RpcPool {
             &opened.session_id,
         )
         .unwrap_or_default();
+        crate::observe::event_log::append_model_catalog(
+            &chat.agent.state_dir(),
+            chat.tag,
+            &cursor_catalog_note(&opened),
+            summon_core::event_log::EventStamp {
+                agent: Some(chat.agent.name.clone()),
+                model: opened.current_model_id.clone(),
+                turn: None,
+            },
+        );
         let context_usage = client.context_usage();
         let session = Session {
             alive: client.liveness(),

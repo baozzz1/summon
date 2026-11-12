@@ -248,7 +248,7 @@ app owner. A nonempty list disables this owner fallback.
 | runtime field | Purpose / default |
 |---|---|
 | cli / cli_cmd | backend / executable override; prefer onboard |
-| capture | Cursor cli/exec selects CLI Session, otherwise ACP; SID namespaces differ |
+| capture | Cursor cli/exec selects CLI Session, otherwise ACP; new Cursor agents from onboard / bind / `agents add` get `cli`. SID namespaces differ |
 | working_dir / chat_working_dirs | default/chat directory; /cd overrides |
 | resume | inherits global resume_sessions unless explicitly set |
 | model_context_window | Codex/Traex token window; otherwise CLI default |

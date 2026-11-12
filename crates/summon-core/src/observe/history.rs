@@ -152,6 +152,8 @@ impl HistoryBuilder {
                 self.current.start_at(record.ts);
                 self.current.user = non_empty(record.text);
             }
+            // 会话建立时的目录记录不是 agent 输出,不开轮也不切轮。
+            "model_catalog" => {}
             "system" => {
                 // append_user_input 与真正 capture 分别打开 sink，system 紧跟 user_input 且 seq 重置。
                 // 只有已经见过 agent 输出时，system 才表示旧格式中的下一轮边界。
@@ -273,7 +275,7 @@ pub fn history_page(
 fn marks_turn_end_outside_assistant(kind: &str) -> bool {
     !matches!(
         kind,
-        "assistant" | "result" | "error" | "user_input" | "system"
+        "assistant" | "result" | "error" | "user_input" | "system" | "model_catalog"
     )
 }
 

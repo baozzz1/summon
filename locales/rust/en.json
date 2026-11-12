@@ -6888,5 +6888,12 @@
   "r0238105a1a": "Cannot analyze: {reason}",
   "r91a7b5428d": "Analysis failed: {reason}",
   "r3c8310c412": "A queued input without text appeared in the transcript (claude is likely compacting); arrival wait extended to the consume window: {}",
-  "range.relative.invalid": "Choose a valid relative duration: a positive whole number of hours starting on or after 1970-01-01, without calendar dates"
+  "range.relative.invalid": "Choose a valid relative duration: a positive whole number of hours starting on or after 1970-01-01, without calendar dates",
+  "r5e0c4a7d21": "events.jsonl model catalog record open failed (ignored): {e}",
+  "r7b3e91c0f4": "(none)",
+  "r9d4f2a6b18": "ACP catalog · model option {}: {} · availableModels {}: {} · current: {}",
+  "rc7a1e0d93b": "cursor-agent models exited abnormally: {}",
+  "rc7a1e0d93c": "cursor-agent models did not finish within {} seconds",
+  "rc7a1e0d93d": "[{}] cursor-agent models background refresh failed: {error}",
+  "rc7a1e0d93e": "cursor-agent models has no stdout pipe"
 }
