@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/summon-core", "crates/summon", "crates/summon-i18n"]
+
+# dev/test 构建不需要完整 debuginfo:测试 panic backtrace 有 文件:行号(line-tables-only)就够,
+# 依赖的 debuginfo 直接关——target/debug 的体积大头就是它(实测砍掉一半以上,链接也更快)。
+# 要上 debugger 单步时临时把 debug 改回 true。release profile 不受影响,deploy 产物照旧。
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

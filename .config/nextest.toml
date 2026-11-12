@@ -1,0 +1,11 @@
+# 会起真子进程、对自有进程组发信号的测试经 `test_support::process_test_guard` 限到同时
+# PROCESS_TEST_SLOTS(4)个。这里让 nextest 一次也只调度这么多:否则它们会同时开跑,
+# 多出来的那些占着测试线程空等槽位,别的测试反而分不到线程。两处的数字要一起改。
+# 过滤按模块圈住绝大多数持闸测试;散在别的模块里的少数几条不进组也照样正确,只是排队时
+# 占着线程。
+[test-groups]
+process-tests = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = 'test(/^(capture::(rpc_pool|rpc|cursor_acp)|codex::codex_app_server)::tests::/)'
+test-group = 'process-tests'

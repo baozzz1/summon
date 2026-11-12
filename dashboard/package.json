@@ -1,0 +1,26 @@
+{
+  "name": "summon-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:mock": "vite build --mode mock --outDir .mock-dist",
+    "preview:mock": "vite build --mode mock --outDir .mock-dist && vite preview --outDir .mock-dist --port 5174 --strictPort",
+    "test": "tsc --noEmit && stylelint \"src/**/*.css\" && vitest run && node scripts/check-budget.mjs",
+    "check:dist": "node scripts/check-dist.mjs",
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "dependencies": {
+    "lit": "3.3.3"
+  },
+  "devDependencies": {
+    "happy-dom": "20.14.5",
+    "stylelint": "17.15.0",
+    "stylelint-config-recommended": "18.0.0",
+    "typescript": "6.0.3",
+    "vite": "8.3.2",
+    "vitest": "5.0.3"
+  }
+}

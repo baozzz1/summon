@@ -1,0 +1,10 @@
+{
+  "language.label": "语言",
+  "language.description": "影响本机的 Dashboard、CLI、飞书内置文案和菜单栏。自动模式优先使用 lark-cli 当前语种，未设置时跟随系统首选语言。保存后立即生效，无需重启 daemon。",
+  "language.auto": "自动",
+  "language.zh-CN": "简体中文",
+  "language.en": "English",
+  "common.enabled": "已启用",
+  "common.disabled": "已停用",
+  "common.processing": "处理中…"
+}

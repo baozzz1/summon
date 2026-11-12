@@ -1,0 +1,33 @@
+{
+ "code": 0,
+ "msg": "success",
+ "data": {
+  "items": [
+   {
+    "body": {
+     "content": "{\"json_card\":\"{\\\"body\\\":{\\\"id\\\":\\\"_1\\\",\\\"property\\\":{\\\"elements\\\":[{\\\"id\\\":\\\"_2\\\",\\\"property\\\":{},\\\"tag\\\":\\\"hr\\\"},{\\\"id\\\":\\\"_3\\\",\\\"property\\\":{\\\"elements\\\":[{\\\"id\\\":\\\"_3_0\\\",\\\"property\\\":{\\\"content\\\":\\\"✓ 列本会话最近消息找 @ 样本  1s\\\",\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[],\\\"color\\\":\\\"grey\\\"}},\\\"tag\\\":\\\"plain_text\\\"},{\\\"id\\\":\\\"_3_1\\\",\\\"property\\\":{},\\\"tag\\\":\\\"br\\\"},{\\\"id\\\":\\\"_3_2\\\",\\\"property\\\":{\\\"content\\\":\\\"✓ 看原始返回  0s\\\",\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[],\\\"color\\\":\\\"grey\\\"}},\\\"tag\\\":\\\"plain_text\\\"},{\\\"id\\\":\\\"_3_3\\\",\\\"property\\\":{},\\\"tag\\\":\\\"br\\\"},{\\\"id\\\":\\\"_3_4\\\",\\\"property\\\":{\\\"content\\\":\\\"💭 思考 13s\\\",\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[],\\\"color\\\":\\\"grey\\\"}},\\\"tag\\\":\\\"plain_text\\\"},{\\\"id\\\":\\\"_3_5\\\",\\\"property\\\":{},\\\"tag\\\":\\\"br\\\"},{\\\"id\\\":\\\"_3_6\\\",\\\"property\\\":{\\\"content\\\":\\\"✓ 提取 message_id 列表  1s\\\",\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[],\\\"color\\\":\\\"grey\\\"}},\\\"tag\\\":\\\"plain_text\\\"},{\\\"id\\\":\\\"_3_7\\\",\\\"property\\\":{},\\\"tag\\\":\\\"br\\\"},{\\\"id\\\":\\\"_3_8\\\",\\\"property\\\":{\\\"content\\\":\\\"💭 思考 1s\\\",\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[],\\\"color\\\":\\\"grey\\\"}},\\\"tag\\\":\\\"plain_text\\\"},{\\\"id\\\":\\\"_3_9\\\",\\\"property\\\":{},\\\"tag\\\":\\\"br\\\"},{\\\"id\\\":\\\"_3_10\\\",\\\"property\\\":{\\\"content\\\":\\\"✓ 真机 mget 验证 mentions 是否返回  1s\\\",\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[],\\\"color\\\":\\\"grey\\\"}},\\\"tag\\\":\\\"plain_text\\\"}],\\\"markdownElements\\\":[],\\\"originTag\\\":\\\"markdown\\\",\\\"textAlign\\\":\\\"left\\\"},\\\"tag\\\":\\\"markdown\\\"},{\\\"id\\\":\\\"_4\\\",\\\"property\\\":{},\\\"tag\\\":\\\"hr\\\"},{\\\"id\\\":\\\"_5\\\",\\\"property\\\":{\\\"actions\\\":[],\\\"backgroundStyle\\\":\\\"default\\\",\\\"columns\\\":[{\\\"id\\\":\\\"_6\\\",\\\"property\\\":{\\\"actions\\\":[],\\\"disabled\\\":false,\\\"elements\\\":[{\\\"id\\\":\\\"_7\\\",\\\"property\\\":{\\\"elements\\\":[{\\\"id\\\":\\\"_7_0\\\",\\\"property\\\":{\\\"content\\\":\\\"⏳ 进行中… \\\",\\\"textAlign\\\":\\\"left\\\"},\\\"tag\\\":\\\"plain_text\\\"},{\\\"id\\\":\\\"_7_1\\\",\\\"property\\\":{\\\"content\\\":\\\"· 更新于 23:20:32\\\",\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[],\\\"color\\\":\\\"grey\\\"}},\\\"tag\\\":\\\"plain_text\\\"}],\\\"markdownElements\\\":[],\\\"originTag\\\":\\\"markdown\\\",\\\"textAlign\\\":\\\"left\\\"},\\\"tag\\\":\\\"markdown\\\"}],\\\"verticalAlign\\\":\\\"center\\\",\\\"weight\\\":1,\\\"width\\\":\\\"weighted\\\",\\\"widthValue\\\":{\\\"type\\\":\\\"column_width_weighted\\\",\\\"value\\\":1}},\\\"tag\\\":\\\"column\\\"},{\\\"id\\\":\\\"_8\\\",\\\"property\\\":{\\\"actions\\\":[],\\\"disabled\\\":false,\\\"elements\\\":[{\\\"id\\\":\\\"_9\\\",\\\"property\\\":{\\\"actionType\\\":\\\"multi\\\",\\\"actions\\\":[{\\\"action\\\":{\\\"actionID\\\":\\\"act_v1_7673165377136970947\\\",\\\"isValueObjectType\\\":true,\\\"value\\\":\\\"\\\"},\\\"type\\\":\\\"action_request\\\"}],\\\"confirm\\\":{\\\"text\\\":{\\\"id\\\":\\\"_12\\\",\\\"property\\\":{\\\"content\\\":\\\"确认打断当前这一轮?已生成的内容会停在原处。\\\",\\\"lines\\\":0,\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[]}},\\\"tag\\\":\\\"plain_text\\\"},\\\"title\\\":{\\\"id\\\":\\\"_11\\\",\\\"property\\\":{\\\"content\\\":\\\"确认操作\\\",\\\"lines\\\":0,\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[]}},\\\"tag\\\":\\\"plain_text\\\"}},\\\"disabled\\\":false,\\\"text\\\":{\\\"id\\\":\\\"_10\\\",\\\"property\\\":{\\\"content\\\":\\\"⏸ 打断\\\",\\\"lines\\\":0,\\\"textAlign\\\":\\\"left\\\",\\\"textStyle\\\":{\\\"attributes\\\":[]}},\\\"tag\\\":\\\"plain_text\\\"},\\\"type\\\":\\\"danger\\\"},\\\"tag\\\":\\\"button\\\"}],\\\"verticalAlign\\\":\\\"center\\\",\\\"weight\\\":1,\\\"width\\\":\\\"auto\\\",\\\"widthValue\\\":{\\\"type\\\":\\\"builtin_column_width\\\",\\\"value\\\":\\\"auto\\\"}},\\\"tag\\\":\\\"column\\\"}],\\\"disabled\\\":false,\\\"flexMode\\\":\\\"flow\\\",\\\"horizontalAlign\\\":\\\"left\\\",\\\"horizontalSpacing\\\":\\\"default\\\",\\\"horizontalSpacingValue\\\":{\\\"type\\\":\\\"pixels\\\",\\\"value\\\":8},\\\"verticalAlign\\\":\\\"top\\\"},\\\"tag\\\":\\\"column_set\\\"}]},\\\"tag\\\":\\\"body\\\"},\\\"config\\\":{\\\"convertVersion\\\":1,\\\"streamingMode\\\":false},\\\"newBody\\\":null,\\\"schema\\\":\\\"2.0\\\",\\\"source\\\":\\\"json\\\"}\",\"json_attachment\":{\"images\":{\"26\":{\"origin_key\":\"img_v3_02ad_e19fca1f-912a-450e-95de-3c229091b53g\"}}},\"card_schema\":2}"
+    },
+    "chat_id": "oc_00000000000000000000000000000003",
+    "create_time": "1786547933668",
+    "deleted": false,
+    "message_id": "om_x100b000000000000000000000000002",
+    "message_position": "1485",
+    "msg_type": "interactive",
+    "sender": {
+     "id": "cli_0000000000000001",
+     "id_type": "app_id",
+     "open_bot_id": "ou_11111111111111111111111111111111",
+     "sender_i18n_names": {
+      "en_us": "Arcadia",
+      "zh_cn": "Arcadia"
+     },
+     "sender_name": "Arcadia",
+     "sender_type": "app",
+     "tenant_key": "0000000000000001"
+    },
+    "update_time": "1786548036271",
+    "updated": true
+   }
+  ]
+ }
+}

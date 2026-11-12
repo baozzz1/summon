@@ -1,0 +1,9 @@
+# Rust 格式化:对齐官方 Rust Style Guide 默认(Google 的 Rust 实践亦遵循 rustfmt 默认)。
+# 这里只显式钉「稳定选项」的默认值,让换行/行宽确定、跨 agent 不漂移;
+# 不引入 nightly-only 选项(如 wrap_comments / comment_width),保持 stable 工具链可跑。
+#
+# 行宽硬规则(Rust Style Guide):
+#   - 代码每行最长 100 列(max_width);超了由 rustfmt 自动折行,别手动凑行。
+#   - 整行注释控制在 80 列内(工具不强制,人写时自觉,见 CLAUDE.md)。
+edition = "2021"
+max_width = 100

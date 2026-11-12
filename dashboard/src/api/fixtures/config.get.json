@@ -1,0 +1,1235 @@
+{
+  "data": {
+    "reactions": [
+      {
+        "label": "好的 / 同意 / 收到",
+        "value": "OK"
+      },
+      {
+        "label": "点赞 / 夸奖 / 感谢",
+        "value": "THUMBSUP"
+      },
+      {
+        "label": "感谢",
+        "value": "THANKS"
+      },
+      {
+        "label": "加油 / 努力",
+        "value": "MUSCLE"
+      },
+      {
+        "label": "比心",
+        "value": "FINGERHEART"
+      },
+      {
+        "label": "鼓掌",
+        "value": "APPLAUSE"
+      },
+      {
+        "label": "碰拳",
+        "value": "FISTBUMP"
+      },
+      {
+        "label": "加油",
+        "value": "JIAYI"
+      },
+      {
+        "label": "完成 / 搞定",
+        "value": "DONE"
+      },
+      {
+        "label": "看起来不错",
+        "value": "LGTM"
+      },
+      {
+        "label": "拍手",
+        "value": "CLAP"
+      },
+      {
+        "label": "表扬",
+        "value": "PRAISE"
+      },
+      {
+        "label": "奋斗",
+        "value": "STRIVE"
+      },
+      {
+        "label": "耶",
+        "value": "YEAH"
+      },
+      {
+        "label": "微笑",
+        "value": "SMILE"
+      },
+      {
+        "label": "害羞",
+        "value": "BLUSH"
+      },
+      {
+        "label": "大笑",
+        "value": "LAUGH"
+      },
+      {
+        "label": "得意地笑",
+        "value": "SMIRK"
+      },
+      {
+        "label": "笑死",
+        "value": "LOL"
+      },
+      {
+        "label": "捂脸",
+        "value": "FACEPALM"
+      },
+      {
+        "label": "开心",
+        "value": "JOYFUL"
+      },
+      {
+        "label": "轻笑",
+        "value": "CHUCKLE"
+      },
+      {
+        "label": "眨眼",
+        "value": "WINK"
+      },
+      {
+        "label": "骄傲",
+        "value": "PROUD"
+      },
+      {
+        "label": "机智",
+        "value": "WITTY"
+      },
+      {
+        "label": "聪明",
+        "value": "SMART"
+      },
+      {
+        "label": "爱你",
+        "value": "LOVE"
+      },
+      {
+        "label": "比心 / 喜欢",
+        "value": "HEART"
+      },
+      {
+        "label": "亲亲",
+        "value": "KISS"
+      },
+      {
+        "label": "飞吻",
+        "value": "SMOOCH"
+      },
+      {
+        "label": "拥抱",
+        "value": "HUG"
+      },
+      {
+        "label": "安慰",
+        "value": "COMFORT"
+      },
+      {
+        "label": "痴迷",
+        "value": "OBSESSED"
+      },
+      {
+        "label": "流口水",
+        "value": "DROOL"
+      },
+      {
+        "label": "惊讶 / 厉害",
+        "value": "WOW"
+      },
+      {
+        "label": "震惊",
+        "value": "SHOCKED"
+      },
+      {
+        "label": "思考中 / 让我想想",
+        "value": "THINKING"
+      },
+      {
+        "label": "恶作剧",
+        "value": "TRICK"
+      },
+      {
+        "label": "不高兴",
+        "value": "SCOWL"
+      },
+      {
+        "label": "受够了",
+        "value": "ENOUGH"
+      },
+      {
+        "label": "什么？",
+        "value": "WHAT"
+      },
+      {
+        "label": "安静",
+        "value": "SILENT"
+      },
+      {
+        "label": "挥手",
+        "value": "WAVE"
+      },
+      {
+        "label": "嘘",
+        "value": "SHHH"
+      },
+      {
+        "label": "哭泣",
+        "value": "SOB"
+      },
+      {
+        "label": "哭",
+        "value": "CRY"
+      },
+      {
+        "label": "流泪",
+        "value": "TEARS"
+      },
+      {
+        "label": "大哭",
+        "value": "WAIL"
+      },
+      {
+        "label": "呜咽",
+        "value": "WHIMPER"
+      },
+      {
+        "label": "哭哭啼啼",
+        "value": "BLUBBER"
+      },
+      {
+        "label": "委屈",
+        "value": "WRONGED"
+      },
+      {
+        "label": "尴尬",
+        "value": "EMBARRASSED"
+      },
+      {
+        "label": "害羞",
+        "value": "SHY"
+      },
+      {
+        "label": "脸红",
+        "value": "XBLUSH"
+      },
+      {
+        "label": "皱眉",
+        "value": "FROWN"
+      },
+      {
+        "label": "晕",
+        "value": "DIZZY"
+      },
+      {
+        "label": "疯了",
+        "value": "CRAZY"
+      },
+      {
+        "label": "得意",
+        "value": "SMUG"
+      },
+      {
+        "label": "傲慢",
+        "value": "HAUGHTY"
+      },
+      {
+        "label": "鄙视",
+        "value": "LOOKDOWN"
+      },
+      {
+        "label": "无聊",
+        "value": "DULL"
+      },
+      {
+        "label": "看一眼",
+        "value": "GLANCE"
+      },
+      {
+        "label": "生气",
+        "value": "ANGRY"
+      },
+      {
+        "label": "锤子",
+        "value": "HAMMER"
+      },
+      {
+        "label": "打脸",
+        "value": "SLAP"
+      },
+      {
+        "label": "恐惧",
+        "value": "TERROR"
+      },
+      {
+        "label": "石化",
+        "value": "PETRIFIED"
+      },
+      {
+        "label": "冒汗",
+        "value": "SWEAT"
+      },
+      {
+        "label": "无语",
+        "value": "SPEECHLESS"
+      },
+      {
+        "label": "睡觉",
+        "value": "SLEEP"
+      },
+      {
+        "label": "困",
+        "value": "DROWSY"
+      },
+      {
+        "label": "打哈欠",
+        "value": "YAWN"
+      },
+      {
+        "label": "生病",
+        "value": "SICK"
+      },
+      {
+        "label": "呕吐",
+        "value": "PUKE"
+      },
+      {
+        "label": "挖鼻孔",
+        "value": "NOSEPICK"
+      },
+      {
+        "label": "吐血",
+        "value": "SPITBLOOD"
+      },
+      {
+        "label": "彩虹吐",
+        "value": "RAINBOWPUKE"
+      },
+      {
+        "label": "被背叛",
+        "value": "BETRAYED"
+      },
+      {
+        "label": "干杯",
+        "value": "TOASTED"
+      },
+      {
+        "label": "无辜笑",
+        "value": "INNOCENTSMILE"
+      },
+      {
+        "label": "挑逗",
+        "value": "TEASE"
+      },
+      {
+        "label": "炫耀",
+        "value": "SHOWOFF"
+      },
+      {
+        "label": "沙哑",
+        "value": "HUSKY"
+      },
+      {
+        "label": "有钱",
+        "value": "MONEY"
+      },
+      {
+        "label": "幸运",
+        "value": "LUCK"
+      },
+      {
+        "label": "红包",
+        "value": "REDPACKET"
+      },
+      {
+        "label": "庆祝 / 派对",
+        "value": "PARTY"
+      },
+      {
+        "label": "烟花",
+        "value": "FIREWORKS"
+      },
+      {
+        "label": "鞭炮",
+        "value": "FIRECRACKER"
+      },
+      {
+        "label": "蛋糕",
+        "value": "CAKE"
+      },
+      {
+        "label": "礼物",
+        "value": "GIFT"
+      },
+      {
+        "label": "啤酒",
+        "value": "BEER"
+      },
+      {
+        "label": "玫瑰",
+        "value": "ROSE"
+      },
+      {
+        "label": "嘴唇",
+        "value": "LIPS"
+      },
+      {
+        "label": "黄瓜",
+        "value": "CUCUMBER"
+      },
+      {
+        "label": "糖葫芦",
+        "value": "CANDIEDHAWS"
+      },
+      {
+        "label": "公牛",
+        "value": "BULL"
+      },
+      {
+        "label": "小牛",
+        "value": "CALF"
+      },
+      {
+        "label": "熊",
+        "value": "BEAR"
+      },
+      {
+        "label": "炸弹",
+        "value": "BOMB"
+      },
+      {
+        "label": "骷髅",
+        "value": "SKULL"
+      },
+      {
+        "label": "便便",
+        "value": "POOP"
+      },
+      {
+        "label": "菜刀",
+        "value": "CLEAVER"
+      },
+      {
+        "label": "耳机",
+        "value": "HEADSET"
+      },
+      {
+        "label": "心碎",
+        "value": "HEARTBROKEN"
+      },
+      {
+        "label": "出错 / 抱歉",
+        "value": "ERROR"
+      },
+      {
+        "label": "举手 / 我来",
+        "value": "MeMeMe"
+      },
+      {
+        "label": "马上去做 / 在做了",
+        "value": "OnIt"
+      },
+      {
+        "label": "稍等一下",
+        "value": "OneSecond"
+      },
+      {
+        "label": "核对通过",
+        "value": "CheckMark"
+      },
+      {
+        "label": "核对不通过",
+        "value": "CrossMark"
+      },
+      {
+        "label": "预警 / 发现 bug / 有问题",
+        "value": "Alarm"
+      },
+      {
+        "label": "火 / 热度高",
+        "value": "Fire"
+      },
+      {
+        "label": "耸肩 / 无奈",
+        "value": "Shrug"
+      },
+      {
+        "label": "叹气",
+        "value": "Sigh"
+      },
+      {
+        "label": "收到 / get 到了",
+        "value": "Get"
+      },
+      {
+        "label": "输入中 / 处理中",
+        "value": "Typing"
+      },
+      {
+        "label": "冲 / 加油",
+        "value": "GoGoGo"
+      },
+      {
+        "label": "奖杯 / 里程碑达成",
+        "value": "Trophy"
+      },
+      {
+        "label": "满分",
+        "value": "Hundred"
+      },
+      {
+        "label": "敬礼 / 致敬",
+        "value": "SALUTE"
+      },
+      {
+        "label": "击掌",
+        "value": "HIGHFIVE"
+      },
+      {
+        "label": "握手 / 成交",
+        "value": "SHAKE"
+      },
+      {
+        "label": "是 / 赞成",
+        "value": "Yes"
+      },
+      {
+        "label": "否 / 反对",
+        "value": "No"
+      },
+      {
+        "label": "钉住 / 重点标记",
+        "value": "Pin"
+      },
+      {
+        "label": "广播 / 周知",
+        "value": "Loudspeaker"
+      },
+      {
+        "label": "咖啡 / 休息一下",
+        "value": "Coffee"
+      },
+      {
+        "label": "牛 / 很棒",
+        "value": "AWESOMEN"
+      },
+      {
+        "label": "露齿笑 / 嘻嘻",
+        "value": "BeamingFace"
+      },
+      {
+        "label": "小丑",
+        "value": "ClownFace"
+      },
+      {
+        "label": "冷汗 / 冒冷汗",
+        "value": "ColdSweat"
+      },
+      {
+        "label": "满足笑 / 开心",
+        "value": "Delighted"
+      },
+      {
+        "label": "吃东西 / 吃瓜",
+        "value": "EatingFood"
+      },
+      {
+        "label": "满月脸",
+        "value": "FullMoonFace"
+      },
+      {
+        "label": "派对脸 / 庆祝",
+        "value": "Partying"
+      },
+      {
+        "label": "敬礼脸 / 致敬",
+        "value": "SaluteFace"
+      },
+      {
+        "label": "合掌感谢 / 谢谢",
+        "value": "ThanksFace"
+      },
+      {
+        "label": "踩 / 不赞同",
+        "value": "ThumbsDown"
+      },
+      {
+        "label": "指左上 / 看这里",
+        "value": "UPPERLEFT"
+      },
+      {
+        "label": "VR / 虚拟现实",
+        "value": "VRHeadset"
+      },
+      {
+        "label": "送花 / 你最棒",
+        "value": "YouAreTheBest"
+      },
+      {
+        "label": "捂眼猴 / 不忍看",
+        "value": "EYESCLOSED"
+      },
+      {
+        "label": "棕色狗 / 狗狗",
+        "value": "SLIGHT"
+      },
+      {
+        "label": "吐舌狗 / 柯基",
+        "value": "TONGUE"
+      },
+      {
+        "label": "加油虎 / 为你打气",
+        "value": "RoarForYou"
+      },
+      {
+        "label": "兔子 / 喜庆兔",
+        "value": "JubilantRabbit"
+      },
+      {
+        "label": "龙 / 喜庆龙",
+        "value": "HappyDragon"
+      },
+      {
+        "label": "奶茶 / 珍珠奶茶",
+        "value": "BubbleTea"
+      },
+      {
+        "label": "鸡腿",
+        "value": "Drumstick"
+      },
+      {
+        "label": "柠檬 / 酸了",
+        "value": "Lemon"
+      },
+      {
+        "label": "辣椒 / 辣",
+        "value": "Pepper"
+      },
+      {
+        "label": "月饼 / 中秋",
+        "value": "Mooncake"
+      },
+      {
+        "label": "汤圆 / 元宵",
+        "value": "StickyRiceBalls"
+      },
+      {
+        "label": "金币 / 财运",
+        "value": "FORTUNE"
+      },
+      {
+        "label": "月兔 / 玉兔",
+        "value": "MoonRabbit"
+      },
+      {
+        "label": "南瓜 / 万圣节",
+        "value": "Pumpkin"
+      },
+      {
+        "label": "雪人 / 冬天",
+        "value": "Snowman"
+      },
+      {
+        "label": "圣诞帽",
+        "value": "XmasHat"
+      },
+      {
+        "label": "圣诞树",
+        "value": "XmasTree"
+      },
+      {
+        "label": "18禁 / 未成年人不宜",
+        "value": "18X"
+      },
+      {
+        "label": "篮球",
+        "value": "Basketball"
+      },
+      {
+        "label": "足球",
+        "value": "Soccer"
+      },
+      {
+        "label": "减一 / -1",
+        "value": "MinusOne"
+      },
+      {
+        "label": "电影",
+        "value": "Movie"
+      },
+      {
+        "label": "音乐",
+        "value": "Music"
+      },
+      {
+        "label": "OKR / 目标",
+        "value": "OKR"
+      },
+      {
+        "label": "电视",
+        "value": "TV"
+      },
+      {
+        "label": "出差 / 行李箱",
+        "value": "GeneralBusinessTrip"
+      },
+      {
+        "label": "免打扰 / 请勿打扰",
+        "value": "GeneralDoNotDisturb"
+      },
+      {
+        "label": "会议中 / 开会 / 日历",
+        "value": "GeneralInMeetingBusy"
+      },
+      {
+        "label": "月亮 / 晚安 / 休息",
+        "value": "GeneralMoonRest"
+      },
+      {
+        "label": "太阳 / 晴天",
+        "value": "GeneralSun"
+      },
+      {
+        "label": "开车 / 汽车",
+        "value": "GeneralTravellingCar"
+      },
+      {
+        "label": "居家办公",
+        "value": "GeneralWorkFromHome"
+      },
+      {
+        "label": "巴士 / 公交",
+        "value": "StatusBus"
+      },
+      {
+        "label": "度假 / 享受生活",
+        "value": "StatusEnjoyLife"
+      },
+      {
+        "label": "灵感 / 灯泡",
+        "value": "StatusFlashOfInspiration"
+      },
+      {
+        "label": "飞机 / 飞行中",
+        "value": "StatusInFlight"
+      },
+      {
+        "label": "读书 / 阅读",
+        "value": "StatusReading"
+      },
+      {
+        "label": "私聊 / 发消息",
+        "value": "Status_PrivateMessage"
+      }
+    ],
+    "revision": "fc303a793d4e6788",
+    "scope": {
+      "agent": "starlight",
+      "level": "agent"
+    },
+    "values": [
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.cot_visible",
+        "overridden_by": [],
+        "source": "global",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.hide_thinking",
+        "overridden_by": [
+          "starlight · 示例群"
+        ],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.cot_tool_details",
+        "overridden_by": [],
+        "source": "agent",
+        "value": true
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.badge_effort",
+        "overridden_by": [
+          "starlight · 示例群"
+        ],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": false,
+        "key": "messaging.tool_trail",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": 3,
+        "key": "messaging.progress_max_steps",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.completion_summary_card",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.mask_email",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": 86400,
+        "key": "messaging.idle_ttl_secs",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": 21600,
+        "key": "messaging.idle_retire_secs",
+        "overridden_by": [],
+        "source": "global",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": 3300,
+        "key": "messaging.timer_idle_retire_secs",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": false,
+        "key": "messaging.timer_idle_retire_reset",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": 1800,
+        "key": "messaging.headless_stall_secs",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": 3600,
+        "key": "messaging.background_continuation_max_secs",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": 300,
+        "key": "messaging.idle_scan_secs",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.steer_transcript",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.steer_rpc",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.steer_cli_session",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": false,
+        "key": "messaging.document_comments_enabled",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": 300,
+        "key": "messaging.document_comment_timeout_secs",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.agent_reactions",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.agent_feed",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.claude_permission_hook",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.session_mirror",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": false,
+        "key": "messaging.codex_platform_tools",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": "OnIt",
+        "key": "messaging.working_reaction",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": "DONE",
+        "key": "messaging.done_reaction",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": "SILENT",
+        "key": "messaging.interrupted_reaction",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": "OK",
+        "key": "messaging.default_reaction",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": {},
+        "key": "messaging.default_model_by_cli",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "key": "messaging.efforts",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "deny_reason": "此项在控制台中仅供查看，如需修改请在本机操作（见说明）",
+        "editable": false,
+        "effective": "starlight",
+        "key": "name",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "starlight"
+      },
+      {
+        "editable": true,
+        "effective": "星光",
+        "key": "display",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "星光"
+      },
+      {
+        "deny_reason": "此项在控制台中仅供查看，如需修改请在本机操作（见说明）",
+        "editable": false,
+        "effective": "active",
+        "key": "status",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "active"
+      },
+      {
+        "deny_reason": "此项在控制台中仅供查看，如需修改请在本机操作（见说明）",
+        "editable": false,
+        "effective": "agent",
+        "key": "role",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "deny_reason": "此项在控制台中仅供查看，如需修改请在本机操作（见说明）",
+        "editable": false,
+        "effective": "DASH_TEST_STARLIGHT_APP_ID",
+        "key": "feishu.app_id_env",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "DASH_TEST_STARLIGHT_APP_ID"
+      },
+      {
+        "deny_reason": "此项在控制台中仅供查看，如需修改请在本机操作（见说明）",
+        "editable": false,
+        "effective": "DASH_TEST_STARLIGHT_APP_SECRET",
+        "key": "feishu.app_secret_env",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "DASH_TEST_STARLIGHT_APP_SECRET"
+      },
+      {
+        "deny_reason": "此项在控制台中仅供查看，如需修改请在本机操作（见说明）",
+        "editable": false,
+        "effective": "thread",
+        "key": "feishu.scope",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "thread"
+      },
+      {
+        "editable": true,
+        "effective": "claude",
+        "key": "runtime.cli",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "claude"
+      },
+      {
+        "editable": true,
+        "effective": null,
+        "key": "runtime.capture",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": "claude-opus-4-8",
+        "key": "model",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "claude-opus-4-8"
+      },
+      {
+        "editable": true,
+        "effective": "high",
+        "key": "effort",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "high"
+      },
+      {
+        "editable": true,
+        "effective": null,
+        "key": "reasoning_summary",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": "/tmp",
+        "key": "runtime.working_dir",
+        "overridden_by": [],
+        "source": "agent",
+        "value": "/tmp"
+      },
+      {
+        "editable": true,
+        "effective": null,
+        "key": "runtime.chat_working_dirs",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "runtime.resume",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": {
+          "API_TOKEN": "«summon:redacted»",
+          "HTTPS_PROXY": "${CORP_PROXY}"
+        },
+        "key": "runtime.env",
+        "overridden_by": [],
+        "source": "agent",
+        "value": {
+          "API_TOKEN": "«summon:redacted»",
+          "HTTPS_PROXY": "${CORP_PROXY}"
+        }
+      },
+      {
+        "editable": true,
+        "effective": null,
+        "key": "runtime.cli_cmd",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": null,
+        "key": "runtime.model_context_window",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": false,
+        "key": "runtime.codex_skip_git_repo_check",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": null,
+        "key": "runtime.cursor_quota_token_command",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "deny_reason": "此项在控制台中仅供查看，如需修改请在本机操作（见说明）",
+        "editable": false,
+        "effective": null,
+        "key": "runtime.tmux_name",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": "danger-full-access",
+        "key": "runtime.codex_sandbox",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": "never",
+        "key": "runtime.codex_approval_policy",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": [
+          "on_00000000000000000000000000000001"
+        ],
+        "key": "feishu.allowed_users",
+        "overridden_by": [],
+        "source": "agent",
+        "value": [
+          "on_00000000000000000000000000000001"
+        ]
+      },
+      {
+        "editable": true,
+        "effective": [
+          "on_00000000000000000000000000000001"
+        ],
+        "key": "feishu.operators",
+        "overridden_by": [],
+        "source": "agent",
+        "value": [
+          "on_00000000000000000000000000000001"
+        ]
+      },
+      {
+        "editable": true,
+        "effective": {
+          "on_00000000000000000000000000000002": "另一位用户"
+        },
+        "key": "aliases",
+        "overridden_by": [],
+        "source": "agent",
+        "value": {
+          "on_00000000000000000000000000000002": "另一位用户"
+        }
+      }
+    ]
+  },
+  "params": {
+    "scope": {
+      "agent": "starlight",
+      "level": "agent"
+    }
+  }
+}

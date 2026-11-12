@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"tid-2"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"i0","type":"command_execution"}}
+{"type":"item.completed","item":{"id":"i0","type":"command_execution","command":"ls","exit_code":0}}
+{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"There are 2 files."}}
+{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}

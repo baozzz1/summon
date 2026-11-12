@@ -1,0 +1,6 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"8a5e202c-cec3-40f9-b263-54145542342f","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Step one done."}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"8a5e202c-cec3-40f9-b263-54145542342f","update":{"sessionUpdate":"tool_call","toolCallId":"call_echo_hello","title":"`echo hello`","kind":"execute","status":"pending","rawInput":{"command":"echo hello"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"8a5e202c-cec3-40f9-b263-54145542342f","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_echo_hello","status":"in_progress"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"8a5e202c-cec3-40f9-b263-54145542342f","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_echo_hello","status":"completed","rawOutput":{"exitCode":0,"stdout":"hello\n","stderr":""}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"8a5e202c-cec3-40f9-b263-54145542342f","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Step two done."}}}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}

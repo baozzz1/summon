@@ -1,0 +1,17 @@
+{
+  "data": {
+    "csrf": "cccccccccccccccccccccccccccccccc",
+    "expires_at": "2026-10-21T09:30:00+08:00",
+    "hostname": "example-host",
+    "identity": {
+      "agent": "starlight",
+      "chat_id": "oc_00000000000000000000000000000001",
+      "chat_kind": "group",
+      "kind": "feishu",
+      "name": "示例用户"
+    },
+    "machine": false,
+    "version": "0.6.18"
+  },
+  "params": {}
+}

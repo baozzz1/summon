@@ -1,0 +1,138 @@
+{
+  "data": {
+    "agent": "starlight",
+    "config": {
+      "revision": "0fc6c34489411be2",
+      "scope": {
+        "agent": "starlight",
+        "chat_id": "oc_00000000000000000000000000000001",
+        "level": "chat"
+      },
+      "values": [
+        {
+          "editable": true,
+          "effective": true,
+          "key": "messaging.cot_visible",
+          "overridden_by": [],
+          "source": "global",
+          "value": null
+        },
+        {
+          "editable": true,
+          "effective": true,
+          "key": "messaging.hide_thinking",
+          "overridden_by": [],
+          "source": "chat",
+          "value": true
+        },
+        {
+          "editable": true,
+          "effective": true,
+          "key": "messaging.cot_tool_details",
+          "overridden_by": [],
+          "source": "agent",
+          "value": null
+        },
+        {
+          "editable": true,
+          "effective": false,
+          "key": "messaging.badge_effort",
+          "overridden_by": [],
+          "source": "chat",
+          "value": false
+        },
+        {
+          "editable": true,
+          "effective": false,
+          "key": "messaging.timer_idle_retire_reset",
+          "overridden_by": [],
+          "source": "builtin",
+          "value": null
+        },
+        {
+          "editable": true,
+          "effective": true,
+          "key": "messaging.agent_reactions",
+          "overridden_by": [],
+          "source": "builtin",
+          "value": null
+        },
+        {
+          "editable": true,
+          "effective": true,
+          "key": "messaging.agent_feed",
+          "overridden_by": [],
+          "source": "builtin",
+          "value": null
+        }
+      ]
+    },
+    "doc": {
+      "exists": true
+    },
+    "mentionless": {
+      "can_disable": false,
+      "can_enable": true,
+      "enabled": false
+    },
+    "operators": {
+      "editable": true,
+      "members": [
+        {
+          "id": "on_00000000000000000000000000000002",
+          "name": "另一位用户"
+        }
+      ],
+      "revision": "94eef4b6e0dc845b"
+    },
+    "schedules": [
+      {
+        "agent": "starlight",
+        "chat_id": "oc_00000000000000000000000000000001",
+        "chat_name": "示例群",
+        "context": "resume",
+        "created_by": "ou_00000000000000000000000000000001",
+        "editable": true,
+        "enabled": true,
+        "human": "每个工作日 09:30",
+        "id": "SCH-1",
+        "kind": "cron",
+        "last_fired": "2026-10-20T09:30:00+08:00",
+        "next_fire": "2026-10-21T09:30:00+08:00",
+        "output": "result",
+        "prompt": "看一眼昨晚的 CI,挂了的列出来",
+        "spec": "30 9 * * 1-5"
+      },
+      {
+        "agent": "starlight",
+        "chat_id": "oc_00000000000000000000000000000001",
+        "chat_name": "示例群",
+        "context": "resume",
+        "created_by": "ou_00000000000000000000000000000001",
+        "editable": true,
+        "enabled": false,
+        "human": "每天 18:00",
+        "id": "SCH-3",
+        "kind": "cron",
+        "last_fired": "2026-10-20T09:30:00+08:00",
+        "output": "result",
+        "prompt": "汇总今天合入的改动",
+        "spec": "0 18 * * *"
+      }
+    ],
+    "work_dir": {
+      "editable": true,
+      "effective": "/tmp",
+      "live": false,
+      "mapping": "/tmp",
+      "source": "chat_mapping"
+    }
+  },
+  "params": {
+    "agent": "starlight",
+    "chat_id": "oc_00000000000000000000000000000001",
+    "clear_override": false,
+    "mapping": "/tmp",
+    "revision": "fc303a793d4e6788"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "data": {
+    "alias": "starlight",
+    "chats": 2,
+    "cli": "claude",
+    "credentials": "ready",
+    "display": "星光",
+    "effort": "high",
+    "enabled": false,
+    "model": "claude-opus-4-8",
+    "name": "starlight",
+    "routable": true
+  },
+  "params": {
+    "agent": "starlight",
+    "enabled": false
+  }
+}

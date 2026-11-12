@@ -1,0 +1,11 @@
+{
+  "as_of_ms": 1000,
+  "retention_days": 90,
+  "prices_as_of_ms": null,
+  "windows": [
+    {"key": "24h", "spend": null, "missing_usage_turns": 0},
+    {"key": "7d", "spend": null, "missing_usage_turns": 0},
+    {"key": "30d", "spend": null, "missing_usage_turns": 0},
+    {"key": "all", "spend": null, "missing_usage_turns": 0}
+  ]
+}

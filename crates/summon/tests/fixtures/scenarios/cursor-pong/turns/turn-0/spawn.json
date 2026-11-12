@@ -1,0 +1,13 @@
+{
+  "spec": {
+    "program": "cursor-agent",
+    "args": [
+      "-p",
+      "--output-format",
+      "stream-json"
+    ],
+    "stdin_null": true,
+    "env": []
+  },
+  "stdout_file": "stdout.raw"
+}

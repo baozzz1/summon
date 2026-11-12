@@ -1,0 +1,21 @@
+{
+  "data": {
+    "effects": [
+      {
+        "effect": "next_turn",
+        "key": "messaging.cot_visible"
+      },
+      {
+        "effect": "next_turn",
+        "key": "messaging.idle_retire_secs"
+      }
+    ],
+    "restart_pending": [],
+    "revision": "fa30d35065a17882"
+  },
+  "params": {
+    "file": "global",
+    "revision": "fde9ca9b55c12491",
+    "text": "# 整机配置\nmessaging:\n  cot_visible: false\n"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "data": {
+    "effects": [
+      {
+        "effect": "immediate",
+        "key": "feishu.chat_operators"
+      }
+    ],
+    "restart_pending": [],
+    "revision": "e05a95e993894f37"
+  },
+  "params": {
+    "agent": "starlight",
+    "chat_id": "oc_00000000000000000000000000000001",
+    "members": [
+      "on_00000000000000000000000000000002",
+      "ou_00000000000000000000000000000002"
+    ],
+    "revision": "fc303a793d4e6788"
+  }
+}

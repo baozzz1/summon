@@ -1,0 +1,23 @@
+{
+  "data": {
+    "agent": "starlight",
+    "chat_id": "oc_00000000000000000000000000000001",
+    "chat_name": "示例群",
+    "context": "resume",
+    "created_by": "ou_00000000000000000000000000000001",
+    "editable": true,
+    "enabled": true,
+    "human": "每天 18:00",
+    "id": "SCH-3",
+    "kind": "cron",
+    "last_fired": "2026-10-20T09:30:00+08:00",
+    "next_fire": "2026-10-21T09:30:00+08:00",
+    "output": "result",
+    "prompt": "汇总今天合入的改动",
+    "spec": "0 18 * * *"
+  },
+  "params": {
+    "enabled": true,
+    "id": "SCH-3"
+  }
+}

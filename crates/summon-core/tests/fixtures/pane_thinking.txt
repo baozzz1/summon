@@ -1,0 +1,40 @@
+╭─── Claude Code v2.1.156 ─────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                        │
+│            Welcome back anonymized-user!           │ Run /init to create a CLAUDE.md file with instructions for Cla… │
+│                                                    │ ─────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                      │
+│                      ▝▜█████▛▘                     │ Fixed an issue when using Opus 4.8 where thinking blocks were … │
+│                        ▘▘ ▝▝                       │ Opus 4.8 is here! Now defaults to high effort · /effort xhigh … │
+│   Opus 4.8 (1M context) with xh… · Claude Max ·    │ Introducing dynamic workflows: ask Claude to create a workflow… │
+│   redacted-user@example.com's Organization         │ /release-notes for more                                         │
+│             ~/Desktop/personal/summon              │                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ 用一句话说你好,别调用任何工具
+
+⏺ 你好！很高兴见到你，有什么我可以帮你的吗？
+
+✻ Crunched for 22s
+
+❯ 再用一句话讲讲你能做什么
+
+✽ Infusing…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    Model: Opus 4.8    Thinking: xhigh    Skill: none  
+    Cached: 38.2k    Out: 119    In: 34.5k    Cost: $0.11  
+    Session: 40.0%    Reset: 1hr 19m    Weekly: 17.0%    Weekly Reset: 3d 21hr 19m  
+    Context: [█░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 34k/1000k (3%)  
+    cwd: /Users/me/Desktop/personal/summon    ⎇ develop  
+  ⏵⏵ auto mode on (shift+tab to cycle)
+
+
+
+
+
+
+
+

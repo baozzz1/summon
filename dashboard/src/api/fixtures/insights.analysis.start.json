@@ -1,0 +1,34 @@
+{
+  "data": {
+    "can_start": true,
+    "primary": {
+      "agent": "starlight",
+      "cli": "claude",
+      "label": "星光",
+      "model": "claude-opus-4-8",
+      "source": "configured"
+    },
+    "result": {
+      "agent": "starlight",
+      "cli": "claude",
+      "elapsed_ms": 41000,
+      "generated_at": "2026-10-21T09:30:00+08:00",
+      "model": "claude-opus-4-8",
+      "prompt_version": 1,
+      "stale": false,
+      "text": "- 观察:15 分钟以上的间隔只占 3 条,却占了间隔总时长的大部分。\n- 建议:把需要确认的事项集中在回复末尾,减少来回。\n- 局限:样本不足 30 条,结论仅供参考。",
+      "truncated": false,
+      "usage": {
+        "cache_read": 9400,
+        "cache_write": 0,
+        "input": 1200,
+        "output": 380
+      }
+    },
+    "status": "done"
+  },
+  "params": {
+    "lang": "zh-CN",
+    "range": "7d"
+  }
+}

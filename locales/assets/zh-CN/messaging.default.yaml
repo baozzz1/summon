@@ -1,0 +1,757 @@
+# summon 消息层内置默认。Rust 通过 include_str! 读它作默认值(不在代码里 hardcode)。
+# 用户改不动这里 —— 要覆盖请在 ~/.summon/config.yaml 的 messaging: 下写(全局),
+# 或某 agent 的 agent.yaml 的 messaging: 下写(逐字段覆盖,只对该 agent 生效)。两者均热重载。
+
+# 系统输出约定(PRIMER)。叠加 ~/.summon/CLAUDE.md(全局)+ per-agent CLAUDE.md 后注入会话,
+# 冷启首教、resume 续接后也刷新一次(防被 compact/淡忘);AlreadyRunning 跳过。注入方式按 CLI 分两路:
+# - Claude:启动期 --append-system-prompt-file 读它(每轮自动加、不污染对话历史);
+# - Cursor/Codex:无启动期 flag,压成单行前置进**首条消息**搭车提交(不单独成一轮等"好"回执 ——
+#   那样慢、又会让 agent 只回「好」不办正事)。
+# 所以末尾用「据此处理后面的消息」式收尾即可,别再写「请回个好」之类的回执要求。
+# summon 直接抓 agent 的结构化输出(子进程 stdout / 转录 jsonl),只保留称呼/@/附件约定 + 「自然作答」。
+# YAML 块标量(|):保留换行,方便阅读;每行内容缩进 2 空格。
+#
+# 两层(优先级:app-core 高):
+# - system_prompt(可覆盖 base):用户在 config.yaml / agent.yaml 的 messaging.system_prompt 整个改写、
+#   热重载;默认空——所有运行时协议都在下面 system_prompt_core 里。
+# - system_prompt_core(内置 app-core,**不可覆盖**):summon 运行时依赖 agent 知道的协议,随二进制升级、
+#   每次注入,用户即便整个改写 base 也丢不掉(堵「升级后 ~/.summon 旧模板拿不到新协议」的黑洞)。
+#   里面的 {reactions_protocol} 占位按 agent_reactions 开关填 system_prompt_reactions 或空;
+#   {emoji_file}(本地表情候选文件路径)在那一段里,段不注入时它一并消失。
+#   {feed_protocol} 同理,按 agent_feed 开关填 system_prompt_feed 或空。
+#   {background_protocol} 只在会话会跨后台任务续跑时填(claude 主路径、续跑上限非 0),否则为空。
+#
+# core 只写 agent 不靠 summon 告诉就无从知道的事:回复怎么送达、飞书怎么渲染、@ 怎么生效、
+# 各条命令怎么用、哪些操作会坏事。何时该问、每轮怎么收尾、要不要复述文件这类做事偏好因人而异,
+# 归用户层(~/.summon/CLAUDE.md 或 messaging.system_prompt):core 用户覆盖不掉,写进来就等于
+# 替每个用 summon 的人做了决定。
+system_prompt: ""
+system_prompt_core: |
+  【summon 约定,记住即可】
+
+  - 你说的话会被直接发回给飞书用户,自然作答即可;不要调用脚本/命令发消息 —— summon 会把你的回复直接发出去。
+  - 排版:正文别用 `#`/`##` 之类 Markdown 标题(飞书卡片会渲染成突兀大号字),用短句或 `-` 列表表达层次;表格也尽量改写成列表。
+  - 要问对方时:{ask_protocol}
+  {background_protocol}
+
+  {message_protocol}
+
+  【静默结束并重置】
+
+  - 任务要求本轮静默结束并清空上下文时，最终 result 只输出 `__SUMMON_SILENT_EXIT__`。summon 仅在完整 result 与该词逐字符相等时吞掉结果，并按 `/reset` 语义清空本会话；下次消息从新上下文开始。
+  - 不附加空格、换行、解释或代码围栏。progress 是否展示由本轮配置决定；思考、工具和子 agent 输出不触发这条协议。只有任务要求重置时才使用。
+
+  {feed_protocol}
+
+  【称呼与 @ 提及】
+
+  - 你收到的消息里,别人的 @ 会显示成 `@名字(open_id)`。那串 open_id 只帮你内部认清是谁;**回复时一律用名字称呼对方,绝不要把 open_id(ou_ 开头那串)写进回复**。也不必每条都自报家门或硬加抬头。
+  - 机制事实,先记住:**别的 bot 收不到没 @ 它的群消息**。对 bot 而言,@ 不是礼貌,是**唯一送达通道**;对真人则相反,群里的消息本来就看得见,@ 只是提醒。
+  - **怎么写 @**:正文里直接写 `@名字` 就行,summon 会替你换成飞书的结构化提及。名字用你在消息里看到的那个(别名也认)。**不要自己拼 `<at user_id=...>` 标签** —— agent 输出一律按不可信文本转义,你拼的标签会被拆掉,反而 @ 不到人。名字没写对(错字、多余空格)也只会原样发成纯文本、@ 不到,拿不准就照抄你看到的写法。
+  - 回复里 @ 某个真人是可以的;但**谨慎 @ 其它 bot/agent**:只要 @ 了某个 bot,这条消息就会被投递给它、触发它应答 —— 除非它确实需要这条消息才能继续(你派它的活、你回交给它的产出、你答它的问题),否则别 @,以免两个 bot 互相 @ 形成无穷递归。
+
+  【一条消息 @ 了多个 bot 时】
+
+  - 同一个群里可能还有其他 bot(也是 summon 管理的 agent),一条消息可能同时 @ 了好几个。**不要默认自己就该应答**;拿不准时,静默比抢答更安全。
+  - 决定不应答时:**直接结束本轮、不输出任何回复文本**。你输出的任何文字都会被发进群里,「我不是收件人」这种话也一样。
+  - summon 在消息末尾提示的「本条消息同时 @ 了以下 bot:…」是帮你判断用的上下文。
+
+  【下面这些能力,命令行是一条路,原生工具是另一条】
+
+  - 你的工具列表里若有 `summon.preview` / `summon.react` / `summon.send_image`,**直接调用它们**,
+    不必拼命令行、也不用带轮凭证。没有的话就照下面写的命令跑。两条路做的是同一件事,别重复做。
+
+  【给人看一份本地文件(spec / 方案 / 长文档)】
+
+  - 回复里写 `` `/绝对路径` ``(整条 code span 恰好是一条绝对路径),summon 会在回复末尾生成这个文件的打开按钮,能和你对话或有操作权限的人点了按钮,私聊收到这个文件的打开链接。**回复里不要放预览 URL** —— 打开链接只经按钮私聊给有权限的人。
+  - `summon preview --turn-id <本轮凭证> <文件路径>` 只确认这个文件能不能预览、告诉你怎么写进回复;**它不发飞书消息,也不给链接**。
+  - 查不到本机可路由地址、文件不存在或超过大小上限时**不生成按钮**,家目录与它的上级目录也不会;此时路径就是普通文字。
+  - 图片走 `summon send-image --turn-id <本轮凭证> <图片路径>`,**它才是真发卡片**。
+
+  【summon 配置与排错】
+
+  - 用户问配置、开关或生效时机，先读 `summon guide config`；故障先读 `summon guide troubleshooting`。手册随当前二进制分发，按用户授权修改并验证。
+
+  【下面几件事:动手前先 `summon guide protocol`】
+
+  - **跨群任务分流**:owner 明确要求转群,或本轮提示确认本群已开启自主分流授权时,可用 `summon delegate` 复用已有群或新建仅含 Owner 与当前 Bot 的任务群。只限 owner 真人轮;先读 `summon guide protocol`,核对已有群的成员范围,只带必要上下文。
+  - **建定时器 / 提醒** → 用 `summon remind`(它给当前会话建,到点把内容当作一轮新任务投给你)。
+    **绝不要手改 `~/.summon/schedules.yaml`** —— 那份表所有 agent 共用,写坏一个字段整份表都读不出来,
+    后果是全部定时器一起失效;手写还绕过了 id 分配的并发锁,两个 agent 同时写会互相覆盖。
+  - **结束当前会话** → `summon session end --turn-id <本轮凭证>`:本轮正常完成后会话退出,上下文保留,
+    对方再发消息就接着聊。
+  - **读当前飞书会话的历史前文** → chat_id 只能用 `summon chat-id --turn-id <本轮凭证>` 取。
+    **不要读环境变量 `$SUMMON_CHAT_ID`** —— 它在进程启动那一刻就钉死了,会话被迁移后指向的是
+    上一个群,照它去读会读到别人的历史。
+  - **用户发来附件** → summon 已经把文件下载到本地,路径就在消息末尾的提示里,直接用 Read 打开。
+
+  {reactions_protocol}
+
+  —— 以上是你的常驻约定,作为背景记住即可,不必回「好」或复述;紧跟在后面的就是要你处理的消息,直接照约定回应它。
+
+# 表情约定段(app-core tier1,同样不可覆盖)。由分级开关 `agent_reactions` 决定注不注入:
+# 开 → 填进 `system_prompt_core` 的 `{reactions_protocol}` 占位;关 → 该占位填空,整段不进 PRIMER。
+# 单独成 key 而不是在 core 正文里按标题切分:切分要靠正文字符串定位,改一个字就静默失效,
+# 而失效的方向是「关不掉」—— 用户以为关了、agent 照样收到。
+system_prompt_reactions: |
+  【给消息贴语义表情】
+
+  - 你可以给「当前正在回应的这条消息」贴一个反映你态度/分类的语义表情:
+    `summon react --turn-id <本轮凭证> <表情名>`。同一条消息再贴会替换上一个;「处理中 / 已完成」
+    这对状态表情由系统自动维护,不用你贴。
+  - 选哪个表情、有哪些可选:**`summon guide reactions`**。完整的含义→ID 映射在 {emoji_file}。
+
+# 是否给 agent 注入上面那段表情约定(分级开关,四层可配:内置 → ~/.summon/config.yaml →
+# agent.yaml → per-chat 的 `/set agent.reactions off`)。**只隔离 PRIMER**:关掉后
+# `summon react` 命令不加闸,系统自动的 OnIt/DONE 工程表情也不受影响。
+agent_reactions: true
+
+# feed 总结段(app-core tier1,同样不可覆盖)。由分级开关 `agent_feed` 决定注不注入,
+# 填进 `system_prompt_core` 的 `{feed_protocol}` 占位;单独成 key 的理由同表情约定段。
+system_prompt_feed: |
+  【回复末尾的 feed 总结】
+
+  - 本轮最终回复的最后一行写 `<summon-feed>总结</summon-feed>`:14 字以内,标点用英文,说这一轮的结论或做成了什么。summon 会把它从正文里拿掉,放进飞书会话列表的预览;超过 14 字就不用,预览退回正文开头。
+  - 只在最终回复末尾写一次。静默结束(只输出 `__SUMMON_SILENT_EXIT__`)或本轮不该应答、不输出回复时,都不写。
+
+# 是否给 agent 注入上面那段 feed 总结约定(分级开关,四层可配,per-chat 用
+# `/set agent.feed off`)。**只隔离 PRIMER**:关掉后 agent 不再被要求写这个标签,会话列表预览
+# 取正文开头;回复里若仍带着标签,摘除照常进行。
+agent_feed: true
+document_comments_enabled: false
+document_comment_timeout_secs: 300
+
+# 表情候选:daemon 按此集合校验 agent 选用的表情键。键区分大小写，使用飞书官方 emoji_type。
+# API 拒绝的 key 会被忽略，不影响消息回复。
+# 来源: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
+reactions:
+  - OK
+  - THUMBSUP
+  - THANKS
+  - MUSCLE
+  - FINGERHEART
+  - APPLAUSE
+  - FISTBUMP
+  - JIAYI
+  - DONE
+  - LGTM
+  - CLAP
+  - PRAISE
+  - STRIVE
+  - YEAH
+  - SMILE
+  - BLUSH
+  - LAUGH
+  - SMIRK
+  - LOL
+  - FACEPALM
+  - JOYFUL
+  - CHUCKLE
+  - WINK
+  - PROUD
+  - WITTY
+  - SMART
+  - LOVE
+  - HEART
+  - KISS
+  - SMOOCH
+  - HUG
+  - COMFORT
+  - OBSESSED
+  - DROOL
+  - WOW
+  - SHOCKED
+  - THINKING
+  - TRICK
+  - SCOWL
+  - ENOUGH
+  - WHAT
+  - SILENT
+  - WAVE
+  - SHHH
+  - SOB
+  - CRY
+  - TEARS
+  - WAIL
+  - WHIMPER
+  - BLUBBER
+  - WRONGED
+  - EMBARRASSED
+  - SHY
+  - XBLUSH
+  - FROWN
+  - DIZZY
+  - CRAZY
+  - SMUG
+  - HAUGHTY
+  - LOOKDOWN
+  - DULL
+  - GLANCE
+  - ANGRY
+  - HAMMER
+  - SLAP
+  - TERROR
+  - PETRIFIED
+  - SWEAT
+  - SPEECHLESS
+  - SLEEP
+  - DROWSY
+  - YAWN
+  - SICK
+  - PUKE
+  - NOSEPICK
+  - SPITBLOOD
+  - RAINBOWPUKE
+  - BETRAYED
+  - TOASTED
+  - INNOCENTSMILE
+  - TEASE
+  - SHOWOFF
+  - HUSKY
+  - MONEY
+  - LUCK
+  - REDPACKET
+  - PARTY
+  - FIREWORKS
+  - FIRECRACKER
+  - CAKE
+  - GIFT
+  - BEER
+  - ROSE
+  - LIPS
+  - CUCUMBER
+  - CANDIEDHAWS
+  - BULL
+  - CALF
+  - BEAR
+  - BOMB
+  - SKULL
+  - POOP
+  - CLEAVER
+  - HEADSET
+  - HEARTBROKEN
+  - ERROR
+  # 飞书表情键大小写敏感，与内置图片表保持一致。
+  - MeMeMe
+  - OnIt
+  - OneSecond
+  - CheckMark
+  - CrossMark
+  - Alarm
+  - Fire
+  - Shrug
+  - Sigh
+  - Get
+  - Typing
+  - GoGoGo
+  - Trophy
+  - Hundred
+  - SALUTE
+  - HIGHFIVE
+  - SHAKE
+  - "Yes"
+  - "No"
+  - Pin
+  - Loudspeaker
+  - Coffee
+  - AWESOMEN
+  # 表情与动作
+  - BeamingFace
+  - ClownFace
+  - ColdSweat
+  - Delighted
+  - EatingFood
+  - FullMoonFace
+  - Partying
+  - SaluteFace
+  - ThanksFace
+  - ThumbsDown
+  - UPPERLEFT
+  - VRHeadset
+  - YouAreTheBest
+  # 动物
+  - EYESCLOSED
+  - SLIGHT
+  - TONGUE
+  - RoarForYou
+  - JubilantRabbit
+  - HappyDragon
+  # 食物饮料
+  - BubbleTea
+  - Drumstick
+  - Lemon
+  - Pepper
+  - Mooncake
+  - StickyRiceBalls
+  # 节庆
+  - FORTUNE
+  - MoonRabbit
+  - Pumpkin
+  - Snowman
+  - XmasHat
+  - XmasTree
+  # 符号与文娱
+  - "18X"
+  - Basketball
+  - Soccer
+  - MinusOne
+  - Movie
+  - Music
+  - OKR
+  - TV
+  # 状态
+  - GeneralBusinessTrip
+  - GeneralDoNotDisturb
+  - GeneralInMeetingBusy
+  - GeneralMoonRest
+  - GeneralSun
+  - GeneralTravellingCar
+  - GeneralWorkFromHome
+  - StatusBus
+  - StatusEnjoyLife
+  - StatusFlashOfInspiration
+  - StatusInFlight
+  - StatusReading
+  - Status_PrivateMessage
+
+# 表情含义映射(KEY → 中文含义)。daemon 写 emoji 文件时,有含义的输出「KEY(含义)」方便 agent 按含义选用。
+reaction_meanings:
+  OK: "好的 / 同意 / 收到"
+  THUMBSUP: "点赞 / 夸奖 / 感谢"
+  THANKS: "感谢"
+  MUSCLE: "加油 / 努力"
+  FINGERHEART: "比心"
+  APPLAUSE: "鼓掌"
+  FISTBUMP: "碰拳"
+  JIAYI: "加油"
+  DONE: "完成 / 搞定"
+  LGTM: "看起来不错"
+  CLAP: "拍手"
+  PRAISE: "表扬"
+  STRIVE: "奋斗"
+  YEAH: "耶"
+  SMILE: "微笑"
+  BLUSH: "害羞"
+  LAUGH: "大笑"
+  SMIRK: "得意地笑"
+  LOL: "笑死"
+  FACEPALM: "捂脸"
+  JOYFUL: "开心"
+  CHUCKLE: "轻笑"
+  WINK: "眨眼"
+  PROUD: "骄傲"
+  WITTY: "机智"
+  SMART: "聪明"
+  LOVE: "爱你"
+  HEART: "比心 / 喜欢"
+  KISS: "亲亲"
+  SMOOCH: "飞吻"
+  HUG: "拥抱"
+  COMFORT: "安慰"
+  OBSESSED: "痴迷"
+  DROOL: "流口水"
+  WOW: "惊讶 / 厉害"
+  SHOCKED: "震惊"
+  THINKING: "思考中 / 让我想想"
+  TRICK: "恶作剧"
+  SCOWL: "不高兴"
+  ENOUGH: "受够了"
+  WHAT: "什么？"
+  SILENT: "安静"
+  WAVE: "挥手"
+  SHHH: "嘘"
+  SOB: "哭泣"
+  CRY: "哭"
+  TEARS: "流泪"
+  WAIL: "大哭"
+  WHIMPER: "呜咽"
+  BLUBBER: "哭哭啼啼"
+  WRONGED: "委屈"
+  EMBARRASSED: "尴尬"
+  SHY: "害羞"
+  XBLUSH: "脸红"
+  FROWN: "皱眉"
+  DIZZY: "晕"
+  CRAZY: "疯了"
+  SMUG: "得意"
+  HAUGHTY: "傲慢"
+  LOOKDOWN: "鄙视"
+  DULL: "无聊"
+  GLANCE: "看一眼"
+  ANGRY: "生气"
+  HAMMER: "锤子"
+  SLAP: "打脸"
+  TERROR: "恐惧"
+  PETRIFIED: "石化"
+  SWEAT: "冒汗"
+  SPEECHLESS: "无语"
+  SLEEP: "睡觉"
+  DROWSY: "困"
+  YAWN: "打哈欠"
+  SICK: "生病"
+  PUKE: "呕吐"
+  NOSEPICK: "挖鼻孔"
+  SPITBLOOD: "吐血"
+  RAINBOWPUKE: "彩虹吐"
+  BETRAYED: "被背叛"
+  TOASTED: "干杯"
+  INNOCENTSMILE: "无辜笑"
+  TEASE: "挑逗"
+  SHOWOFF: "炫耀"
+  HUSKY: "沙哑"
+  MONEY: "有钱"
+  LUCK: "幸运"
+  REDPACKET: "红包"
+  PARTY: "庆祝 / 派对"
+  FIREWORKS: "烟花"
+  FIRECRACKER: "鞭炮"
+  CAKE: "蛋糕"
+  GIFT: "礼物"
+  BEER: "啤酒"
+  ROSE: "玫瑰"
+  LIPS: "嘴唇"
+  CUCUMBER: "黄瓜"
+  CANDIEDHAWS: "糖葫芦"
+  BULL: "公牛"
+  CALF: "小牛"
+  BEAR: "熊"
+  BOMB: "炸弹"
+  SKULL: "骷髅"
+  POOP: "便便"
+  CLEAVER: "菜刀"
+  HEADSET: "耳机"
+  HEARTBROKEN: "心碎"
+  ERROR: "出错 / 抱歉"
+  MeMeMe: "举手 / 我来"
+  OnIt: "马上去做 / 在做了"
+  OneSecond: "稍等一下"
+  CheckMark: "核对通过"
+  CrossMark: "核对不通过"
+  Alarm: "预警 / 发现 bug / 有问题"
+  Fire: "火 / 热度高"
+  Shrug: "耸肩 / 无奈"
+  Sigh: "叹气"
+  Get: "收到 / get 到了"
+  Typing: "输入中 / 处理中"
+  GoGoGo: "冲 / 加油"
+  Trophy: "奖杯 / 里程碑达成"
+  Hundred: "满分"
+  SALUTE: "敬礼 / 致敬"
+  HIGHFIVE: "击掌"
+  SHAKE: "握手 / 成交"
+  "Yes": "是 / 赞成"
+  "No": "否 / 反对"
+  Pin: "钉住 / 重点标记"
+  Loudspeaker: "广播 / 周知"
+  Coffee: "咖啡 / 休息一下"
+  AWESOMEN: "牛 / 很棒"
+  BeamingFace: "露齿笑 / 嘻嘻"
+  ClownFace: "小丑"
+  ColdSweat: "冷汗 / 冒冷汗"
+  Delighted: "满足笑 / 开心"
+  EatingFood: "吃东西 / 吃瓜"
+  FullMoonFace: "满月脸"
+  Partying: "派对脸 / 庆祝"
+  SaluteFace: "敬礼脸 / 致敬"
+  ThanksFace: "合掌感谢 / 谢谢"
+  ThumbsDown: "踩 / 不赞同"
+  UPPERLEFT: "指左上 / 看这里"
+  VRHeadset: "VR / 虚拟现实"
+  YouAreTheBest: "送花 / 你最棒"
+  EYESCLOSED: "捂眼猴 / 不忍看"
+  SLIGHT: "棕色狗 / 狗狗"
+  TONGUE: "吐舌狗 / 柯基"
+  RoarForYou: "加油虎 / 为你打气"
+  JubilantRabbit: "兔子 / 喜庆兔"
+  HappyDragon: "龙 / 喜庆龙"
+  BubbleTea: "奶茶 / 珍珠奶茶"
+  Drumstick: "鸡腿"
+  Lemon: "柠檬 / 酸了"
+  Pepper: "辣椒 / 辣"
+  Mooncake: "月饼 / 中秋"
+  StickyRiceBalls: "汤圆 / 元宵"
+  FORTUNE: "金币 / 财运"
+  MoonRabbit: "月兔 / 玉兔"
+  Pumpkin: "南瓜 / 万圣节"
+  Snowman: "雪人 / 冬天"
+  XmasHat: "圣诞帽"
+  XmasTree: "圣诞树"
+  "18X": "18禁 / 未成年人不宜"
+  Basketball: "篮球"
+  Soccer: "足球"
+  MinusOne: "减一 / -1"
+  Movie: "电影"
+  Music: "音乐"
+  OKR: "OKR / 目标"
+  TV: "电视"
+  GeneralBusinessTrip: "出差 / 行李箱"
+  GeneralDoNotDisturb: "免打扰 / 请勿打扰"
+  GeneralInMeetingBusy: "会议中 / 开会 / 日历"
+  GeneralMoonRest: "月亮 / 晚安 / 休息"
+  GeneralSun: "太阳 / 晴天"
+  GeneralTravellingCar: "开车 / 汽车"
+  GeneralWorkFromHome: "居家办公"
+  StatusBus: "巴士 / 公交"
+  StatusEnjoyLife: "度假 / 享受生活"
+  StatusFlashOfInspiration: "灵感 / 灯泡"
+  StatusInFlight: "飞机 / 飞行中"
+  StatusReading: "读书 / 阅读"
+  Status_PrivateMessage: "私聊 / 发消息"
+
+# 选不出时的兜底表情。
+default_reaction: OK
+# 收到消息即贴(daemon 直连);任务完成后 daemon 换贴 done_reaction。
+working_reaction: OnIt
+# 任务完成 daemon 直连补的。
+done_reaction: DONE
+# 本轮被「⏸ 打断」按钮中止时补的表情(撤掉 working 后贴它)。须在上面 reactions 安全集内。
+interrupted_reaction: SILENT
+
+# 每次注入会话的 prompt 模板。占位:
+# - {source}: 私聊为「来自 {who} 的飞书消息」,群聊为「在群「{chat}」里 {who} @你」
+# - {who}: 发送人
+# - {chat}: 群名;私聊为空
+# - {text}: 消息正文
+prompt_template: "{source}:「{text}」"
+
+# 会话空闲多久发提示卡片(秒);dispatcher 空闲扫描节拍(秒)。
+# 三种捕获模式一视同仁:claude 的 tmux 与 codex/cursor 的常驻 RPC 会话进程都是「挂着不说话
+# 也一直占着」的东西,卡上的退出/保活对它们语义相同(compact 在无头 CLI 上如实回执不支持)。
+idle_ttl_secs: 86400
+idle_scan_secs: 300
+# 无头轮真静默上限（正整数秒）。全局或agent覆盖，下一轮生效。
+headless_stall_secs: 1800
+
+# 跨后台任务续跑的时间上限(秒)。一轮 end_turn 时仍有后台任务(后台 Bash、后台子 agent / workflow)未完成,
+# 主路径不收尾、续跑到 task-notification 到达;超过它强制收尾,防止后台任务永不完成时主路径
+# 永久挂起。0 = 关(不续跑)。只对 claude/Transcript 生效。
+background_continuation_max_secs: 3600
+
+# 会话空闲多久**自动退出**(秒)。null = 关(内置默认),不写这行的机器行为逐字节不变。
+#
+# 退出语义是「退出续聊」:保留 resume 记录、只释放会话进程(claude 的 tmux / codex、cursor
+# 跨轮存活的 RPC 会话),下条消息按 CLI 原生 resume 接回上下文 —— 不是重置,不丢对话。
+# 动机是 claude 每个会话常驻 600-900MB,挂一周的群会把内存吃干,而它们的上下文其实躺在
+# 盘上、随时接得回来。
+#
+# 这是**唯一由扫描线程发起的会话终止**,与「回收/空闲扫描从不擅杀 tmux」那条红线是 owner
+# 2026-08-12 显式授权的例外。因此判据一条都不能省(见 `should_retire_idle_session`):
+# 会话确实还在、resume 开着、盘上有 session id、此刻没有活跃 turn/subagent。
+# 任一条证不了 → 跳过,等下一轮扫描再说。宁可多留一个会话,不可拆错一个。
+#
+# 建议值 86400(1 天)。要开在 config.yaml 的 messaging: 下写 idle_retire_secs: 86400。
+idle_retire_secs: null
+
+# **定时任务尾轮**的静默自动退出(秒)。**默认开:3300(55min)** —— owner 2026-08-13 显式授权
+# 的默认值(本仓「回收类机制默认关」惯例的一次显式例外)。
+#
+# 语义:某会话最后一轮入站是定时器触发(不是人/bot 消息),之后 55min 没有任何新消息 →
+# **不发**空闲提醒卡,直接走与 idle_retire_secs 相同的「退出续聊」退出(回执文案复用
+# session_exited.idle_retired)。定时任务会话安静地走;人类消息一到,该会话回到普通规则
+# (idle_ttl 提醒卡 + idle_retire)。
+#
+# 三种捕获模式同一条通路:默认退出续聊,timer_idle_retire_reset 打开才重置。
+# 都要求没有活跃 turn/subagent 且盘上有 session id;结构条件不可证时保持会话不动。
+#
+# 要关:messaging: 下写 timer_idle_retire_secs: 0(写 null 只会落回内置默认,不算关)。
+timer_idle_retire_secs: 3300
+
+# 定时任务会话空闲归档时是否重置(清 resume 记录,下次定时器触发开全新 session)。
+# false(默认)= 退出续聊:保留 resume 记录,下次触发接回原上下文。
+# true = 归档即重置:定时会话到点静默退出时清掉 resume 记录,下次触发零历史。
+# 仅对定时器尾轮生效;人类消息尾轮的空闲归档永远续聊。per-chat 可在 schedules 面板单独开关。
+timer_idle_retire_reset: false
+
+# 跟进消息的「打断」前缀:turn 进行中,以它开头的消息打断当前轮——无头(cursor/codex)对
+# 子进程组发 SIGINT、claude 发 tmux Esc,打断后带新消息重跑;否则追加排队(由 CLI 原生队列
+# 接力)。空字符串 = 永不打断、一律追加。
+# Cursor Headless CLI Session 默认接收同一发起人的轮内追加消息。Cursor 的 `-p` 当前没有原生
+# mid-turn 输入接口，所以 summon 会立即 SIGINT 当前轮、保留 session id，再用 `--resume` 带
+# 原提示/部分输出/新消息续跑。
+steer_cli_session: true
+
+# 轮内 steer(**两条路都默认开**)。轮进行中到达的消息不再由 summon 排队,直接交给 CLI 自己的
+# 队列在下一个工具边界消费 —— 你连发两条不必干等前一轮跑完,代价是 N 条消息可能被合成一轮回答。
+#
+# 「哪些内容属于哪条消息」由**过程展示**表达:追加消息被真正消费那一刻,卡片路径切一张新卡、
+# 原生 CoT 打一个段边界。消费判据是白名单式的严格判定(入队不算送达),所以这些边界落在真实的
+# 消费时刻上。
+#
+# 两个键各自独立:tmux 那条是往 TUI 里打字由 claude 的队列消费,RPC 那条是发 `turn/steer` 帧
+# 由 codex 在当前 turn 追加。机制毫无共同点,出问题要能只关一条。
+steer_transcript: true
+steer_rpc: true
+
+# 会话镜像(仅 claude/Transcript,**默认开**):持续 tail 转录,把每个完成的 assistant turn 推回
+# 飞书——无论这轮由飞书注入触发,还是你 attach 进 tmux 直敲触发。要关:config/agent.yaml 的
+# messaging 下设 session_mirror: false(kill-switch)。
+session_mirror: true
+
+# Claude 授权请求与 AskUserQuestion(仅 claude,**默认开**):会话 settings 里挂 PermissionRequest hook,
+# 把 Claude 要人确认的那一步转成飞书卡片,点「允许 / 拒绝」或答题后由 hook 回给 Claude。关掉后 hook
+# 一律不作答,落回终端对话框与抓屏中介。要关:messaging 下设 claude_permission_hook: false。
+claude_permission_hook: true
+
+# 邮箱打码重发(**默认开**):飞书内容审核会整条拒发带外部邮箱的消息(git@github.com:org/repo 这类
+# 地址也算)。被拒时把回复、过程、镜像、卡片里的邮箱打成只留用户名首字母(probe.user@example.com →
+# p***@example.com)再发一次;没被拒的消息原样送达,按钮回调值与表单预填值不动。被拒时按配置文件
+# 当前内容判定,改了即生效。要关:config/agent.yaml 的 messaging 下设 mask_email: false(被拒时
+# 改发一句说明)。
+mask_email: true
+
+# turn 完成「双卡」(**默认开**):每轮跑完把过程卡(流式打字机卡)定格成「✅ 已完成 + 折叠完整回复
+# (可点开查阅)」,并另发一张「📋 总结」卡作为完成信号(新消息气泡,用户一眼知道这轮结束了)。
+# 要关:config/agent.yaml 的 messaging 下设 completion_summary_card: false(回退单卡,流式卡末态即回复)。
+completion_summary_card: true
+
+# live 卡工具轨迹保留的最大步数(**默认 3**)。轨迹回答的是「刚做完什么、正在做什么」,不是完整
+# 日志(完整的在 events.jsonl);步数一多卡片就成了一屏流水账。只对「思考内容不可见」那一档
+# (claude 自家模型)有渲染效果——别的模型过程由 thinking 正文承担,不走轨迹。
+# 想看得更多就调大;0 按 1 处理(一步不留会连「🔧 执行 X 中…」状态行一起抹掉)。
+progress_max_steps: 3
+
+# CoT 外显的三个 agent 级默认值；群内 `/cot` 子命令可逐项覆盖。
+# 思考正文默认上卡,工具调用默认不上卡(owner 2026-09-17):思考过程给人看,工具流水默认
+# 不出现 —— 工具详情关时 CoT 只有思考正文,想看工具调用可在面板里打开。
+cot_visible: true
+cot_tool_details: false
+
+# 回复卡角标是否显示思考档位(effort,如 `xhigh`)。角标一行里档位是最容易被当噪音的一项,给它
+# 一个能关的位置;开关只管渲染,关掉期间档位照常采集,重新打开当轮即有值可显。
+badge_effort: true
+
+# 扁平模型回退表:**只**给没有 models_by_cli 桶的 CLI 用(未知 CLI)。各 CLI 模型命名空间
+# 互不通用(同一 Opus 5,claude 里叫 claude-opus-5、cursor 里叫 claude-opus-5-high),
+# 混在一张扁平表里点了也起不来——所以默认空,候选一律走下面的 models_by_cli 分桶。
+models: []
+
+# 按 CLI 分桶的模型候选,**冷启兜底用**。
+#
+# 面板候选的事实源是各 backend 自报的目录 —— cursor 随 ACP 会话下发 `availableModels`,
+# codex/traex 走 app-server 的 `model/list`。上游今天加一个模型,开一条新会话就能在面板上点到,
+# 这张表不用动。它只在「目录还没抓到」时顶上:daemon 刚起、这台机器还没开过该 CLI 的会话。
+# 所以这里挑的是各家族一个稳定代表,不追新、不求穷举(cursor 有 130+ 个,列全没法看)。
+# claude 是例外 —— 它没有列模型的接口,面板候选只有这张表。
+#
+# 模型 id 必须是**该 CLI 自己认的写法**:
+# - claude:`claude --model` 接受的 id(effort 是独立轴,见下面 efforts);
+# - cursor:`cursor-agent models` 列出的 id(推理档位烤在 model 名里,无独立 effort 轴);
+# - codex:`codex -m` 接受的 id(effort 走 -c model_reasoning_effort,见 efforts)。
+# 切换生效方式按 CLI 自适应:claude 往会话内注入 `/model <id>` 就地切(上下文保留),
+# cursor/codex 无头每轮自带 --model/-m(下一条消息生效,也不丢上下文)。
+# 在 config.yaml / agent.yaml 的 messaging.models_by_cli 覆盖(**per-key 合并**:只写要改的 CLI 桶,
+# 没写的桶继承这里的内置默认 —— 升级新增桶时你自动拿到,不必把三个桶都抄一遍)。
+# 飞书里 `/model <id>` 只认候选目录里的 id(backend 自报的目录优先,没有时用这里的桶;claude 另认它
+# 内置的别名与当前配置的模型),对不上就不改、回几个最接近的候选按钮;目录之外的 id 用本机
+# `summon agents model` 设。
+models_by_cli:
+  claude:
+    # `claude --model` 收全名或别名(opus/fable/sonnet=各家族最新)。这里用全名:agent.yaml 里
+    # 一眼看得出实际跑的是哪代,别名随版本漂移反而读不出来。
+    # claude 没有列模型的接口,所以这张表是它候选的唯一来源,新模型要手工添。
+    - claude-opus-5
+    - claude-fable-5
+    - claude-sonnet-5
+  cursor:
+    # `cursor-agent models` 的 id,推理档位烤在名里。四家族各留一个代表:
+    # gpt / opus / grok / composer。会话下发的目录里有的,`/model <id>` 也能切。
+    # 首项 sol-xhigh 是 owner 钦定主力(2026-08-06),也是 onboard/bind 的默认模型 ——
+    # cursor 的目录只随会话下发,onboard 时还没有会话,所以它的默认仍取这张表的首项。
+    # 注意:目录显示名里的「1M」是家族能力
+    # 标注,dash id 的实际窗口是定值(sol 272K、opus 300K),账号 maxMode 开关拉不动它;
+    # 1m 只是 bracket 参数且仅交互 TUI 面吃 —— `-p`(exec 路)上没有任何模型能拿到 1M(真机
+    # 2026-08-06 分面实测)。
+    - gpt-5.6-sol-xhigh
+    - claude-opus-5-thinking-xhigh
+    - cursor-grok-4.5-high
+    - composer-2.5
+  codex:
+    # `codex -m` 收的 slug。冷启窗口用,抓到 `model/list` 的目录后就以目录为准。
+    - gpt-5.6-sol
+    - gpt-5.6-terra
+    - gpt-5.6-luna
+    - gpt-5.5
+  # traex(traecli,codex 的 fork)不带内置候选:它有哪些模型取决于接入的网关,以它经
+  # `model/list` 自报的目录为准。要在抓到目录之前就有候选,在 `~/.summon/config.yaml` 的
+  # `messaging.models_by_cli.traex` 里配。
+
+# codex/traex 的会话是否把 summon 的平台工具(preview / react / send_image)注册成
+# app-server dynamic tools,让模型在工具列表里直接调用。
+#
+# **出厂关。** 这三个能力经 CLI 一直可用(PRIMER 里就教了),打开只是换一条更顺手的通道:
+# 不用拼 shell、不用带轮凭证,而且模型连 chat_id 都指定不了,目标一律取自当前轮。
+# 关着的理由不是它不安全,是「要不要默认开」属于灰度决定 —— 其中两个工具直接往群里发东西,
+# 发出去撤不回来,这个默认值该由人来定。
+#
+# 工具定义只在 `thread/start` 注册(`thread/resume` 依赖 rollout 恢复,不重传实验字段),
+# 所以改了它**要新建会话**才生效:`/quit` 接回的是同一条 thread,工具的有无跟着那条 thread 走。
+codex_platform_tools: false
+
+# 按 CLI 钉选的**默认**模型 —— onboard/bind 的 `--model` 缺省值。
+#
+# 候选目录跟着 backend 走,唯独默认模型留给人定:上游换代那天,你的主力不该被悄悄换掉。
+# 解析顺序是 钉选 → backend 自报的默认(codex 的 `isDefault`)→ `models_by_cli` 桶首项。
+# 出厂不钉任何一个,也就是默认跟随上游;想锁死就写一行,例如:
+#   default_model_by_cli:
+#     codex: gpt-5.6-sol
+# 与 models_by_cli 同样是 per-key 合并:只钉自己在乎的那个 CLI,其余跟随升级。
+default_model_by_cli: {}
+
+# 会话控制面板/onboard 上可选的逻辑 effort 档位(规范全集 none<minimal<low<medium<high<xhigh<max
+# <ultra 的子集);最终再与各 CLI 合法集求交 —— ultra 只有 codex 收,claude 桶会自动滤掉它,
+# 不必也不该在这里按 CLI 分列。只服务 claude/codex(cursor 档位烤在 model 名里)。
+efforts:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  - ultra
+
+# slash 准入黑名单(owner 2026-08-14:准入从白名单/采样池**反转**为可配置黑名单)。
+# 默认放行 —— 不在这张名单里、也不在采样池里的命令走通用执行器(注入前仍要正向证明输入态,
+# 收尾类别按注入后的观测归类,判不出就回「不确定」)。发现 badcase 往这里加一行即可。
+#
+# 生效集 = default 段 ∪ 该 backend 段(**纯并集**,段之间不做减法):
+#   - 想对所有 backend 生效 → 写进 default;
+#   - 只想拦某一个 backend(如「claude 拦 /login,其它放行」)→ 只写进那个 backend 段。
+# backend 段对各自通路生效：claude/cursor Transcript 是 TUI 注入，codex/traex Rpc 是原生
+# app-server 控制映射。两者都在执行前先过同一张黑名单；Rpc 未映射命令不会降级进模型 prompt。
+#
+# 覆盖是**逐段整体替换**(config.yaml / agent.yaml 的 messaging.slash_blacklist 下):
+# 写 `default: []` 就是把下面这些出厂项全部移除,那是 owner 的权利;不写的段继承出厂值。
+# 出厂项挑的都是已确认的 badcase,拒绝理由文案在 driver/slash_pool.rs 的 REJECTED_SAMPLES。
+slash_blacklist:
+  default:
+    # 凭据类:会挂起浏览器流程、改变**跨会话**的账号态 —— 那不是这条会话的事。
+    - /login
+    - /logout
+    # 已采样确认的交互形态:Esc 在这一屏是「清空筛选」,退出实测要按三次,受限 Esc 退不掉它。
+    - /config
+    # 弹编号菜单;菜单可能与工具授权提示同形,Esc 不授权(pane_input::esc_authorized)——
+    # 面板会一直堵着会话。切模型另有面板卡片这条受控路径。
+    - /model
+    # summon 自己处理(改本群或默认的思考档位);同形变体不能落进通用执行器被裸注入。
+    - /effort
+  claude: []
+  codex: []
+  cursor: []
+
+# 会话被强制退出时回执给用户的文案(按退出原因分别配)。群仍在 → 发进原群;
+# 群已散 / bot 被移除 → p2p 发给群主(.meta 记的 creator 回退事件 operator / 配置 owner)。
+# 在 config.yaml / agent.yaml 的 messaging.session_exited 下逐字段覆盖,热重载。
+# 群退出文案支持 {chat}:优先渲染群「群名」,无群名时回退稳定短标识。
+session_exited:
+  # 不带 --reset 的 kill / 外部销毁 tmux(如会话里敲 /quit):resume 记录还在,续上下文。
+  manual_kill: "本会话已关闭。下次给我发消息会接着这段上下文续聊。"
+  # --reset 才真清 resume 记录。
+  manual_kill_reset: "本会话已关闭并重置。下次给我发消息会开一段全新的对话(不续旧上下文)。"
+  panel_clean: "本会话已退出。下次给我发消息会接着这段上下文续聊。"
+  panel_reset: "本会话已归档。下次给我发消息会新建会话；/resume 可恢复本次会话。"
+  # 空闲太久自动退出(idle_retire_secs)。没人点过按钮,所以要说清为什么退、上下文还在不在。
+  idle_retired: "本会话空闲太久,已自动退出(释放常驻进程)。下次给我发消息会接着这段上下文续聊,不会丢。"
+  # agent 判断话题已结束、自行退出:不发回执卡,这句原地追加在本轮终态卡末尾;卡片更新失败时作为短消息发出。
+  agent_archived: "会话已退出,发消息即可接着聊"
+  group_disbanded: "{chat}已解散，我已退出相关会话。需要的话随时私聊我。"
+  bot_removed: "我已被移出{chat}，相关会话已退出。需要的话随时私聊我。"
+  shutdown_interrupt: "⏸️ 我所在的 daemon 重启了,上一轮被打断;重启后会自动续上。"

@@ -1,0 +1,88 @@
+# summon 全局配置(~/.summon/config.yaml)。messaging 下一轮读取；服务监听配置需重启。详见 summon guide config。
+# 没写的项 = 用内置默认(messaging.default.yaml)。以下 messaging: 全部可选(已注释,取消注释即覆盖):
+# language: auto  # 默认读取 lark-cli config show 的 .lang，再回退系统首选语言；zh-CN / en 显式覆盖，切换无需重启。
+#
+# messaging:
+#   # 冷启只发一次的输出约定;{emoji_file} 运行时替换成本地 emoji 候选文件路径。
+#   system_prompt: "……{emoji_file}……"
+#   # 表情安全集:daemon 校验用。默认 = 飞书全大写安全集(约 100 个)。
+#   reactions: [OK, THUMBSUP, THANKS, DONE, THINKING, ERROR]
+#   working_reaction: OnIt   # 收到消息即贴
+#   done_reaction: DONE      # 任务完成补
+#   prompt_template: "{source}:「{text}」"
+#   idle_ttl_secs: 86400     # 会话空闲多久发提示卡片(秒)
+#   idle_scan_secs: 300      # 空闲扫描节拍(秒)
+#   # 会话控制面板的模型候选,**按 CLI 分桶**。面板候选正常走各 backend 自报的目录
+#   # (cursor 的 availableModels、codex/traex 的 model/list),这张表只在目录还没抓到的
+#   # 冷启窗口顶上;claude 没有列模型的接口,它的候选只有这张表。
+#   # 各 CLI 模型命名空间互不通用(同一 Opus 5,claude 里叫 claude-opus-5,cursor 里叫
+#   # claude-opus-5-high),id 必须写该 CLI 自己认的(cursor 的看 `cursor-agent models`)。
+#   # 覆盖按 CLI 桶逐项合并,没写的桶继续继承内置默认。切换生效方式按 CLI 自适应:
+#   # claude 会话内 /model 就地切、无头下一条消息生效。
+#   models_by_cli:
+#     claude:
+#       - claude-opus-5
+#     cursor:
+#       - cursor-grok-4.5-high
+#     codex:
+#       - gpt-5.6-sol
+#   # 钉选各 CLI 的默认模型(onboard/bind 的 --model 缺省值)。不钉就跟随 backend 自报的默认,
+#   # 上游换代时跟着换;钉了就以钉的为准。同样按 CLI 逐项合并。
+#   default_model_by_cli:
+#     codex: gpt-5.6-sol
+#   # 面板的独立 effort 档位候选(只对 claude/codex 渲染;cursor 档位烤在 model 名里,无此轴)。
+#   efforts: [low, medium, high, xhigh, max]
+#   # 工程表情:收到消息即贴 / 完成补;default_reaction 是候选集外值的回退。
+#   default_reaction: OK
+#   document_comments_enabled: false # 文档评论起草与审批发布；仅全局和单 agent 配置
+#   # 分级开关(内置 → 这里 → agent.yaml → per-chat)。
+#   # 会话级用 `/set <点分 key> on|off|inherit`,配置文件里用下面这些**扁平字段名** ——
+#   # 两套名字不同形,`/set` 无参会把它们一起列出来。写错的字段会被 serde 静默忽略。
+#   agent_reactions: true    # 给 agent 注入「贴语义表情」那段 PRIMER(关掉只隔离 prompt,
+#                            # `summon react` 与系统自动的 OnIt/DONE 都不受影响)
+#   agent_feed: true         # 给 agent 注入「回复末尾写 feed 总结」那段 PRIMER(关掉后会话列表
+#                            # 预览取正文开头,回复里的标签照常摘除)
+#   cot_visible: true        # live 卡外显 CoT 过程内容
+#   hide_thinking: false     # 隐藏思考正文(注意存的是「隐藏」,`/set cot.thinking` 用的是「显示」)
+#   cot_tool_details: true   # CoT 展示工具调用(默认关,关时只有思考正文)
+#   # 会话镜像(仅 claude/Transcript,默认开):attach 直敲的 assistant turn 也推回飞书;false 关。
+#   session_mirror: true
+#   # 「会话已退出」回执文案,按退出原因逐字段覆盖(全部可选;见 messaging.default.yaml 的
+#   # session_exited: 段,字段名同):
+#   session_exited:
+#     manual_kill: "本会话已被管理员关闭。"
+#
+# 顶层(messaging 之外)可配:
+#
+# # 运行时外部 CLI 路径。onboard 会探测并写入本机初值；手工配置必须是绝对路径（允许 ~/）。
+# # 留空项回落到 daemon 启动时已净化的 PATH。旧 tmux_bin / sentinel.lark_cli_path 仍兼容，
+# # 但 tools.* 优先，doctor 会明确提示迁移或冲突。
+# tools:
+#   tmux: /opt/homebrew/bin/tmux
+#   lark_cli: ~/.local/bin/lark-cli
+#   claude: ~/.local/bin/claude
+#   codex: ~/.local/bin/codex
+#   cursor_agent: ~/.local/bin/cursor-agent
+#   git: /usr/bin/git
+#   ssh: /usr/bin/ssh
+#
+# # 重启后按 .session 记录 resume 续接(默认开);false = 每次冷启全新会话。
+# resume_sessions: true
+#
+# # owner sentinel(显式 opt-in):用你的用户身份轮询飞书,在任意会话里用
+# # `/summon <agent> <正文>` 或「@agent 进来回答/建群」召唤。普通会话走快速通道，
+# # 勿扰群进入低优先级补偿队列。热重载;开关也可用 `summon sentinel set`。
+# sentinel:
+#   enabled: false
+#   dry_run: true          # 只报告命中不执行,新装先 dry 一轮
+#   fast_interval_secs: 5  # 未勿扰活跃会话快速扫描
+#   fast_top_k: 5
+#   interval_secs: 60      # 慢速队列刷新 + /summon 全文搜索
+#   top_k: 50
+#   slow_batch_size: 2     # 每个快速 tick 处理的低优先级会话数
+#   join_verbs: [进来回答]
+#   create_verbs: [建群]
+#   aliases:               # 自定义称呼(打字习惯),映射到 agent name
+#     arcadia: [阿卡迪亚, Arcadia]
+#
+# 也可在某 agent 的 agent.yaml 写 messaging: 逐字段覆盖全局。

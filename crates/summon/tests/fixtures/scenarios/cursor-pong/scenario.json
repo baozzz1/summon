@@ -1,0 +1,23 @@
+{
+  "name": "cursor-pong",
+  "cli": "cursor",
+  "flows": [
+    {
+      "chat_id": "oc_replay",
+      "steps": [
+        {
+          "kind": "inbound",
+          "index": 0
+        },
+        {
+          "kind": "turn",
+          "index": 0
+        },
+        {
+          "kind": "outbound",
+          "index": 0
+        }
+      ]
+    }
+  ]
+}

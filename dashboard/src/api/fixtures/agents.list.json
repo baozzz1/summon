@@ -1,0 +1,39 @@
+{
+  "data": [
+    {
+      "alias": "arcadia",
+      "chats": 1,
+      "cli": "codex",
+      "credentials": "ready",
+      "display": "阿卡迪亚",
+      "enabled": true,
+      "model": "gpt-5.5",
+      "name": "arcadia",
+      "routable": true
+    },
+    {
+      "alias": "saturn",
+      "chats": 0,
+      "cli": "",
+      "credentials": "missing",
+      "display": "",
+      "enabled": true,
+      "load_error": "agent.yaml 读取失败：mapping values are not allowed in this context at line 4 column 10",
+      "name": "saturn",
+      "routable": false
+    },
+    {
+      "alias": "starlight",
+      "chats": 2,
+      "cli": "claude",
+      "credentials": "ready",
+      "display": "星光",
+      "effort": "high",
+      "enabled": true,
+      "model": "claude-opus-4-8",
+      "name": "starlight",
+      "routable": true
+    }
+  ],
+  "params": {}
+}

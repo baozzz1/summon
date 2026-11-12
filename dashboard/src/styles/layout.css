@@ -1,0 +1,622 @@
+/* 三段式骨架:顶栏 / 左侧分组导航 / 内容区。页面滚动交给 body,顶栏与导航吸顶。 */
+
+sm-app {
+  display: block;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--nav-w) minmax(0, 1fr);
+  grid-template-rows: var(--topbar-h) auto;
+  grid-template-areas:
+    "topbar topbar"
+    "nav content";
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* ── 顶栏 ── */
+
+.topbar {
+  grid-area: topbar;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: var(--topbar-h);
+  padding: 0 var(--s-5);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  padding: var(--s-1) var(--s-1);
+  margin-left: calc(var(--s-1) * -1);
+  border-radius: var(--r-control);
+  white-space: nowrap;
+}
+
+.brand-mark {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  color: var(--text);
+  flex: none;
+}
+
+.brand-mark svg {
+  width: 100%;
+  height: 100%;
+}
+
+.brand-name {
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em;
+}
+
+.brand-sub {
+  color: var(--text-2);
+}
+
+.brand-host {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fz-12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-title {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-weight: var(--fw-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-left: auto;
+  min-width: 0;
+}
+
+.topbar-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+
+.identity {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.identity-via {
+  color: var(--muted);
+  font-size: var(--fz-13);
+}
+
+/* ── 导航 ── */
+
+.nav {
+  grid-area: nav;
+  position: sticky;
+  top: var(--topbar-h);
+  height: calc(100vh - var(--topbar-h));
+  height: calc(100dvh - var(--topbar-h));
+  overflow-y: auto;
+  padding: var(--s-5) var(--s-3) var(--s-6);
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.nav-group + .nav-group {
+  margin-top: var(--s-5);
+}
+
+.nav-group-label {
+  padding: 0 var(--s-3);
+  margin-bottom: var(--s-1);
+  font-size: var(--fz-12);
+  color: var(--muted);
+  font-weight: var(--fw-medium);
+}
+
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-control);
+  color: var(--text-2);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.nav-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.nav-item[aria-current="page"] {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+  background: var(--hover);
+}
+
+.nav-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.nav-item .icon {
+  color: var(--muted);
+}
+
+.nav-item[aria-current="page"] .icon {
+  color: var(--text);
+}
+
+/* 全局设置的二级菜单:展开在「全局设置」下面,当前一组有强调色竖条 */
+.nav-item[aria-current="true"] {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+}
+
+.nav-item[aria-current="true"] .icon {
+  color: var(--text);
+}
+
+.nav-sub {
+  display: grid;
+  gap: 1px;
+  margin: 2px 0 var(--s-2) 19px;
+  padding-left: var(--s-2);
+  border-left: 1px solid var(--divider);
+}
+
+.nav-subitem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  height: 30px;
+  padding: 0 var(--s-3) 0 10px;
+  border-radius: var(--r-control);
+  color: var(--text-2);
+  font-size: var(--fz-13);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.nav-subitem:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.nav-subitem[aria-current="page"] {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+  background: var(--hover);
+}
+
+.nav-subitem[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.nav-dirty {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+
+/* ── 内容区 ── */
+
+.content {
+  grid-area: content;
+  min-width: 0;
+  padding: var(--s-8) var(--s-8) var(--s-12);
+}
+
+.page {
+  max-width: var(--page-max);
+  margin: 0 auto;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4);
+  margin-bottom: var(--s-6);
+}
+
+.page-head-text {
+  min-width: 0;
+}
+
+.page-head p {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: none;
+}
+
+.page-section + .page-section {
+  margin-top: var(--s-8);
+}
+
+/* 有预览的页面:页头 / 预览 / 表单三块。预览常驻:宽屏在右侧吸顶;窄了排到页头下面、吸在顶栏
+   下方,固定高度、自己滚动,滚到头也不带动页面。 */
+.with-preview {
+  display: grid;
+  grid-template-columns: minmax(0, var(--form-max)) var(--preview-w);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "head preview"
+    "body preview";
+  column-gap: var(--s-8);
+  justify-content: center;
+  align-items: start;
+  max-width: calc(var(--form-max) + var(--preview-w) + var(--s-8));
+  margin: 0 auto;
+}
+
+.wp-head {
+  grid-area: head;
+  min-width: 0;
+}
+
+.wp-body {
+  grid-area: body;
+  min-width: 0;
+}
+
+.preview-col {
+  grid-area: preview;
+  position: sticky;
+  top: calc(var(--topbar-h) + var(--s-6));
+  max-height: calc(100vh - var(--topbar-h) - var(--s-12));
+  max-height: calc(100dvh - var(--topbar-h) - var(--s-12));
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 预览面板要能在栏里收缩,滚动才落在它自己的滚动区上 */
+.preview-col > sm-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@media (max-width: 1279px) {
+  :root {
+    --preview-w: 340px;
+  }
+
+  .with-preview {
+    column-gap: var(--s-6);
+  }
+}
+
+.pv-grip {
+  display: none;
+}
+
+/* 放不下「表单 + 预览」两栏时,预览排到页头下面 */
+@media (max-width: 1119px) {
+  .with-preview {
+    display: block;
+    max-width: var(--form-max);
+  }
+
+  .preview-col {
+    z-index: 20;
+    top: var(--topbar-h);
+    height: clamp(240px, 42vh, 440px);
+    height: clamp(240px, 42dvh, 440px);
+    max-height: none;
+    margin-bottom: var(--s-3);
+    padding: var(--s-2) 0 var(--s-3);
+    background: var(--bg);
+  }
+}
+
+.topbar .only-narrow {
+  display: none;
+}
+
+/* 手机:预览默认收成一条标题,底部把手下拉展开(停在拉到的高度)、上拉收起 */
+@media (max-width: 899px) {
+  .preview-col {
+    height: var(--pv-open-h, clamp(240px, 42dvh, 440px));
+    transition: height var(--dur-slow) var(--ease);
+  }
+
+  .preview-col[data-folded] {
+    height: auto;
+  }
+
+  .preview-col[data-dragging] {
+    transition: none;
+  }
+
+  .preview-col[data-folded] .pv-scroll {
+    display: none;
+  }
+
+  .preview-col[data-folded] .pv-head {
+    border-bottom: 0;
+  }
+
+  .preview-col .pv-head {
+    cursor: pointer;
+  }
+
+  .pv-grip {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+    padding: 6px 0 2px;
+    touch-action: none;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .pv-grip-bar {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border-strong);
+  }
+
+  .pv-grip-hint {
+    font-size: var(--fz-12);
+    color: var(--muted);
+  }
+
+  .pv-grip:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: var(--r-control);
+  }
+}
+
+/* ── 窄屏(< 900):抽屉导航、上下排列的设置行 ── */
+
+.drawer-scrim,
+.drawer {
+  display: none;
+}
+
+@media (max-width: 899px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "topbar"
+      "content";
+  }
+
+  .topbar {
+    padding: 0 var(--s-2);
+    gap: var(--s-1);
+  }
+
+  .topbar .brand,
+  .topbar-right > :not(.status-dot-only, sm-language-menu) {
+    display: none;
+  }
+
+  .topbar-title {
+    display: block;
+  }
+
+  .topbar-right {
+    margin-left: 0;
+    width: auto;
+    justify-content: center;
+  }
+
+  .nav {
+    display: none;
+  }
+
+  .drawer-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: var(--scrim);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-slow) var(--ease);
+  }
+
+  .drawer {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 51;
+    width: min(296px, 84vw);
+    background: var(--surface);
+    box-shadow: var(--shadow-pop);
+    transform: translateX(-100%);
+    transition: transform var(--dur-slow) var(--ease);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .shell[data-drawer] .drawer {
+    transform: none;
+  }
+
+  .shell[data-drawer] .drawer-scrim {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: var(--topbar-h);
+    padding: 0 var(--s-2) 0 var(--s-4);
+    border-bottom: 1px solid var(--divider);
+  }
+
+  .topbar .only-narrow {
+    display: inline-flex;
+  }
+
+  .drawer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+  }
+
+  .drawer .nav-in-drawer {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--s-4) var(--s-3);
+  }
+
+  .drawer .nav-item {
+    height: 44px;
+  }
+
+  .drawer .nav-subitem {
+    height: 40px;
+  }
+
+  .drawer-foot {
+    display: grid;
+    gap: var(--s-3);
+    padding: var(--s-4);
+    border-top: 1px solid var(--divider);
+  }
+
+  .content {
+    padding: var(--s-5) var(--s-4) calc(var(--s-12) + 64px + env(safe-area-inset-bottom));
+  }
+
+  .page-head {
+    flex-wrap: wrap;
+    margin-bottom: var(--s-5);
+  }
+
+  .page-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .page-head h1 {
+    font-size: var(--fz-20);
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1100px) {
+  .content {
+    padding: var(--s-6) var(--s-6) var(--s-12);
+  }
+}
+
+sm-language-menu {
+  display: block;
+  flex: none;
+}
+
+.language-menu {
+  position: relative;
+}
+
+.language-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.language-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.language-panel {
+  position: absolute;
+  top: calc(100% + var(--s-2));
+  right: 0;
+  width: min(320px, calc(100vw - 24px));
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--bg);
+  box-shadow: var(--shadow-pop);
+  white-space: normal;
+}
+
+.language-panel p {
+  margin: 0 0 var(--s-3);
+}
+
+.language-options {
+  display: grid;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+
+.language-options label {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 32px;
+  cursor: pointer;
+}
+
+@media (max-width: 899px) {
+  .language-panel {
+    position: fixed;
+    top: calc(var(--topbar-h) + var(--s-2));
+    right: 12px;
+  }
+}

@@ -1,0 +1,11 @@
+{"method":"turn/started","params":{"threadId":"tid-2","turn":{"id":"turn_0","status":"inProgress"}}}
+{"method":"item/started","params":{"threadId":"tid-2","turnId":"turn_0","item":{"id":"i_user","type":"userMessage","text":"这里有几个文件"}}}
+{"method":"item/completed","params":{"threadId":"tid-2","turnId":"turn_0","item":{"id":"i_user","type":"userMessage","text":"这里有几个文件"}}}
+{"method":"item/started","params":{"threadId":"tid-2","turnId":"turn_0","item":{"id":"i0","type":"commandExecution","command":"ls"}}}
+{"method":"item/completed","params":{"threadId":"tid-2","turnId":"turn_0","item":{"id":"i0","type":"commandExecution","command":"ls","exitCode":0}}}
+{"method":"item/started","params":{"threadId":"tid-2","turnId":"turn_0","item":{"id":"i1","type":"agentMessage"}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"tid-2","turnId":"turn_0","itemId":"i1","delta":"There are "}}
+{"method":"item/agentMessage/delta","params":{"threadId":"tid-2","turnId":"turn_0","itemId":"i1","delta":"2 files."}}
+{"method":"item/completed","params":{"threadId":"tid-2","turnId":"turn_0","item":{"id":"i1","type":"agentMessage","text":"There are 2 files."}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"tid-2","turnId":"turn_0","tokenUsage":{"total":{"totalTokens":120,"inputTokens":100,"cachedInputTokens":0,"outputTokens":20}}}}
+{"method":"turn/completed","params":{"threadId":"tid-2","turn":{"id":"turn_0","status":"completed","items":[]}}}

@@ -1,0 +1,6 @@
+import{a as e}from"./i18n-YIZ94PuL.js";import{L as t,P as n,a as r,h as i,m as a}from"./router-DmWf1zNH.js";var o={get human(){return e(`da7dfea`)},get bot(){return e(`d573f52`)},get schedule(){return e(`d3c39e9`)},sentinel:`sentinel`,get slash(){return e(`d6679f6`)},get internal(){return e(`d6e71c7`)},get recovery(){return e(`d342a95`)}},s={done:{get text(){return e(`dc0b3fb`)},tone:`ok`},empty:{get text(){return e(`df6a763`)},tone:``},silent_reset:{get text(){return e(`d89fa3a`)},tone:``},failed:{get text(){return e(`d28384d`)},tone:`danger`},interrupted:{get text(){return e(`d88cf2d`)},tone:`warn`}};function c(e){return Math.max(0,Math.round((e.ended_at_ms-e.started_at_ms)/1e3))}function l(t){return t>0?i(t):e(`d33a1e1`)}function u(e){let n=s[e.end];return t`<span class="chip ${n.tone?`chip-${n.tone}`:`chip-quiet`}">${n.text}${e.error?` · ${e.error}`:``}</span>`}function d(e){return t`<div class="run-row">
+    <a class="tnum" href=${r({page:`session`,agent:e.agent,chatId:e.chat_id})}>${a(new Date(e.ended_at_ms).toISOString())}</a>
+    ${u(e)}
+    <span class="muted tnum">${l(c(e))}</span>
+    ${e.feed?t`<span class="run-feed">${e.feed}</span>`:n}
+  </div>`}export{c as a,d as i,o as n,l as r,s as t};

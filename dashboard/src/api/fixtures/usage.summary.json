@@ -1,0 +1,331 @@
+{
+  "data": {
+    "buckets": [
+      {
+        "done": 0,
+        "empty": 0,
+        "failed": 0,
+        "interrupted": 0,
+        "silent_reset": 0,
+        "start": "2026-10-21T09:30:00+08:00"
+      },
+      {
+        "done": 0,
+        "empty": 0,
+        "failed": 0,
+        "interrupted": 0,
+        "silent_reset": 0,
+        "start": "2026-10-21T09:30:00+08:00"
+      },
+      {
+        "done": 0,
+        "empty": 0,
+        "failed": 0,
+        "interrupted": 0,
+        "silent_reset": 0,
+        "start": "2026-10-21T09:30:00+08:00"
+      },
+      {
+        "done": 0,
+        "empty": 0,
+        "failed": 0,
+        "interrupted": 0,
+        "silent_reset": 0,
+        "start": "2026-10-21T09:30:00+08:00"
+      },
+      {
+        "done": 0,
+        "empty": 0,
+        "failed": 0,
+        "interrupted": 0,
+        "silent_reset": 0,
+        "start": "2026-10-21T09:30:00+08:00"
+      },
+      {
+        "done": 0,
+        "empty": 0,
+        "failed": 0,
+        "interrupted": 0,
+        "silent_reset": 0,
+        "start": "2026-10-21T09:30:00+08:00"
+      },
+      {
+        "done": 1,
+        "empty": 0,
+        "failed": 0,
+        "interrupted": 0,
+        "silent_reset": 0,
+        "start": "2026-10-21T09:30:00+08:00"
+      }
+    ],
+    "by_agent": [
+      {
+        "agent": "starlight",
+        "avg_secs": 90,
+        "failed": 0,
+        "interrupted": 0,
+        "key": "starlight",
+        "label": "星光",
+        "p90_secs": 90,
+        "seconds": 90,
+        "spend": {
+          "cost": {
+            "cache_read": 0.258,
+            "cache_write": 0.544,
+            "input": 0.00972,
+            "output": 0.4,
+            "total": 1.21172
+          },
+          "tokens": {
+            "cache_read": 1310000,
+            "cache_write": 68000,
+            "input": 3330,
+            "output": 21500
+          },
+          "unpriced": {
+            "models": [
+              "composer-2"
+            ],
+            "tokens": 22400
+          }
+        },
+        "turns": 1
+      }
+    ],
+    "by_chat": [
+      {
+        "agent": "starlight",
+        "avg_secs": 90,
+        "chat_id": "oc_00000000000000000000000000000001",
+        "failed": 0,
+        "interrupted": 0,
+        "key": "starlight/oc_00000000000000000000000000000001",
+        "label": "示例群",
+        "p90_secs": 90,
+        "seconds": 90,
+        "spend": {
+          "cost": {
+            "cache_read": 0.258,
+            "cache_write": 0.544,
+            "input": 0.00972,
+            "output": 0.4,
+            "total": 1.21172
+          },
+          "tokens": {
+            "cache_read": 1310000,
+            "cache_write": 68000,
+            "input": 3330,
+            "output": 21500
+          },
+          "unpriced": {
+            "models": [
+              "composer-2"
+            ],
+            "tokens": 22400
+          }
+        },
+        "tag": "g31eb01f32b7437bb",
+        "turns": 1
+      }
+    ],
+    "by_cli": [
+      {
+        "avg_secs": 90,
+        "failed": 0,
+        "interrupted": 0,
+        "key": "claude",
+        "label": "claude",
+        "p90_secs": 90,
+        "seconds": 90,
+        "spend": {
+          "cost": {
+            "cache_read": 0.258,
+            "cache_write": 0.544,
+            "input": 0.00972,
+            "output": 0.4,
+            "total": 1.21172
+          },
+          "tokens": {
+            "cache_read": 1310000,
+            "cache_write": 68000,
+            "input": 3330,
+            "output": 21500
+          },
+          "unpriced": {
+            "models": [
+              "composer-2"
+            ],
+            "tokens": 22400
+          }
+        },
+        "turns": 1
+      }
+    ],
+    "by_model": [
+      {
+        "avg_secs": 90,
+        "failed": 0,
+        "interrupted": 0,
+        "key": "claude-opus-5-5",
+        "label": "claude-opus-5-5",
+        "p90_secs": 90,
+        "seconds": 90,
+        "spend": {
+          "cost": {
+            "cache_read": 0.258,
+            "cache_write": 0.544,
+            "input": 0.00972,
+            "output": 0.4,
+            "total": 1.21172
+          },
+          "tokens": {
+            "cache_read": 1290000,
+            "cache_write": 68000,
+            "input": 2430,
+            "output": 20000
+          }
+        },
+        "turns": 1
+      },
+      {
+        "avg_secs": 90,
+        "failed": 0,
+        "interrupted": 0,
+        "key": "composer-2",
+        "label": "composer-2",
+        "p90_secs": 90,
+        "seconds": 90,
+        "spend": {
+          "cost": {
+            "cache_read": 0.0,
+            "cache_write": 0.0,
+            "input": 0.0,
+            "output": 0.0,
+            "total": 0.0
+          },
+          "tokens": {
+            "cache_read": 20000,
+            "cache_write": 0,
+            "input": 900,
+            "output": 1500
+          },
+          "unpriced": {
+            "models": [
+              "composer-2"
+            ],
+            "tokens": 22400
+          }
+        },
+        "turns": 1
+      }
+    ],
+    "days": [
+      {
+        "spend": {
+          "cost": {
+            "cache_read": 0.258,
+            "cache_write": 0.544,
+            "input": 0.00972,
+            "output": 0.4,
+            "total": 1.21172
+          },
+          "tokens": {
+            "cache_read": 1310000,
+            "cache_write": 68000,
+            "input": 3330,
+            "output": 21500
+          },
+          "unpriced": {
+            "models": [
+              "composer-2"
+            ],
+            "tokens": 22400
+          }
+        },
+        "start": "2026-10-21T09:30:00+08:00",
+        "turns": 1
+      }
+    ],
+    "prices": {
+      "fetched_at": "2026-10-21T09:30:00+08:00",
+      "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+    },
+    "quota": [
+      {
+        "agent": "starlight",
+        "at": "2026-10-21T09:30:00+08:00",
+        "cli": "claude",
+        "five_hour_left": 56,
+        "label": "星光",
+        "long_left": 83,
+        "points": [
+          {
+            "at_ms": 1792476000000,
+            "five_hour_left": 56,
+            "long_left": 83
+          }
+        ]
+      }
+    ],
+    "range": "7d",
+    "scopes": [
+      {
+        "agent": "starlight",
+        "agent_label": "星光",
+        "chat_id": "oc_00000000000000000000000000000001",
+        "chat_label": "示例群"
+      }
+    ],
+    "since": "2026-10-21T09:30:00+08:00",
+    "today": "2026-10-20",
+    "totals": {
+      "failed": 0,
+      "interrupted": 0,
+      "outside": {
+        "cost": {
+          "cache_read": 0.018,
+          "cache_write": 0.032,
+          "input": 0.00011999999999999999,
+          "output": 0.04,
+          "total": 0.09012
+        },
+        "tokens": {
+          "cache_read": 90000,
+          "cache_write": 4000,
+          "input": 30,
+          "output": 2000
+        }
+      },
+      "seconds": 90,
+      "spend": {
+        "cost": {
+          "cache_read": 0.258,
+          "cache_write": 0.544,
+          "input": 0.00972,
+          "output": 0.4,
+          "total": 1.21172
+        },
+        "tokens": {
+          "cache_read": 1310000,
+          "cache_write": 68000,
+          "input": 3330,
+          "output": 21500
+        },
+        "unpriced": {
+          "models": [
+            "composer-2"
+          ],
+          "tokens": 22400
+        }
+      },
+      "turns": 1,
+      "waiting": 1,
+      "working": 1
+    },
+    "unit": "day",
+    "until": "2026-10-21T09:30:00+08:00"
+  },
+  "params": {
+    "range": "7d"
+  }
+}

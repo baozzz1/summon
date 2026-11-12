@@ -1,0 +1,12 @@
+{
+  "data": {
+    "editable": true,
+    "path": "~/.summon/agents/starlight/agent.yaml",
+    "revision": "fc303a793d4e6788",
+    "text": "# 星光 的配置\nname: starlight\ndisplay: 星光\nstatus: active\nruntime:\n  cli: claude\n  working_dir: /tmp\n  env:\n    HTTPS_PROXY: ${CORP_PROXY}\n    API_TOKEN: «summon:redacted»\nfeishu:\n  app_id_env: DASH_TEST_STARLIGHT_APP_ID\n  app_secret_env: DASH_TEST_STARLIGHT_APP_SECRET\n  scope: thread\n  allowed_users: [on_00000000000000000000000000000001]\n  operators: [on_00000000000000000000000000000001]\n  chat_operators:\n    oc_00000000000000000000000000000001: [on_00000000000000000000000000000002]\nmodel: claude-opus-4-8\neffort: high\naliases:\n  on_00000000000000000000000000000002: 另一位用户\nmessaging:\n  cot_tool_details: true\n"
+  },
+  "params": {
+    "agent": "starlight",
+    "file": "agent"
+  }
+}

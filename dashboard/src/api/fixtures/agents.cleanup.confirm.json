@@ -1,0 +1,18 @@
+{
+  "data": {
+    "agent": "retired",
+    "bytes": null,
+    "downloaded": false,
+    "filename": "retired-backup.tar.gz",
+    "job": "5f0c1e2d3b4a59687766554433221100",
+    "message": null,
+    "paths": null,
+    "sha256": null,
+    "status": "cleaning"
+  },
+  "params": {
+    "agent": "retired",
+    "job": "5f0c1e2d3b4a59687766554433221100",
+    "saved": true
+  }
+}

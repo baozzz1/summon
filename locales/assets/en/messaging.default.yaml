@@ -1,0 +1,515 @@
+# Built-in messaging defaults, loaded by Rust. Override individual fields under messaging
+# in ~/.summon/config.yaml or agent.yaml; both hot-reload.
+# system_prompt is the user-overridable base. system_prompt_core and its optional
+# protocol sections are built-in and cannot be overridden. User content is not translated.
+# agent_reactions / agent_feed control primer injection only; commands and tag stripping remain active.
+# Reactions use case-sensitive official Feishu keys; meanings help the agent choose.
+# Idle retirement preserves resume context unless timer_idle_retire_reset is enabled.
+# Session processes are retired only after their required idle/no-active-work proofs pass.
+# Native model catalogs take priority over models_by_cli, which provides cold-start fallback.
+# default_model_by_cli pins defaults; missing entries follow backend defaults then candidate order.
+# Slash blocklists combine default and backend sections by union. Overrides replace each supplied section.
+# Session exit texts support {chat}; user overrides remain unchanged when language switches.
+system_prompt: ''
+system_prompt_core: |
+  [summon conventions; keep as background]
+
+  - Your words are sent directly to the Feishu user. Reply naturally; do not use scripts or commands to send messages, because summon sends your reply automatically.
+  - Formatting: avoid Markdown headings such as #/## in replies (Feishu renders them as oversized text). Use short paragraphs or dash lists; prefer lists over tables.
+  - To ask the person: {ask_protocol}
+  {background_protocol}
+
+  {message_protocol}
+
+  [Silent exit and reset]
+
+  - When the task explicitly asks to end silently and clear context, output only __SUMMON_SILENT_EXIT__ as the final result. Summon consumes it only when the entire result matches exactly, resets this session like /reset, and starts fresh on the next message.
+  - Add no spaces, newlines, explanation, or code fence. Progress visibility follows this turn's configuration; thinking, tools, and subagent outputs do not trigger this protocol. Use it only when reset is requested.
+
+  {feed_protocol}
+
+  [Names and @ mentions]
+
+  - Incoming mentions appear as @name(open_id). The ID is for internal identification only. **Address people by name in replies; never expose their ou_ open_id.** No need to introduce yourself or add a salutation every time.
+  - **Other bots cannot receive group messages without an @ mention.** For bots, @ is the only delivery channel. Humans already see group messages; @ merely alerts them.
+  - Write @name directly; summon converts it into a structured Feishu mention. Use the exact observed name or alias. **Do not construct <at user_id=...> tags**: agent output is escaped as untrusted text, so such tags will not mention anyone. Misspellings or extra spaces also remain plain text; copy the observed name if uncertain.
+  - You may mention humans. **Mention bots cautiously**: doing so delivers the message and triggers their reply. Mention a bot only when it needs the message to proceed (an assignment, your deliverable, or an answer), avoiding endless bot-to-bot loops.
+
+  [Messages mentioning multiple bots]
+
+  - A group may contain several summon agents and a message may mention multiple bots. **Do not assume you should reply**; silence is safer when recipient intent is unclear.
+  - If you decide not to reply, **end the turn without any reply text**. Every word is sent to the group, including statements such as “I am not the recipient”.
+  - The note listing other mentioned bots at the end of a message is context to help you decide.
+
+  [Native tools and CLI]
+
+  - If summon.preview / summon.react / summon.send_image are in the tool list, **call them directly**, without shell commands or turn credentials. Otherwise use the corresponding CLI below. These are two routes to the same operation; do not duplicate them.
+
+  [Showing a local file: spec, plan, or long document]
+
+  - Put the absolute path in one inline code span in your reply. Summon adds an open button at the end; a viewer with talk or operation permission receives a private open link after clicking it. **Do not include preview URLs in replies**; links are sent only through the button to authorized viewers.
+  - summon preview --turn-id <current credential> <file path> only confirms preview availability and explains how to include the path. **It sends no Feishu message and returns no link.**
+  - No button is generated if no routable address exists, the file is absent/oversized, or the path is home or its ancestor. The path stays plain text.
+  - Images use summon send-image --turn-id <current credential> <image path>; **this sends a real card**.
+
+  [Configuration and troubleshooting]
+
+  - For configuration, switches, or when changes apply, read summon guide config first. For failures, read summon guide troubleshooting. Manuals ship with the installed binary; make and verify changes within user authorization.
+
+  [Read summon guide protocol before these operations]
+
+  - **Cross-chat delegation**: if Owner explicitly requests it, or this turn confirms autonomous delegation is enabled, use summon delegate to reuse a suitable chat or create a task chat containing only Owner and this bot. Human Owner turns only. Read the protocol, verify existing-chat membership, and carry only necessary context.
+  - **Schedules/reminders**: use summon remind for this chat; it delivers the content as a new task when due. **Never manually edit ~/.summon/schedules.yaml**: all agents share it; an invalid field breaks every schedule, and bypassing ID allocation locks can cause concurrent overwrites.
+  - **End the current session**: summon session end --turn-id <current credential> registers exit after normal completion while preserving context; the next user message continues it.
+  - **Read current Feishu chat history**: obtain chat_id only with summon chat-id --turn-id <current credential>. **Do not read $SUMMON_CHAT_ID**: it is fixed at process startup and points to the previous chat after migration, risking reading someone else's history.
+  - **Attachments**: summon already downloaded them locally; paths are in the message tail. Open them with Read.
+
+  {reactions_protocol}
+
+  These are standing conventions, not a request for acknowledgment. Do not repeat them or reply “OK”; handle the user message that follows.
+system_prompt_reactions: |
+  [Semantic message reactions]
+
+  - You may add one semantic reaction to the message you are currently answering: summon react --turn-id <current credential> <reaction>. A new reaction replaces the old one. The working/completed status pair is maintained automatically; do not add those yourself.
+  - For available reactions and meanings, read **summon guide reactions**. Full meaning-to-ID mapping: {emoji_file}.
+agent_reactions: true
+system_prompt_feed: |
+  [Feed summary at the end of replies]
+
+  - End the final reply with one line: <summon-feed>summary</summon-feed>. Use at most 14 characters and ASCII punctuation to state the outcome. Summon removes this line from the body and uses it as the chat-list preview; longer summaries fall back to the reply's beginning.
+  - Include it once, only at the end of the final reply. Omit it for silent reset (only __SUMMON_SILENT_EXIT__) or when no reply should be sent.
+agent_feed: true
+document_comments_enabled: false
+document_comment_timeout_secs: 300
+reactions:
+- OK
+- THUMBSUP
+- THANKS
+- MUSCLE
+- FINGERHEART
+- APPLAUSE
+- FISTBUMP
+- JIAYI
+- DONE
+- LGTM
+- CLAP
+- PRAISE
+- STRIVE
+- YEAH
+- SMILE
+- BLUSH
+- LAUGH
+- SMIRK
+- LOL
+- FACEPALM
+- JOYFUL
+- CHUCKLE
+- WINK
+- PROUD
+- WITTY
+- SMART
+- LOVE
+- HEART
+- KISS
+- SMOOCH
+- HUG
+- COMFORT
+- OBSESSED
+- DROOL
+- WOW
+- SHOCKED
+- THINKING
+- TRICK
+- SCOWL
+- ENOUGH
+- WHAT
+- SILENT
+- WAVE
+- SHHH
+- SOB
+- CRY
+- TEARS
+- WAIL
+- WHIMPER
+- BLUBBER
+- WRONGED
+- EMBARRASSED
+- SHY
+- XBLUSH
+- FROWN
+- DIZZY
+- CRAZY
+- SMUG
+- HAUGHTY
+- LOOKDOWN
+- DULL
+- GLANCE
+- ANGRY
+- HAMMER
+- SLAP
+- TERROR
+- PETRIFIED
+- SWEAT
+- SPEECHLESS
+- SLEEP
+- DROWSY
+- YAWN
+- SICK
+- PUKE
+- NOSEPICK
+- SPITBLOOD
+- RAINBOWPUKE
+- BETRAYED
+- TOASTED
+- INNOCENTSMILE
+- TEASE
+- SHOWOFF
+- HUSKY
+- MONEY
+- LUCK
+- REDPACKET
+- PARTY
+- FIREWORKS
+- FIRECRACKER
+- CAKE
+- GIFT
+- BEER
+- ROSE
+- LIPS
+- CUCUMBER
+- CANDIEDHAWS
+- BULL
+- CALF
+- BEAR
+- BOMB
+- SKULL
+- POOP
+- CLEAVER
+- HEADSET
+- HEARTBROKEN
+- ERROR
+- MeMeMe
+- OnIt
+- OneSecond
+- CheckMark
+- CrossMark
+- Alarm
+- Fire
+- Shrug
+- Sigh
+- Get
+- Typing
+- GoGoGo
+- Trophy
+- Hundred
+- SALUTE
+- HIGHFIVE
+- SHAKE
+- 'Yes'
+- 'No'
+- Pin
+- Loudspeaker
+- Coffee
+- AWESOMEN
+- BeamingFace
+- ClownFace
+- ColdSweat
+- Delighted
+- EatingFood
+- FullMoonFace
+- Partying
+- SaluteFace
+- ThanksFace
+- ThumbsDown
+- UPPERLEFT
+- VRHeadset
+- YouAreTheBest
+- EYESCLOSED
+- SLIGHT
+- TONGUE
+- RoarForYou
+- JubilantRabbit
+- HappyDragon
+- BubbleTea
+- Drumstick
+- Lemon
+- Pepper
+- Mooncake
+- StickyRiceBalls
+- FORTUNE
+- MoonRabbit
+- Pumpkin
+- Snowman
+- XmasHat
+- XmasTree
+- 18X
+- Basketball
+- Soccer
+- MinusOne
+- Movie
+- Music
+- OKR
+- TV
+- GeneralBusinessTrip
+- GeneralDoNotDisturb
+- GeneralInMeetingBusy
+- GeneralMoonRest
+- GeneralSun
+- GeneralTravellingCar
+- GeneralWorkFromHome
+- StatusBus
+- StatusEnjoyLife
+- StatusFlashOfInspiration
+- StatusInFlight
+- StatusReading
+- Status_PrivateMessage
+reaction_meanings:
+  OK: OK / agree / received
+  THUMBSUP: Like / praise / thanks
+  THANKS: Thanks
+  MUSCLE: Keep going / effort
+  FINGERHEART: Finger heart
+  APPLAUSE: Applause
+  FISTBUMP: Fist bump
+  JIAYI: Keep going
+  DONE: Done / complete
+  LGTM: Looks good
+  CLAP: Clap
+  PRAISE: Praise
+  STRIVE: Strive
+  YEAH: Yeah
+  SMILE: Smile
+  BLUSH: Shy
+  LAUGH: Laugh
+  SMIRK: Smirk
+  LOL: Laughing out loud
+  FACEPALM: Facepalm
+  JOYFUL: Happy
+  CHUCKLE: Chuckle
+  WINK: Wink
+  PROUD: Proud
+  WITTY: Witty
+  SMART: Smart
+  LOVE: Love
+  HEART: Heart / like
+  KISS: Kiss
+  SMOOCH: Blown kiss
+  HUG: Hug
+  COMFORT: Comfort
+  OBSESSED: Obsessed
+  DROOL: Drool
+  WOW: Surprised / impressive
+  SHOCKED: Shocked
+  THINKING: Thinking / let me think
+  TRICK: Prank
+  SCOWL: Unhappy
+  ENOUGH: Enough
+  WHAT: What?
+  SILENT: Quiet
+  WAVE: Wave
+  SHHH: Shh
+  SOB: Sob
+  CRY: Cry
+  TEARS: Tears
+  WAIL: Wail
+  WHIMPER: Whimper
+  BLUBBER: Blubber
+  WRONGED: Feeling wronged
+  EMBARRASSED: Embarrassed
+  SHY: Shy
+  XBLUSH: Blushing
+  FROWN: Frown
+  DIZZY: Dizzy
+  CRAZY: Crazy
+  SMUG: Smug
+  HAUGHTY: Haughty
+  LOOKDOWN: Disdain
+  DULL: Bored
+  GLANCE: Glance
+  ANGRY: Angry
+  HAMMER: Hammer
+  SLAP: Slap
+  TERROR: Terror
+  PETRIFIED: Petrified
+  SWEAT: Sweat
+  SPEECHLESS: Speechless
+  SLEEP: Sleep
+  DROWSY: Drowsy
+  YAWN: Yawn
+  SICK: Sick
+  PUKE: Vomit
+  NOSEPICK: Nose picking
+  SPITBLOOD: Spitting blood
+  RAINBOWPUKE: Rainbow vomit
+  BETRAYED: Betrayed
+  TOASTED: Cheers
+  INNOCENTSMILE: Innocent smile
+  TEASE: Tease
+  SHOWOFF: Show off
+  HUSKY: Husky
+  MONEY: Money
+  LUCK: Luck
+  REDPACKET: Red envelope
+  PARTY: Celebrate / party
+  FIREWORKS: Fireworks
+  FIRECRACKER: Firecrackers
+  CAKE: Cake
+  GIFT: Gift
+  BEER: Beer
+  ROSE: Rose
+  LIPS: Lips
+  CUCUMBER: Cucumber
+  CANDIEDHAWS: Candied hawthorn
+  BULL: Bull
+  CALF: Calf
+  BEAR: Bear
+  BOMB: Bomb
+  SKULL: Skull
+  POOP: Poop
+  CLEAVER: Cleaver
+  HEADSET: Headset
+  HEARTBROKEN: Heartbroken
+  ERROR: Error / sorry
+  MeMeMe: Raise hand / I will
+  OnIt: On it / working
+  OneSecond: One moment
+  CheckMark: Verified
+  CrossMark: Check failed
+  Alarm: Alert / bug / problem
+  Fire: Fire / popular
+  Shrug: Shrug / helpless
+  Sigh: Sigh
+  Get: Got it
+  Typing: Typing / processing
+  GoGoGo: Go / keep going
+  Trophy: Trophy / milestone
+  Hundred: Perfect score
+  SALUTE: Salute / respect
+  HIGHFIVE: High five
+  SHAKE: Handshake / deal
+  'Yes': Yes / agree
+  'No': No / disagree
+  Pin: Pin / highlight
+  Loudspeaker: Announcement
+  Coffee: Coffee / break
+  AWESOMEN: Awesome
+  BeamingFace: Grin
+  ClownFace: Clown
+  ColdSweat: Cold sweat
+  Delighted: Delighted
+  EatingFood: Eating / watching drama
+  FullMoonFace: Full moon face
+  Partying: Party / celebration
+  SaluteFace: Salute / respect
+  ThanksFace: Folded hands / thanks
+  ThumbsDown: Disagree / thumbs down
+  UPPERLEFT: Point upper left / look here
+  VRHeadset: VR / virtual reality
+  YouAreTheBest: Flowers / you are the best
+  EYESCLOSED: See-no-evil monkey / cannot watch
+  SLIGHT: Brown dog
+  TONGUE: Tongue-out dog / corgi
+  RoarForYou: Cheering tiger
+  JubilantRabbit: Festive rabbit
+  HappyDragon: Festive dragon
+  BubbleTea: Bubble tea
+  Drumstick: Drumstick
+  Lemon: Lemon / envious
+  Pepper: Pepper / spicy
+  Mooncake: Mooncake / Mid-Autumn
+  StickyRiceBalls: Rice balls / Lantern Festival
+  FORTUNE: Coins / fortune
+  MoonRabbit: Moon rabbit
+  Pumpkin: Pumpkin / Halloween
+  Snowman: Snowman / winter
+  XmasHat: Christmas hat
+  XmasTree: Christmas tree
+  18X: Adults only
+  Basketball: Basketball
+  Soccer: Soccer
+  MinusOne: Minus one / -1
+  Movie: Movie
+  Music: Music
+  OKR: OKR / goals
+  TV: TV
+  GeneralBusinessTrip: Business trip / suitcase
+  GeneralDoNotDisturb: Do not disturb
+  GeneralInMeetingBusy: In a meeting / calendar
+  GeneralMoonRest: Moon / good night / rest
+  GeneralSun: Sun / sunny
+  GeneralTravellingCar: Driving / car
+  GeneralWorkFromHome: Working from home
+  StatusBus: Bus / transit
+  StatusEnjoyLife: Vacation / enjoying life
+  StatusFlashOfInspiration: Inspiration / lightbulb
+  StatusInFlight: Plane / in flight
+  StatusReading: Reading
+  Status_PrivateMessage: Private message
+default_reaction: OK
+working_reaction: OnIt
+done_reaction: DONE
+interrupted_reaction: SILENT
+prompt_template: '{source}: “{text}”'
+idle_ttl_secs: 86400
+idle_scan_secs: 300
+headless_stall_secs: 1800
+background_continuation_max_secs: 3600
+idle_retire_secs: null
+timer_idle_retire_secs: 3300
+timer_idle_retire_reset: false
+steer_cli_session: true
+steer_transcript: true
+steer_rpc: true
+session_mirror: true
+claude_permission_hook: true
+mask_email: true
+completion_summary_card: true
+progress_max_steps: 3
+cot_visible: true
+cot_tool_details: false
+badge_effort: true
+models: []
+models_by_cli:
+  claude:
+  - claude-opus-5
+  - claude-fable-5
+  - claude-sonnet-5
+  cursor:
+  - gpt-5.6-sol-xhigh
+  - claude-opus-5-thinking-xhigh
+  - cursor-grok-4.5-high
+  - composer-2.5
+  codex:
+  - gpt-5.6-sol
+  - gpt-5.6-terra
+  - gpt-5.6-luna
+  - gpt-5.5
+codex_platform_tools: false
+default_model_by_cli: {}
+efforts:
+- low
+- medium
+- high
+- xhigh
+- max
+- ultra
+slash_blacklist:
+  default:
+  - /login
+  - /logout
+  - /config
+  - /model
+  - /effort
+  claude: []
+  codex: []
+  cursor: []
+session_exited:
+  manual_kill: Session closed. Your next message continues this context.
+  manual_kill_reset: Session closed and reset. Your next message starts a fresh conversation without previous context.
+  panel_clean: Session exited. Your next message continues this context.
+  panel_reset: Session archived. Your next message starts fresh; /resume can restore this session.
+  idle_retired: Session automatically exited after being idle, releasing its persistent process. Your next message resumes the same context.
+  agent_archived: Session exited; send a message to continue
+  group_disbanded: '{chat} was dissolved; related sessions ended. You can message me privately anytime.'
+  bot_removed: I was removed from {chat}; related sessions ended. You can message me privately anytime.
+  shutdown_interrupt: ⏸️ My daemon restarted and interrupted the previous turn; it will resume automatically afterward.

@@ -1,0 +1,380 @@
+{
+  "comment_tasks": [
+    {
+      "id": "comment-task",
+      "agent": "starlight",
+      "title": "Document review",
+      "stage": "draft_ready",
+      "status": "待 owner 批准",
+      "status_en": "Awaiting approval",
+      "busy": false,
+      "received_ms": 1800000000000,
+      "updated_ms": 1800000001000,
+      "pid": null,
+      "error": null
+    }
+  ],
+  "comment_tasks_error": null,
+  "daemon": {
+    "running": true,
+    "pid": 4242,
+    "version": "0.1.0",
+    "uptime_secs": 269400
+  },
+  "agents": [
+    {
+      "alias": "starlight",
+      "busy": true,
+      "sessions": 2,
+      "last_active_secs": 3,
+      "last_active_text": "刚刚",
+      "last_active_text_en": "just now",
+      "state": "working",
+      "idle_tmux": false,
+      "chats": [
+        {
+          "tag": "g1a2b3c4",
+          "target": "soul-starlight-g1a2b3c4",
+          "name": "研发群",
+          "chat_type": "group",
+          "chat_id": "oc_g1a2b3c4",
+          "busy": true,
+          "capture": "transcript",
+          "liveness": "live",
+          "last_active_secs": 3,
+          "last_active_text": "刚刚",
+          "last_active_text_en": "just now",
+          "waiting": false,
+          "state": "working",
+          "idle_tmux": false
+        },
+        {
+          "tag": "p9f8e7d6",
+          "target": "soul-starlight-p9f8e7d6",
+          "chat_type": "p2p",
+          "chat_id": "oc_p9f8e7d6",
+          "busy": false,
+          "capture": "rpc",
+          "liveness": "recent",
+          "last_active_secs": 10920,
+          "last_active_text": "3h前",
+          "last_active_text_en": "3h ago",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": false
+        }
+      ]
+    },
+    {
+      "alias": "saturn",
+      "busy": false,
+      "sessions": 4,
+      "last_active_secs": 45,
+      "last_active_text": "45s前",
+      "last_active_text_en": "45s ago",
+      "state": "idle",
+      "idle_tmux": true,
+      "chats": [
+        {
+          "tag": "g1a2b3c4",
+          "target": "soul-saturn-g1a2b3c4",
+          "name": "研发群",
+          "chat_type": "group",
+          "chat_id": "oc_g1a2b3c4",
+          "busy": false,
+          "capture": "rpc",
+          "liveness": "recent",
+          "last_active_secs": 45,
+          "last_active_text": "45s前",
+          "last_active_text_en": "45s ago",
+          "waiting": true,
+          "state": "idle",
+          "idle_tmux": false
+        },
+        {
+          "tag": "p3333333",
+          "target": "soul-saturn-p3333333",
+          "chat_type": "p2p",
+          "chat_id": "oc_p3333333",
+          "busy": false,
+          "capture": "rpc",
+          "liveness": "recent",
+          "last_active_secs": 75,
+          "last_active_text": "1m前",
+          "last_active_text_en": "1m ago",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": false
+        },
+        {
+          "tag": "g7777777",
+          "target": "soul-saturn-g7777777",
+          "name": "运维群",
+          "chat_type": "group",
+          "chat_id": "oc_g7777777",
+          "busy": false,
+          "capture": "transcript",
+          "liveness": "live",
+          "last_active_secs": 172800,
+          "last_active_text": "2d前",
+          "last_active_text_en": "2d ago",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": true
+        },
+        {
+          "tag": "p2222222",
+          "target": "soul-saturn-p2222222",
+          "chat_type": "p2p",
+          "chat_id": "oc_p2222222",
+          "busy": false,
+          "capture": "rpc",
+          "liveness": "stale",
+          "last_active_secs": 3456000,
+          "last_active_text": ">30d",
+          "last_active_text_en": ">30d",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": false
+        }
+      ]
+    },
+    {
+      "alias": "arcadia",
+      "busy": false,
+      "sessions": 1,
+      "last_active_secs": 600,
+      "last_active_text": "10m前",
+      "last_active_text_en": "10m ago",
+      "state": "idle",
+      "idle_tmux": true,
+      "chats": [
+        {
+          "tag": "gdeadbee1",
+          "target": "soul-arcadia-gdeadbee1",
+          "name": "sample开发群",
+          "chat_type": "group",
+          "chat_id": "oc_gdeadbee1",
+          "busy": false,
+          "capture": "transcript",
+          "liveness": "live",
+          "last_active_secs": 600,
+          "last_active_text": "10m前",
+          "last_active_text_en": "10m ago",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": true
+        }
+      ]
+    },
+    {
+      "alias": "sakura",
+      "busy": false,
+      "sessions": 0,
+      "state": "exited",
+      "idle_tmux": false,
+      "chats": []
+    }
+  ],
+  "groups": [
+    {
+      "tag": "g1a2b3c4",
+      "name": "研发群",
+      "chat_type": "group",
+      "busy": true,
+      "agents": 2,
+      "last_active_secs": 3,
+      "last_active_text": "刚刚",
+      "last_active_text_en": "just now",
+      "chat_id": "oc_g1a2b3c4",
+      "link": "lark://applink.feishu.cn/client/chat/open?openChatId=oc_g1a2b3c4",
+      "state": "working",
+      "idle_tmux": false,
+      "members": [
+        {
+          "alias": "starlight",
+          "target": "soul-starlight-g1a2b3c4",
+          "busy": true,
+          "capture": "transcript",
+          "liveness": "live",
+          "last_active_secs": 3,
+          "last_active_text": "刚刚",
+          "last_active_text_en": "just now",
+          "waiting": false,
+          "state": "working",
+          "idle_tmux": false
+        },
+        {
+          "alias": "saturn",
+          "target": "soul-saturn-g1a2b3c4",
+          "busy": false,
+          "capture": "rpc",
+          "liveness": "recent",
+          "last_active_secs": 45,
+          "last_active_text": "45s前",
+          "last_active_text_en": "45s ago",
+          "waiting": true,
+          "state": "idle",
+          "idle_tmux": false
+        }
+      ]
+    },
+    {
+      "tag": "p3333333",
+      "chat_type": "p2p",
+      "busy": false,
+      "agents": 1,
+      "last_active_secs": 75,
+      "last_active_text": "1m前",
+      "last_active_text_en": "1m ago",
+      "chat_id": "oc_p3333333",
+      "link": "lark://applink.feishu.cn/client/chat/open?openChatId=oc_p3333333",
+      "state": "idle",
+      "idle_tmux": false,
+      "members": [
+        {
+          "alias": "saturn",
+          "target": "soul-saturn-p3333333",
+          "busy": false,
+          "capture": "rpc",
+          "liveness": "recent",
+          "last_active_secs": 75,
+          "last_active_text": "1m前",
+          "last_active_text_en": "1m ago",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": false
+        }
+      ]
+    },
+    {
+      "tag": "gdeadbee1",
+      "name": "sample开发群",
+      "chat_type": "group",
+      "busy": false,
+      "agents": 1,
+      "last_active_secs": 600,
+      "last_active_text": "10m前",
+      "last_active_text_en": "10m ago",
+      "chat_id": "oc_gdeadbee1",
+      "link": "lark://applink.feishu.cn/client/chat/open?openChatId=oc_gdeadbee1",
+      "state": "idle",
+      "idle_tmux": true,
+      "members": [
+        {
+          "alias": "arcadia",
+          "target": "soul-arcadia-gdeadbee1",
+          "busy": false,
+          "capture": "transcript",
+          "liveness": "live",
+          "last_active_secs": 600,
+          "last_active_text": "10m前",
+          "last_active_text_en": "10m ago",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": true
+        }
+      ]
+    },
+    {
+      "tag": "p9f8e7d6",
+      "chat_type": "p2p",
+      "busy": false,
+      "agents": 1,
+      "last_active_secs": 10920,
+      "last_active_text": "3h前",
+      "last_active_text_en": "3h ago",
+      "chat_id": "oc_p9f8e7d6",
+      "link": "lark://applink.feishu.cn/client/chat/open?openChatId=oc_p9f8e7d6",
+      "state": "idle",
+      "idle_tmux": false,
+      "members": [
+        {
+          "alias": "starlight",
+          "target": "soul-starlight-p9f8e7d6",
+          "busy": false,
+          "capture": "rpc",
+          "liveness": "recent",
+          "last_active_secs": 10920,
+          "last_active_text": "3h前",
+          "last_active_text_en": "3h ago",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": false
+        }
+      ]
+    },
+    {
+      "tag": "g7777777",
+      "name": "运维群",
+      "chat_type": "group",
+      "busy": false,
+      "agents": 1,
+      "last_active_secs": 172800,
+      "last_active_text": "2d前",
+      "last_active_text_en": "2d ago",
+      "chat_id": "oc_g7777777",
+      "link": "lark://applink.feishu.cn/client/chat/open?openChatId=oc_g7777777",
+      "state": "idle",
+      "idle_tmux": true,
+      "members": [
+        {
+          "alias": "saturn",
+          "target": "soul-saturn-g7777777",
+          "busy": false,
+          "capture": "transcript",
+          "liveness": "live",
+          "last_active_secs": 172800,
+          "last_active_text": "2d前",
+          "last_active_text_en": "2d ago",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": true
+        }
+      ]
+    },
+    {
+      "tag": "p2222222",
+      "chat_type": "p2p",
+      "busy": false,
+      "agents": 1,
+      "last_active_secs": 3456000,
+      "last_active_text": ">30d",
+      "last_active_text_en": ">30d",
+      "chat_id": "oc_p2222222",
+      "link": "lark://applink.feishu.cn/client/chat/open?openChatId=oc_p2222222",
+      "state": "idle",
+      "idle_tmux": false,
+      "members": [
+        {
+          "alias": "saturn",
+          "target": "soul-saturn-p2222222",
+          "busy": false,
+          "capture": "rpc",
+          "liveness": "stale",
+          "last_active_secs": 3456000,
+          "last_active_text": ">30d",
+          "last_active_text_en": ">30d",
+          "waiting": false,
+          "state": "idle",
+          "idle_tmux": false
+        }
+      ]
+    }
+  ],
+  "sentinel": "dry-run",
+  "waiting": [
+    {
+      "alias": "saturn",
+      "tag": "g1a2b3c4",
+      "name": "研发群",
+      "chat_type": "group",
+      "reply_message_id": "om_golden_reply",
+      "since_secs": 720,
+      "since_text": "12m前",
+      "since_text_en": "12m ago",
+      "link": "lark://applink.feishu.cn/client/chat/open?openChatId=oc_golden&position=1485"
+    }
+  ],
+  "menubar_icon": "xyz"
+}

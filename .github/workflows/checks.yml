@@ -1,0 +1,67 @@
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Publication content
+        run: |
+          python3 scripts/check-public-content.py
+          python3 scripts/tests/test_check_public_content.py
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      # 会话测试要起真的 tmux,Go 协议测试从 Rust 测试里调 `go test`。
+      - name: Test dependencies
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew install tmux
+          else
+            sudo apt-get update && sudo apt-get install -y tmux
+          fi
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: sidecar/feishu-connector/go.mod
+          cache: false
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest
+      # 每个测试一个进程,与发版同步时在本机跑的检查一致;本地 HTTP 模拟在负载高时偶发超时,重试两次。
+      - name: Rust checks
+        run: |
+          cargo +stable fmt --all -- --check
+          cargo +stable clippy --workspace --all-targets --locked -- -D warnings
+          cargo +stable nextest run --workspace --all-targets --locked --retries 2
+          cargo +stable build --release --locked
+      - name: Go sidecar
+        working-directory: sidecar/feishu-connector
+        run: |
+          go test ./...
+          go test -race ./...
+          go vet ./...
+          go build -trimpath -o ../../target/release/summon-sidecar .
+      - name: Script checks
+        run: |
+          bash scripts/test-codesign.sh
+          bash scripts/test-deploy-daemon-restore.sh
+      - name: macOS Menu Bar
+        if: runner.os == 'macOS'
+        run: |
+          swift test --package-path menubar
+          swift build --package-path menubar -c release

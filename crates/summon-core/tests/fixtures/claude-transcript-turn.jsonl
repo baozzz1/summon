@@ -1,0 +1,7 @@
+{"type":"queue-operation","operation":"enqueue","sessionId":"sid-x","timestamp":"2026-06-03T00:00:00Z"}
+{"type":"user","sessionId":"sid-x","message":{"role":"user","content":[{"type":"text","text":"在群里 老板 @你:「列一下当前目录有几个文件」"}]}}
+{"type":"assistant","sessionId":"sid-x","message":{"id":"msg_1","role":"assistant","model":"claude","stop_reason":"tool_use","content":[{"type":"text","text":"Let me check the file."}]}}
+{"type":"assistant","sessionId":"sid-x","message":{"id":"msg_2","role":"assistant","model":"claude","stop_reason":"tool_use","content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"file-history-snapshot","sessionId":"sid-x","messageId":"msg_2"}
+{"type":"user","sessionId":"sid-x","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"a.txt\nb.txt"}]}}
+{"type":"assistant","sessionId":"sid-x","message":{"id":"msg_3","role":"assistant","model":"claude","stop_reason":"end_turn","content":[{"type":"text","text":"There are 2 files."}]}}

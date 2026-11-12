@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/Users/me/Desktop/personal/summon","session_id":"0d799a9c-ed4e-4e9e-a56e-ac0d8e37ff67","model":"Opus 4.8 (Thinking) 1M High","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"reply with exactly the single word: pong"}]},"session_id":"0d799a9c-ed4e-4e9e-a56e-ac0d8e37ff67"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pong"}]},"session_id":"0d799a9c-ed4e-4e9e-a56e-ac0d8e37ff67"}
+{"type":"result","subtype":"success","duration_ms":15763,"is_error":false,"result":"pong","session_id":"0d799a9c-ed4e-4e9e-a56e-ac0d8e37ff67","usage":{"inputTokens":2,"outputTokens":4,"cacheReadTokens":0,"cacheWriteTokens":56996}}

@@ -1,0 +1,139 @@
+{
+  "data": {
+    "messages": [
+      {
+        "id": "user",
+        "kind": "user",
+        "reactions": [
+          "THUMBSUP",
+          "DONE"
+        ],
+        "sender": "示例用户",
+        "text": "@agent 帮我看下 CI 为什么挂了"
+      },
+      {
+        "id": "cot",
+        "items": [
+          {
+            "id": "cot.thinking-1",
+            "text": "先跑一遍 app 的测试,看失败落在哪个用例。",
+            "type": "thinking"
+          },
+          {
+            "id": "cot.thinking-2",
+            "text": "挂的是 parse_rejects_empty_input。读一下 src/lib.rs 里 parse 对空输入的处理,和断言对一对。",
+            "type": "thinking"
+          }
+        ],
+        "kind": "cot",
+        "status": "done",
+        "title": "帮我看下 CI 为什么挂了"
+      },
+      {
+        "card": {
+          "body": {
+            "elements": [
+              {
+                "content": "CI 挂在 `app` 的单测 `parse_rejects_empty_input`:上游把空输入的返回值从 `None` 改成了 `Err(ParseError::Empty)`,断言还按旧行为写。\n\n已按新行为改好断言,本地 `cargo test -p app` 全部通过。完整日志在 `/tmp/report.md`。",
+                "element_id": "reply.0",
+                "tag": "markdown"
+              },
+              {
+                "element_id": "reply.1",
+                "tag": "hr"
+              },
+              {
+                "content": "<font color='grey'>claude · Opus 5 · 86k/200k █████░░░░░ 43% · 10:24</font>",
+                "element_id": "reply.2",
+                "tag": "markdown",
+                "text_size": "notation"
+              },
+              {
+                "columns": [
+                  {
+                    "element_id": "preview_files.0",
+                    "elements": [
+                      {
+                        "behaviors": [
+                          {
+                            "type": "callback",
+                            "value": {
+                              "action": "preview_open",
+                              "token": ""
+                            }
+                          }
+                        ],
+                        "element_id": "preview_files.0.0",
+                        "tag": "button",
+                        "text": {
+                          "content": "📄 report.md",
+                          "tag": "plain_text"
+                        },
+                        "type": "default"
+                      }
+                    ],
+                    "tag": "column",
+                    "width": "auto"
+                  }
+                ],
+                "element_id": "preview_files",
+                "flex_mode": "flow",
+                "horizontal_spacing": "8px",
+                "tag": "column_set"
+              }
+            ]
+          },
+          "config": {
+            "summary": {
+              "content": "CI 已修复"
+            }
+          },
+          "schema": "2.0"
+        },
+        "id": "reply",
+        "kind": "card"
+      },
+      {
+        "chat_name": "示例群",
+        "id": "feed",
+        "kind": "feed",
+        "text": "CI 已修复"
+      }
+    ],
+    "regions": {
+      "messaging.agent_feed": [
+        "feed"
+      ],
+      "messaging.agent_reactions": [
+        "user"
+      ],
+      "messaging.badge_effort": [
+        "reply.2"
+      ],
+      "messaging.cot_tool_details": [
+        "cot"
+      ],
+      "messaging.cot_visible": [
+        "cot"
+      ],
+      "messaging.hide_thinking": [
+        "cot.thinking-1",
+        "cot.thinking-2"
+      ]
+    },
+    "title": "按 星光 · 示例群 的设置"
+  },
+  "params": {
+    "draft": [
+      {
+        "key": "messaging.cot_tool_details",
+        "value": false
+      }
+    ],
+    "scope": {
+      "agent": "starlight",
+      "chat_id": "oc_00000000000000000000000000000001",
+      "level": "chat"
+    }
+  }
+}

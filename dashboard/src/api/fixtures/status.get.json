@@ -1,0 +1,67 @@
+{
+  "data": {
+    "agents": [
+      {
+        "alias": "arcadia",
+        "chats": 1,
+        "cli": "codex",
+        "credentials": "ready",
+        "display": "阿卡迪亚",
+        "enabled": true,
+        "model": "gpt-5.5",
+        "name": "arcadia",
+        "routable": true
+      },
+      {
+        "alias": "saturn",
+        "chats": 0,
+        "cli": "",
+        "credentials": "missing",
+        "display": "",
+        "enabled": true,
+        "load_error": "agent.yaml 读取失败：mapping values are not allowed in this context at line 4 column 10",
+        "name": "saturn",
+        "routable": false
+      },
+      {
+        "alias": "starlight",
+        "chats": 2,
+        "cli": "claude",
+        "credentials": "ready",
+        "display": "星光",
+        "effort": "high",
+        "enabled": true,
+        "model": "claude-opus-4-8",
+        "name": "starlight",
+        "routable": true
+      }
+    ],
+    "daemon": {
+      "autostart": "on",
+      "commit": "0000000",
+      "pid": 4242,
+      "started_at": "2026-10-21T09:30:00+08:00",
+      "version": "0.6.18"
+    },
+    "hostname": "example-host",
+    "language": "zh-CN",
+    "restart_pending": [],
+    "revisions": {
+      "agent:arcadia": "f4acd09cf9894be9",
+      "agent:saturn": "8452cd30e904db16",
+      "agent:starlight": "fc303a793d4e6788",
+      "chat:arcadia:oc_00000000000000000000000000000001": "absent",
+      "chat:starlight:oc_00000000000000000000000000000001": "0fc6c34489411be2",
+      "chat:starlight:oc_00000000000000000000000000000009": "absent",
+      "doc:~/.summon/CLAUDE.md": "be194ea0634066aa",
+      "doc:~/.summon/agents/arcadia/CLAUDE.md": "absent",
+      "doc:~/.summon/agents/arcadia/SOUL.md": "absent",
+      "doc:~/.summon/agents/starlight/CLAUDE.md": "absent",
+      "doc:~/.summon/agents/starlight/SOUL.md": "c25ffc200e2fe11a",
+      "doc:~/.summon/agents/starlight/chats/oc_00000000000000000000000000000001/CLAUDE.md": "c5e5b64f46acfec7",
+      "global": "fde9ca9b55c12491",
+      "schedules": "22517c1c89fe1209"
+    }
+  },
+  "params": {}
+}

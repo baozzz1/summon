@@ -1,0 +1,9 @@
+{"method":"turn/started","params":{"threadId":"019e88c7-9226-76a3-b034-caa151b4909a","turn":{"id":"turn_0","status":"inProgress"}}}
+{"method":"item/started","params":{"threadId":"019e88c7-9226-76a3-b034-caa151b4909a","turnId":"turn_0","item":{"id":"item_0","type":"userMessage","text":"只回复一个词"}}}
+{"method":"item/completed","params":{"threadId":"019e88c7-9226-76a3-b034-caa151b4909a","turnId":"turn_0","item":{"id":"item_0","type":"userMessage","text":"只回复一个词"}}}
+{"method":"item/started","params":{"threadId":"019e88c7-9226-76a3-b034-caa151b4909a","turnId":"turn_0","item":{"id":"item_1","type":"agentMessage"}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"019e88c7-9226-76a3-b034-caa151b4909a","turnId":"turn_0","itemId":"item_1","delta":"po"}}
+{"method":"item/agentMessage/delta","params":{"threadId":"019e88c7-9226-76a3-b034-caa151b4909a","turnId":"turn_0","itemId":"item_1","delta":"ng"}}
+{"method":"item/completed","params":{"threadId":"019e88c7-9226-76a3-b034-caa151b4909a","turnId":"turn_0","item":{"id":"item_1","type":"agentMessage","text":"pong"}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"019e88c7-9226-76a3-b034-caa151b4909a","turnId":"turn_0","tokenUsage":{"total":{"totalTokens":23082,"inputTokens":23061,"cachedInputTokens":3456,"outputTokens":21}}}}
+{"method":"turn/completed","params":{"threadId":"019e88c7-9226-76a3-b034-caa151b4909a","turn":{"id":"turn_0","status":"completed","items":[]}}}

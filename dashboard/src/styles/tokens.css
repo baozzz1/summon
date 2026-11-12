@@ -1,0 +1,274 @@
+/* 全部颜色、字号、间距、圆角与动效都在这里定义;别的样式文件只引用变量(stylelint 钉着)。
+   中性灰阶为主,只有一个强调色;语义色降饱和、只出现在状态上。 */
+
+:root {
+  color-scheme: light;
+
+  /* 灰阶:画布 → 表面 → 浮层 */
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #fafafb;
+  --surface-sunken: #f2f2f4;
+  --hover: #f0f0f2;
+  --pressed: #e9e9ec;
+  --border: #e6e6ea;
+  --border-strong: #d5d5db;
+  --divider: #eeeef1;
+
+  --text: #1c1c21;
+  --text-2: #4c4c55;
+  --muted: #6a6a74;
+  --faint: #9b9ba4;
+
+  /* 唯一强调色:主按钮、焦点环、当前导航、开关打开态 */
+  --accent: #4f59cf;
+  --accent-fill: #5560d6;
+  --accent-fill-hover: #4a54c4;
+  --on-accent: #ffffff;
+  --accent-soft: #eef0fc;
+  --focus: #6b74e0;
+
+  /* 语义色:只用于状态 */
+  --ok: #2f7a55;
+  --ok-soft: #e9f4ee;
+  --warn: #9a6216;
+  --warn-soft: #faf2e4;
+  --danger: #b4423a;
+  --danger-soft: #fbecea;
+
+  /* 用量图:按结果取状态色;「没有回复」是有意的中性灰 */
+  --chart-done: #3a9a6a;
+  --chart-quiet: #aeaeb8;
+  --chart-interrupted: #d9961f;
+  --chart-failed: #c43f3f;
+
+  /* 洞察图:按度量取色,条数与时长各一色,两者经 dataviz 校验脚本过色觉与对比度检查;
+     周末的柱子是条数色的浅一档 */
+  --chart-count: #5560d6;
+  --chart-count-muted: #aab0ec;
+  --chart-time: #1a9a8a;
+
+  --knob: #ffffff;
+  --shadow-knob: 0 1px 2px #14141a33;
+  --toast-bg: #1c1c21;
+  --toast-fg: #f4f4f6;
+  --diff-add: #e8f4ec;
+  --diff-del: #fbebe9;
+  --scrim: #14141a66;
+  --shadow-pop: 0 1px 2px #14141a0f, 0 8px 24px #14141a1a;
+  --shadow-sheet: 0 -1px 0 #14141a0d, 0 -8px 28px #14141a1f;
+
+  /* 飞书效果预览:贴近飞书客户端的观感,独立于控制台自己的灰阶 */
+  --fs-canvas: #f2f3f5;
+  --fs-bubble: #ffffff;
+  --fs-card: #ffffff;
+  --fs-border: #dee0e3;
+  --fs-text: #1f2329;
+  --fs-text-2: #646a73;
+  --fs-notation: #8f959e;
+  --fs-shimmer: #b8bcc3;
+  --fs-blue: #3370ff;
+  --fs-blue-soft: #e1eaff;
+  --fs-code: #eff0f1;
+  --fs-hr: #dee0e3;
+  --fs-avatar-user: #7a8aa6;
+  --fs-avatar-bot: #4e83fd;
+  --fs-avatar-group: #5b8ff9;
+  --fs-on-avatar: #ffffff;
+  --fs-reaction: #f0f1f3;
+  --fs-danger: #f54a45;
+  --fs-green: #2ea121;
+  --fs-orange: #de7802;
+  --fs-red: #f54a45;
+  --fs-grey: #8f959e;
+  --fs-outline: #3370ff;
+  --fs-changed: #fff3d1;
+
+  /* 字体:系统栈,不加载任何外部字体 */
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei",
+    "Hiragino Sans GB", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  --fz-12: 12px;
+  --fz-13: 13px;
+  --fz-14: 14px;
+  --fz-16: 16px;
+  --fz-20: 20px;
+  --fz-24: 24px;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+
+  /* 4px 网格 */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+
+  --r-control: 8px;
+  --r-card: 10px;
+  --r-pill: 999px;
+
+  --dur: 140ms;
+  --dur-slow: 180ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  --topbar-h: 56px;
+  --nav-w: 232px;
+  --preview-w: 380px;
+  --form-max: 720px;
+  --page-max: 960px;
+}
+
+/* 深色:跟随系统(除非显式选了浅色),或显式选了深色。两处取值必须一致。 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f0f12;
+    --surface: #17171b;
+    --surface-2: #1b1b20;
+    --surface-sunken: #131317;
+    --hover: #212127;
+    --pressed: #28282f;
+    --border: #2a2a31;
+    --border-strong: #3a3a43;
+    --divider: #232329;
+    --text: #ececf1;
+    --text-2: #c2c2cb;
+    --muted: #9696a1;
+    --faint: #6c6c77;
+    --accent: #9ea5f7;
+    --accent-fill: #5a64d6;
+    --accent-fill-hover: #6670e0;
+    --on-accent: #ffffff;
+    --accent-soft: #23253f;
+    --focus: #8c94f2;
+    --ok: #6cc196;
+    --ok-soft: #17291f;
+    --warn: #dcaa5b;
+    --warn-soft: #2d2415;
+    --danger: #e58b82;
+    --danger-soft: #331b19;
+    --chart-done: #3f9f6f;
+    --chart-quiet: #6a6a76;
+    --chart-interrupted: #b0901e;
+    --chart-failed: #d14b5b;
+    --chart-count: #7c84ea;
+    --chart-count-muted: #525aa6;
+    --chart-time: #26a594;
+    --knob: #f4f4f6;
+    --shadow-knob: 0 1px 2px #00000080;
+    --toast-bg: #ececf1;
+    --toast-fg: #17171b;
+    --diff-add: #15281d;
+    --diff-del: #321a18;
+    --scrim: #00000099;
+    --shadow-pop: 0 1px 2px #00000066, 0 10px 28px #00000080;
+    --shadow-sheet: 0 -1px 0 #ffffff0d, 0 -10px 32px #00000099;
+    --fs-canvas: #121212;
+    --fs-bubble: #2a2a2a;
+    --fs-card: #232323;
+    --fs-border: #383838;
+    --fs-text: #ebebeb;
+    --fs-text-2: #a6a6a6;
+    --fs-notation: #7d7d7d;
+    --fs-shimmer: #6b6b6b;
+    --fs-blue: #4c88ff;
+    --fs-blue-soft: #1d2b4a;
+    --fs-code: #333333;
+    --fs-hr: #383838;
+    --fs-avatar-user: #5c6b85;
+    --fs-avatar-bot: #3d6fe0;
+    --fs-avatar-group: #3f72d9;
+    --fs-on-avatar: #ffffff;
+    --fs-reaction: #333333;
+    --fs-danger: #f76964;
+    --fs-green: #51ba43;
+    --fs-orange: #f3871b;
+    --fs-red: #f76964;
+    --fs-grey: #8a8a8a;
+    --fs-outline: #4c88ff;
+    --fs-changed: #3b3215;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f0f12;
+  --surface: #17171b;
+  --surface-2: #1b1b20;
+  --surface-sunken: #131317;
+  --hover: #212127;
+  --pressed: #28282f;
+  --border: #2a2a31;
+  --border-strong: #3a3a43;
+  --divider: #232329;
+  --text: #ececf1;
+  --text-2: #c2c2cb;
+  --muted: #9696a1;
+  --faint: #6c6c77;
+  --accent: #9ea5f7;
+  --accent-fill: #5a64d6;
+  --accent-fill-hover: #6670e0;
+  --on-accent: #ffffff;
+  --accent-soft: #23253f;
+  --focus: #8c94f2;
+  --ok: #6cc196;
+  --ok-soft: #17291f;
+  --warn: #dcaa5b;
+  --warn-soft: #2d2415;
+  --danger: #e58b82;
+  --danger-soft: #331b19;
+  --chart-done: #3f9f6f;
+  --chart-quiet: #6a6a76;
+  --chart-interrupted: #b0901e;
+  --chart-failed: #d14b5b;
+  --chart-count: #7c84ea;
+  --chart-count-muted: #525aa6;
+  --chart-time: #26a594;
+  --knob: #f4f4f6;
+  --shadow-knob: 0 1px 2px #00000080;
+  --toast-bg: #ececf1;
+  --toast-fg: #17171b;
+  --diff-add: #15281d;
+  --diff-del: #321a18;
+  --scrim: #00000099;
+  --shadow-pop: 0 1px 2px #00000066, 0 10px 28px #00000080;
+  --shadow-sheet: 0 -1px 0 #ffffff0d, 0 -10px 32px #00000099;
+  --fs-canvas: #121212;
+  --fs-bubble: #2a2a2a;
+  --fs-card: #232323;
+  --fs-border: #383838;
+  --fs-text: #ebebeb;
+  --fs-text-2: #a6a6a6;
+  --fs-notation: #7d7d7d;
+  --fs-shimmer: #6b6b6b;
+  --fs-blue: #4c88ff;
+  --fs-blue-soft: #1d2b4a;
+  --fs-code: #333333;
+  --fs-hr: #383838;
+  --fs-avatar-user: #5c6b85;
+  --fs-avatar-bot: #3d6fe0;
+  --fs-avatar-group: #3f72d9;
+  --fs-on-avatar: #ffffff;
+  --fs-reaction: #333333;
+  --fs-danger: #f76964;
+  --fs-green: #51ba43;
+  --fs-orange: #f3871b;
+  --fs-red: #f76964;
+  --fs-grey: #8a8a8a;
+  --fs-outline: #4c88ff;
+  --fs-changed: #3b3215;
+}
+
+@media (max-width: 899px) {
+  :root {
+    --topbar-h: 52px;
+  }
+}

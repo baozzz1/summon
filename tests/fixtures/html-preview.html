@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>单文件预览测试</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; background: #f4f7fb; }
+  h1 { color: rgb(24, 72, 120); }
+  button { padding: 0.7rem 1.2rem; cursor: pointer; }
+</style>
+<link rel="stylesheet" href="/blocked/style.css">
+<script src="/blocked/script.js"></script>
+<h1>单文件 HTML 预览</h1>
+<p>内嵌样式、图片和交互脚本。</p>
+<button id="counter" onclick="this.textContent = Number(this.textContent) + 1">0</button>
+<img id="embedded" alt="内嵌图片" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Ccircle cx='20' cy='20' r='18' fill='%23184878'/%3E%3C/svg%3E">
+<img src="/blocked/image.png" alt="被隔离的外部资源">
+<form action="/blocked/form" method="post"><input name="test" value="1"></form>
+<script>
+  const status = document.body.dataset;
+  status.ready = 'yes';
+  for (const [name, probe] of [
+    ['parent', () => parent.document.body],
+    ['storage', () => localStorage.getItem('test')],
+    ['cookie', () => document.cookie],
+    ['top', () => { top.location = '/blocked/top'; }],
+  ]) {
+    try { probe(); status[name] = 'allowed'; }
+    catch { status[name] = 'blocked'; }
+  }
+  status.popup = window.open('/blocked/popup') === null ? 'blocked' : 'allowed';
+  fetch('/blocked/fetch').then(() => { status.fetch = 'allowed'; }, () => { status.fetch = 'blocked'; });
+  document.querySelector('form').submit();
+  const nested = document.createElement('iframe');
+  nested.src = '/blocked/frame';
+  document.body.append(nested);
+</script>
+</html>

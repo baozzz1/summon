@@ -1,0 +1,21 @@
+[package]
+name = "summon-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+summon-i18n = { path = "../summon-i18n" }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "2"
+dirs = "5"
+strip-ansi-escapes = "0.2"
+serde_json = "1"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono-tz = "0.10"
+pulldown-cmark = "0.13"  # 预览页 markdown → HTML(服务端渲染,离线无 JS)
+unicode-width = "0.2.2"  # tail 流式预览按终端显示列截断(CJK 占两列)
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/tmp","session_id":"part-sid-1","model":"Opus 4.8 (Thinking) 1M High","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"count 1 to 8"}]},"session_id":"part-sid-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"1"}]},"session_id":"part-sid-1","timestamp_ms":1780490883252}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" 2 3 4 5 6 7 8"}]},"session_id":"part-sid-1","timestamp_ms":1780490883429}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"1 2 3 4 5 6 7 8"}]},"session_id":"part-sid-1"}
+{"type":"result","subtype":"success","duration_ms":17198,"is_error":false,"result":"1 2 3 4 5 6 7 8","session_id":"part-sid-1","usage":{"inputTokens":2,"outputTokens":17,"cacheReadTokens":0,"cacheWriteTokens":57256}}

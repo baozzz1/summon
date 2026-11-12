@@ -1,0 +1,37 @@
+{
+  "data": {
+    "effects": [
+      {
+        "effect": "next_turn",
+        "key": "messaging.badge_effort"
+      },
+      {
+        "effect": "restart",
+        "key": "dashboard.port"
+      }
+    ],
+    "restart_pending": [
+      {
+        "file": "global",
+        "key": "dashboard.port"
+      }
+    ],
+    "revision": "47481e7f8c25a03b"
+  },
+  "params": {
+    "changes": [
+      {
+        "key": "messaging.badge_effort",
+        "value": false
+      },
+      {
+        "key": "dashboard.port",
+        "value": 7800
+      }
+    ],
+    "revision": "fde9ca9b55c12491",
+    "scope": {
+      "level": "global"
+    }
+  }
+}

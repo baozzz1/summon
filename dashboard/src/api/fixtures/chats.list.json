@@ -1,0 +1,38 @@
+{
+  "data": [
+    {
+      "agents": [
+        {
+          "agent": "arcadia",
+          "last_active": "2026-10-21T09:30:00+08:00",
+          "live": false,
+          "overrides": 0
+        },
+        {
+          "agent": "starlight",
+          "last_active": "2026-10-21T09:30:00+08:00",
+          "live": false,
+          "overrides": 4
+        }
+      ],
+      "chat_id": "oc_00000000000000000000000000000001",
+      "kind": "group",
+      "last_active": "2026-10-21T09:30:00+08:00",
+      "name": "示例群"
+    },
+    {
+      "agents": [
+        {
+          "agent": "starlight",
+          "last_active": "2026-10-21T09:30:00+08:00",
+          "live": false,
+          "overrides": 0
+        }
+      ],
+      "chat_id": "oc_00000000000000000000000000000009",
+      "kind": "p2p",
+      "last_active": "2026-10-21T09:30:00+08:00"
+    }
+  ],
+  "params": {}
+}

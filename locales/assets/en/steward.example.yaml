@@ -1,0 +1,17 @@
+name: {{alias}}
+display: "{{display}}"
+status: {{status}}
+# Steward: /fleet observation only; no CLI session, terminal lifecycle, or model quota.
+# No runtime / cognition / model fields or identity directory to maintain.
+# See docs/spec/2026-08-09-feishu-steward-bot-design.md.
+role: steward
+
+feishu:
+  app_id_env: {{id_env}}
+  app_secret_env: {{secret_env}}
+  scope: thread
+  # Required for steward: empty denies everyone, unlike ordinary agents' allow-all default.
+  # Use the owner's open_id or union_id to protect fleet visibility.
+  allowed_users: []
+  # Unset inherits machine operators; explicit list overrides; empty falls back to allowed_users.
+  # operators: []

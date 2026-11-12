@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="__SUMMON_LANGUAGE__">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="same-origin" />
+    <title>__SUMMON_TEXT_html.waiting.title__</title>
+    <link rel="icon" type="image/svg+xml" href="/src/favicon.svg" />
+    <script type="module" src="/src/standalone/waiting.ts"></script>
+  </head>
+  <body>
+    <main class="centered">
+      <div class="notice">
+        <svg class="brand-mark" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M6.419 2.316 A5.9 5.9 0 0 1 13.684 9.581 M9.581 13.684 A5.9 5.9 0 0 1 2.316 6.419" fill="none" stroke="currentColor" stroke-width="1.9"/>
+          <circle cx="8" cy="8" r="3" fill="currentColor"/>
+          <circle cx="3.828" cy="3.828" r="1.9" fill="currentColor"/>
+          <circle cx="12.172" cy="12.172" r="1.9" fill="currentColor"/>
+        </svg>
+        <h1 id="status">__SUMMON_TEXT_html.waiting.status__</h1>
+        <p id="hint">__SUMMON_TEXT_html.waiting.hint__</p>
+        <!-- 不带 JS 也能用:daemon 发页时把占位换成这条链接,表单 POST 进入,成功后服务端 303 跳到 / -->
+        <form method="post" id="enter" class="enter" action="/l/__SUMMON_LINK__/enter">
+          <button class="btn-primary" type="submit" id="enter-btn">__SUMMON_TEXT_html.enter__</button>
+        </form>
+      </div>
+    </main>
+  </body>
+</html>

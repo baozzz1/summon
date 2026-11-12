@@ -1,0 +1,84 @@
+{
+  "data": {
+    "comment_tasks": [
+      {
+        "agent": "starlight",
+        "busy": true,
+        "error": null,
+        "id": "comment-task",
+        "pid": 4242,
+        "received_ms": 1800000000000,
+        "stage": "drafting",
+        "status": "正在起草",
+        "status_en": "Drafting",
+        "title": "合成文档评论",
+        "updated_ms": 1800000001000
+      }
+    ],
+    "comment_tasks_error": null,
+    "sessions": [
+      {
+        "actions": {
+          "archive": false,
+          "exit": false,
+          "handled": true,
+          "interrupt": false
+        },
+        "agent": "starlight",
+        "agent_display": "星光",
+        "busy": false,
+        "capture": "",
+        "chat_id": "oc_00000000000000000000000000000002",
+        "chat_type": "group",
+        "cli": "claude",
+        "listed": false,
+        "name": "另一个群",
+        "state": "waiting",
+        "tag": "g31eb02f32b74396e",
+        "waiting_reply": "om_reply",
+        "waiting_since": "2026-10-21T09:30:00+08:00"
+      },
+      {
+        "actions": {
+          "archive": true,
+          "exit": true,
+          "handled": false,
+          "interrupt": false
+        },
+        "agent": "starlight",
+        "agent_display": "星光",
+        "busy": true,
+        "capture": "transcript",
+        "chat_id": "oc_00000000000000000000000000000001",
+        "chat_type": "group",
+        "cli": "claude",
+        "last_active": "2026-10-21T09:30:00+08:00",
+        "listed": true,
+        "name": "示例群",
+        "state": "working",
+        "tag": "g31eb01f32b7437bb"
+      },
+      {
+        "actions": {
+          "archive": true,
+          "exit": true,
+          "handled": false,
+          "interrupt": false
+        },
+        "agent": "starlight",
+        "agent_display": "星光",
+        "busy": false,
+        "capture": "transcript",
+        "chat_id": "oc_00000000000000000000000000000009",
+        "chat_type": "p2p",
+        "cli": "claude",
+        "last_active": "2026-10-21T09:30:00+08:00",
+        "listed": true,
+        "name": "示例用户",
+        "state": "idle",
+        "tag": "p31eaf9f32b742a23"
+      }
+    ]
+  },
+  "params": {}
+}

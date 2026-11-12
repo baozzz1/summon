@@ -1,0 +1,23 @@
+{
+  "data": {
+    "coverage": "structured_requests",
+    "items": [
+      {
+        "agent": "starlight",
+        "agent_display": "星光",
+        "chat_name": "示例群",
+        "id": "request-example",
+        "link": "lark://applink.feishu.cn/client/chat/open?openChatId=oc_00000000000000000000000000000001&position=77",
+        "link_target": "message",
+        "question_count": 2,
+        "registered_at": "2026-10-21T09:30:00+08:00",
+        "source": "agent_ask",
+        "summary": "选择发布窗口",
+        "waited_secs": 60
+      }
+    ],
+    "observed_at": "2026-10-21T09:30:00+08:00",
+    "partial": false
+  },
+  "params": {}
+}

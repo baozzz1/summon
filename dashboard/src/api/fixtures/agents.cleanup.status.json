@@ -1,0 +1,20 @@
+{
+  "data": {
+    "agent": "retired",
+    "bytes": 1024,
+    "downloaded": false,
+    "filename": "retired-backup.tar.gz",
+    "job": "5f0c1e2d3b4a59687766554433221100",
+    "message": null,
+    "paths": [
+      "agents/retired",
+      "run/inbox/availability/retired.json",
+      "state/retired"
+    ],
+    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "status": "ready"
+  },
+  "params": {
+    "job": "5f0c1e2d3b4a59687766554433221100"
+  }
+}

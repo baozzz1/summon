@@ -1,0 +1,43 @@
+{
+  "data": {
+    "app_id_env": "DASH_TEST_STARLIGHT_APP_ID",
+    "can_toggle_enabled": true,
+    "effort_options": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "members": [
+      {
+        "id": "on_00000000000000000000000000000001"
+      },
+      {
+        "id": "on_00000000000000000000000000000002",
+        "name": "另一位用户"
+      }
+    ],
+    "model_candidates": [
+      "claude-opus-5",
+      "claude-fable-5",
+      "claude-sonnet-5"
+    ],
+    "scope": "thread",
+    "summary": {
+      "alias": "starlight",
+      "chats": 2,
+      "cli": "claude",
+      "credentials": "ready",
+      "display": "星光",
+      "effort": "high",
+      "enabled": true,
+      "model": "claude-opus-4-8",
+      "name": "starlight",
+      "routable": true
+    }
+  },
+  "params": {
+    "agent": "starlight"
+  }
+}

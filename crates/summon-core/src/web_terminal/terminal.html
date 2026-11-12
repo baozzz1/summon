@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>summon 终端</title>
+<link rel="stylesheet" href="/t/assets/xterm.css">
+<style>
+body{margin:0;background:#1e1e1e;color:#ddd;font:14px -apple-system,BlinkMacSystemFont,sans-serif;display:flex;flex-direction:column;height:100vh}
+#bar{padding:6px 10px;background:#333}
+#bar.op{background:#7a2e1f}
+#msg{padding:0 10px;color:#fc6;min-height:1.2em}
+#term{flex:1;overflow:auto}
+#keys{display:flex;gap:6px;padding:6px;flex-wrap:wrap}
+#keys button{flex:1;min-width:44px;padding:8px}
+#line{display:flex;gap:6px;padding:0 6px 6px}
+#line input{flex:1;padding:8px}
+</style>
+</head>
+<body>
+<div id="bar" class="{{bar_class}}">{{mode_label}} · {{agent}} · {{chat}}{{hint}}</div>
+<div id="msg"></div>
+<div id="term"></div>
+{{controls}}
+<script src="/t/assets/xterm.js"></script>
+<script>
+const MODE = "{{mode}}";
+const WS_URL = "ws://" + location.host + "/t/s/{{handle}}/ws";
+const KEYS = {esc: "\x1b", ctrlc: "\x03", tab: "\t", up: "\x1b[A", down: "\x1b[B", enter: "\r"};
+const term = new Terminal({disableStdin: MODE !== "operate", scrollback: 2000, fontSize: 14});
+// 画面来自 tmux 的显示客户端,它发来的终端查询(设备属性、光标位置、窗口尺寸……)与鼠标、焦点
+// 汇报模式是冲着显示端去的,而可操作页的输入直接进窗格:xterm.js 若作答或开着汇报,答复、点按与
+// 焦点变化都会成为 agent 输入框里的乱码。所以查询一律不答,汇报模式一律不开,别的模式照常生效。
+function quiet(term) {
+  const p = term.parser, handled = () => true;
+  for (const id of [{final: "c"}, {prefix: ">", final: "c"}, {prefix: ">", final: "q"},
+                    {final: "n"}, {prefix: "?", final: "n"}, {final: "t"},
+                    {intermediates: "$", final: "p"}, {prefix: "?", intermediates: "$", final: "p"}]) {
+    p.registerCsiHandler(id, handled);
+  }
+  p.registerDcsHandler({intermediates: "$", final: "q"}, handled);
+  for (const n of [4, 10, 11, 12]) p.registerOscHandler(n, (data) => data.includes("?"));
+  const REPORTS = new Set([9, 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1015, 1016]);
+  p.registerCsiHandler({prefix: "?", final: "h"}, (params) => {
+    const modes = params.map((v) => (Array.isArray(v) ? v[0] : v));
+    const rest = modes.filter((m) => !REPORTS.has(m));
+    if (rest.length === modes.length) return false;
+    if (rest.length) term.write("\x1b[?" + rest.join(";") + "h");
+    return true;
+  });
+}
+// 滚动:滚轮 / 上下滑换算成格数,合并成至多每 50ms 一条 {"scroll": n} 发给服务端(负数往上翻、
+// 看更早的内容)。页面只报格数,送进窗格的滚轮事件由服务端生成;两种页面相同。rowPx 是一行的
+// 像素高,rows 是终端行数,now 与 later 是时钟与定时器,canScroll(dir) 说终端区域自己还能不能往
+// dir(负为上)滚:能滚就让浏览器先滚它,滚到头了才换成格数。
+function scroller(post, rowPx, rows, now, later, canScroll) {
+  let pending = 0, last = -Infinity, timer = null, wheelRows = 0, touch = null;
+  function flush() {
+    timer = null;
+    if (pending === 0) return;
+    const n = pending;
+    pending = 0;
+    last = now();
+    post(n);
+  }
+  function add(notches) {
+    // 换方向时把还没发出去的全部丢掉(50ms 内攒下的整格也算)。
+    if (pending * notches < 0) pending = 0;
+    pending += notches;
+    if (timer !== null) return;
+    const wait = last + 50 - now();
+    if (wait <= 0) flush();
+    else timer = later(flush, wait);
+  }
+  return {
+    // 换算照 xterm.js 对开着鼠标汇报的程序的做法:按像素的除以一行高,|deltaY| < 50 的多半是触控板,
+    // 再乘 0.3;按行的照用;按页的乘整屏行数。攒到满一格才出,一个滚轮事件至多出一格,零头留着。
+    // 捏合缩放(ctrlKey)、横向滚动(shiftKey 或以 deltaX 为主)不拦,交给浏览器。返回 true 表示这一下
+    // 归滚动,调用方 preventDefault。
+    wheel(e) {
+      if (e.ctrlKey || e.shiftKey || !e.deltaY || Math.abs(e.deltaX || 0) > Math.abs(e.deltaY)) {
+        return false;
+      }
+      if (canScroll(Math.sign(e.deltaY))) return false;
+      let amount = e.deltaY;
+      if (e.deltaMode === 0) {
+        amount /= rowPx();
+        if (Math.abs(e.deltaY) < 50) amount *= 0.3;
+      } else if (e.deltaMode === 2) {
+        amount *= rows();
+      }
+      wheelRows += amount;
+      const whole = Math.trunc(wheelRows);
+      wheelRows -= whole;
+      if (whole !== 0) add(Math.sign(whole));
+      return true;
+    },
+    // 手指往下拖是往上翻(与手机上翻页的方向一致),拖过一行高算一格。归不归滚动在第一次移动时定:
+    // 竖着拖、且终端区域自己在那个方向上已经滚到头,才归滚动,返回 true(调用方 preventDefault,
+    // 页面不跟着弹);横着拖或区域还能滚,整段留给浏览器。浏览器只在第一次移动上认
+    // preventDefault,所以不能等拖远了再定。
+    touchStart(x, y) { touch = {x, y, claimed: null, rows: 0}; },
+    touchMove(x, y) {
+      if (touch === null) return false;
+      if (touch.claimed === null) {
+        const vertical = Math.abs(y - touch.y) >= Math.abs(x - touch.x);
+        touch.claimed = vertical && !canScroll(y > touch.y ? -1 : 1);
+      }
+      if (!touch.claimed) return false;
+      touch.rows += (touch.y - y) / rowPx();
+      touch.y = y;
+      const whole = Math.trunc(touch.rows);
+      touch.rows -= whole;
+      if (whole !== 0) add(whole);
+      return true;
+    },
+    touchEnd() { touch = null; },
+  };
+}
+quiet(term);
+const area = document.getElementById("term");
+term.open(area);
+let ws = null, ended = false, retries = 0;
+function msg(t) { document.getElementById("msg").textContent = t; }
+function fit(cols) {
+  const w = area.clientWidth;
+  term.options.fontSize = Math.max(6, Math.min(16, Math.floor(w / (cols * 0.62))));
+}
+function live() { return ws && ws.readyState === 1; }
+// 按键走二进制帧,控制消息走文本帧:服务端按帧类型分开两者,只读页发来的二进制帧一律丢掉。
+const encoder = new TextEncoder();
+function send(s) { if (MODE === "operate" && live()) ws.send(encoder.encode(s)); }
+function rowPx() {
+  const screen = area.querySelector(".xterm-screen");
+  return (screen && screen.clientHeight / term.rows) || term.options.fontSize * 1.2;
+}
+// 终端区域(比可视区大时)自己还能不能往 dir(负为上)滚。
+function canScroll(dir) {
+  return dir < 0 ? area.scrollTop > 0 : area.scrollTop + area.clientHeight < area.scrollHeight - 1;
+}
+const scroll = scroller((n) => { if (live()) ws.send(JSON.stringify({scroll: n})); },
+  rowPx, () => term.rows, () => performance.now(), (f, ms) => setTimeout(f, ms), canScroll);
+// 滚轮从不交给 xterm.js(一律返回 false):没有回滚的备用屏里,它会把滚轮折成方向键发出去。不归
+// 滚动的那些(缩放、横向、区域还能滚)不 preventDefault,浏览器照常处理。
+term.attachCustomWheelEventHandler((e) => {
+  if (scroll.wheel(e)) e.preventDefault();
+  return false;
+});
+area.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 1) scroll.touchStart(e.touches[0].clientX, e.touches[0].clientY);
+  else scroll.touchEnd();
+}, {passive: true});
+area.addEventListener("touchmove", (e) => {
+  if (e.touches.length === 1 && scroll.touchMove(e.touches[0].clientX, e.touches[0].clientY)) {
+    e.preventDefault();
+  }
+}, {passive: false});
+area.addEventListener("touchend", () => scroll.touchEnd());
+area.addEventListener("touchcancel", () => scroll.touchEnd());
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = "arraybuffer";
+  ws.onmessage = (e) => {
+    if (typeof e.data === "string") {
+      const m = JSON.parse(e.data);
+      if (m.cols) { term.resize(m.cols, m.rows); fit(m.cols); retries = 0; msg(""); }
+      if (m.ended) { ended = true; msg(m.ended); }
+      return;
+    }
+    term.write(new Uint8Array(e.data));
+  };
+  ws.onclose = () => {
+    if (ended) return;
+    if (retries++ < 5) { msg("连接断开,重连中…"); setTimeout(connect, 2000); }
+    else { msg("连接断开。回飞书点「换一组新链接」。"); }
+  };
+}
+if (MODE === "operate") {
+  term.onData(send);
+  document.querySelectorAll("#keys button").forEach((b) => {
+    b.onclick = () => { send(KEYS[b.dataset.k]); term.focus(); };
+  });
+  document.getElementById("line").onsubmit = (e) => {
+    e.preventDefault();
+    const input = document.getElementById("text");
+    send(input.value);
+    input.value = "";
+  };
+}
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{
+ "code": 0,
+ "msg": "success",
+ "data": {
+  "items": [
+   {
+    "body": {
+     "content": "{\"text\":\"@_user_1 这两件事先做完\"}"
+    },
+    "chat_id": "oc_00000000000000000000000000000003",
+    "create_time": "1786547832545",
+    "deleted": false,
+    "mentions": [
+     {
+      "id": "cli_0000000000000001",
+      "id_type": "app_id",
+      "key": "@_user_1",
+      "name": "Arcadia",
+      "tenant_key": "0000000000000001"
+     }
+    ],
+    "message_id": "om_x100b000000000000000000000000001",
+    "message_position": "1484",
+    "msg_type": "text",
+    "sender": {
+     "id": "ou_55555555555555555555555555555555",
+     "id_type": "open_id",
+     "sender_i18n_names": {
+      "en_us": "San Zhang(张三)",
+      "zh_cn": "张三"
+     },
+     "sender_name": "张三",
+     "sender_type": "user",
+     "tenant_key": "0000000000000001"
+    },
+    "update_time": "1786547833328",
+    "updated": true
+   }
+  ]
+ }
+}

@@ -1,0 +1,10 @@
+name: starlight
+display: 星光
+status: active
+feishu:
+  app_id_env: FEISHU_PROBE_APP_ID
+  app_secret_env: FEISHU_PROBE_APP_SECRET
+  allowed_users: []   # 空 = 全放行(inject 的 sender=owner 可过)
+runtime:
+  working_dir: "~/Desktop/personal/summon"
+  tmux_name: soul-starlight

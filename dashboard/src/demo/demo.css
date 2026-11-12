@@ -1,0 +1,20 @@
+/* 演示页只露出聊天区:预览栏的标题行、页脚与外框都不画。宽度即动图的排版宽度。 */
+
+body {
+  min-height: 0;
+  background: var(--fs-canvas);
+}
+
+.stage {
+  width: 720px;
+}
+
+.stage .pv {
+  border: 0;
+  border-radius: 0;
+}
+
+.stage .pv-head,
+.stage .pv-foot {
+  display: none;
+}

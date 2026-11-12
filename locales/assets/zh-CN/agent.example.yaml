@@ -1,0 +1,27 @@
+name: {{alias}}
+display: "{{display}}"
+status: {{status}}
+{{model_line}}{{effort_line}}# 职责: {{role}}
+
+feishu:
+  app_id_env: {{id_env}}
+  app_secret_env: {{secret_env}}
+  scope: thread
+  allowed_users: []   # talk 名单:谁能让该 agent 应答(空 = 全放行;联调后填 open_id 收紧)
+  # operators: []     # 未配置时继承整机操作名单；显式空列表回退 allowed_users；跨应用填写 union_id
+  # chat_operators:    # 本群 operate 名单:只在该群里算数,与 operators 取并集
+  #   oc_xxx: []
+
+runtime:
+  working_dir: "{{workspace}}"
+  tmux_name: soul-{{alias}}
+  cli: {{cli}}
+  # codex_skip_git_repo_check: true  # codex 在多仓聚合目录运行时显式开启
+
+cognition:
+  history_lookback_days: 2
+  writeback: propose
+
+# 可选:覆盖该 agent 的消息层配置(全局默认见 ~/.summon/config.yaml / 内置 messaging.default.yaml)
+# messaging:
+#   prompt_template: "{source}:「{text}」"

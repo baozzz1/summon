@@ -1,0 +1,60 @@
+
+ ▐▛███▛█   Claude Code v2.1.289
+▝▜██████▀  Opus 5.5 with xhigh effort · Claude Max
+ ▝▝   ▝▝   /tmp/probe
+
+
+❯ 只回复两个字：好的                                                                                                                                     
+
+⏺ 好的
+
+✻ Worked for 5s · done 4:50 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Teach auto mode about your environment?
+
+  Auto mode works better when it knows your environment. Takes about a minute.
+
+  ❯ 1. Yes
+    2. Not now
+    3. Don't show again
+
+  Enter to confirm · Esc to cancel
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    Model: Opus 5.5    Thinking: xhigh    ⎇ no git    cwd: /tmp/probe
+    Context: [█░░░░░░░░░░░░░░░] 43k/1.0M (4%)    Session: 29.0%    Reset: 9m    Weekly: 46.0%    Weekly Reset: 3d 22hr 9m  
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

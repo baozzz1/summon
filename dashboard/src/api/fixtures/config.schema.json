@@ -1,0 +1,1983 @@
+{
+  "data": {
+    "fields": [
+      {
+        "description": "影响本机的 Dashboard、CLI、飞书内置文案和菜单栏。自动模式优先使用 lark-cli 当前语种，未设置时跟随系统首选语言。保存后立即生效，无需重启 daemon。",
+        "effect": "immediate",
+        "group": "web",
+        "key": "language",
+        "kind": "enum",
+        "label": "语言",
+        "layers": [
+          "global"
+        ],
+        "options": [
+          {
+            "label": "自动",
+            "value": "auto"
+          },
+          {
+            "label": "简体中文",
+            "value": "zh-CN"
+          },
+          {
+            "label": "English",
+            "value": "en"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "运行中的卡片是否显示执行过程（关闭后只保留状态、动效与「⏸ 打断」按钮，仅显示最终回复）",
+        "effect": "next_turn",
+        "group": "cot",
+        "key": "messaging.cot_visible",
+        "kind": "bool",
+        "label": "显示执行过程",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "对输出明文思考内容的模型，是否在卡片上显示思考内容（关闭时同时启用工具轨迹）",
+        "effect": "next_turn",
+        "group": "cot",
+        "inverted": true,
+        "key": "messaging.hide_thinking",
+        "kind": "bool",
+        "label": "显示思考",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "执行过程中是否显示工具调用（关闭后只显示思考内容）",
+        "effect": "next_turn",
+        "group": "cot",
+        "key": "messaging.cot_tool_details",
+        "kind": "bool",
+        "label": "显示工具详情",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "回复卡片角标是否显示推理强度（effort；Cursor 的推理强度包含在模型名中，始终不显示）",
+        "effect": "next_turn",
+        "group": "cot",
+        "key": "messaging.badge_effort",
+        "kind": "bool",
+        "label": "角标显示推理强度",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "开启：思考内容可见的模型也在卡片上显示最近几步工具调用；关闭：仅在思考内容不可见时（如 Claude 自有模型）显示。",
+        "effect": "next_turn",
+        "group": "cot",
+        "key": "messaging.tool_trail",
+        "kind": "bool",
+        "label": "始终显示工具轨迹",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "工具轨迹最多保留的步数，仅在显示工具轨迹时生效。填 0 按 1 处理。",
+        "effect": "next_turn",
+        "group": "cot",
+        "key": "messaging.progress_max_steps",
+        "kind": "int",
+        "label": "工具轨迹步数",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "max": 50,
+        "min": 0,
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "每轮结束时将执行过程卡片定格为「已完成」，并另发一张总结卡片提示本轮已结束；关闭后，执行过程卡片的最终状态即为回复内容。",
+        "effect": "next_turn",
+        "group": "cot",
+        "key": "messaging.completion_summary_card",
+        "kind": "bool",
+        "label": "完成总结卡片",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "消息因包含邮箱地址被飞书审核拒发时，将邮箱脱敏为仅保留用户名首字母后重新发送；未被拒发的消息按原样发送。",
+        "effect": "immediate",
+        "group": "cot",
+        "key": "messaging.mask_email",
+        "kind": "bool",
+        "label": "邮箱脱敏重发",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "会话空闲达到该时长后发送提醒卡片，可在卡片上退出会话或保持会话活跃。",
+        "effect": "next_turn",
+        "group": "lifecycle",
+        "key": "messaging.idle_ttl_secs",
+        "kind": "duration_secs",
+        "label": "空闲提醒",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "min": 60,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "会话空闲达到该时长后自动退出，并保留会话恢复记录，下一条消息将恢复原上下文。0 表示不自动退出。",
+        "effect": "next_turn",
+        "group": "lifecycle",
+        "key": "messaging.idle_retire_secs",
+        "kind": "duration_secs",
+        "label": "空闲自动退出",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "min": 0,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "最后一轮由定时任务触发的会话，在该时长内没有新消息时静默退出，不发送提醒卡片。0 表示关闭。",
+        "effect": "next_turn",
+        "group": "lifecycle",
+        "key": "messaging.timer_idle_retire_secs",
+        "kind": "duration_secs",
+        "label": "定时任务会话自动退出",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "min": 0,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "定时任务会话空闲到期时是否重置（开启后 Codex / Cursor / Claude 下次触发时不带历史上下文）",
+        "effect": "next_turn",
+        "group": "lifecycle",
+        "key": "messaging.timer_idle_retire_reset",
+        "kind": "bool",
+        "label": "定时任务会话退出时重置",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "记录各 CLI 的原生会话 id，会话进程退出后，下一条消息将恢复原上下文。agent 可在「运行时」页签中单独覆盖。",
+        "effect": "new_session",
+        "group": "lifecycle",
+        "key": "resume_sessions",
+        "kind": "bool",
+        "label": "会话恢复",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "Codex / Cursor 的轮次连续达到该时长没有任何输出时，判定为无响应并结束该轮次。",
+        "effect": "next_turn",
+        "group": "lifecycle",
+        "key": "messaging.headless_stall_secs",
+        "kind": "duration_secs",
+        "label": "无响应判定",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "轮次结束时仍有后台任务未完成，最多再等待该时长，使其在同一轮次内完成。0 表示不等待。仅对 Claude 生效。",
+        "effect": "next_turn",
+        "group": "lifecycle",
+        "key": "messaging.background_continuation_max_secs",
+        "kind": "duration_secs",
+        "label": "后台任务等待上限",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "min": 0,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "检查各会话是否到达空闲提醒或自动退出时间的间隔。",
+        "effect": "next_turn",
+        "group": "lifecycle",
+        "key": "messaging.idle_scan_secs",
+        "kind": "duration_secs",
+        "label": "空闲扫描间隔",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "Claude 会话中，轮次运行期间到达的消息直接交给 Claude，在下一次工具调用间隙处理，可能与当前问题合并为一次回答。",
+        "effect": "next_turn",
+        "group": "steer",
+        "key": "messaging.steer_transcript",
+        "kind": "bool",
+        "label": "Claude 运行中追加",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "Codex 会话中，轮次运行期间到达的消息将追加到正在运行的轮次。",
+        "effect": "next_turn",
+        "group": "steer",
+        "key": "messaging.steer_rpc",
+        "kind": "bool",
+        "label": "Codex 运行中追加",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "Cursor 使用 CLI 通道时，轮次运行期间到达的消息会中断当前轮次，并在保留会话的前提下携带新消息继续运行。",
+        "effect": "next_turn",
+        "group": "steer",
+        "key": "messaging.steer_cli_session",
+        "kind": "bool",
+        "label": "Cursor CLI 运行中追加",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "处理文档评论并起草回复；草稿由 owner 批准后发布，关闭时停止起草和发布",
+        "effect": "next_turn",
+        "group": "document_comments",
+        "key": "messaging.document_comments_enabled",
+        "kind": "bool",
+        "label": "启用文档评论",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "每次起草的总时限，包含启动、模型推理和读取原文。超时后结束本次任务，不自动重试。默认5分钟。",
+        "effect": "next_turn",
+        "group": "document_comments",
+        "key": "messaging.document_comment_timeout_secs",
+        "kind": "duration_secs",
+        "label": "起草超时",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "是否向 agent 注入「贴语义表情」约定（关闭后不注入该段；不影响 `summon react` 命令与系统自动添加的 OnIt / DONE）",
+        "effect": "new_session",
+        "group": "behavior",
+        "key": "messaging.agent_reactions",
+        "kind": "bool",
+        "label": "语义表情约定",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "是否向 agent 注入「回复末尾写 feed 总结」约定（关闭后会话列表预览取回复正文开头；回复中的标签照常移除）",
+        "effect": "new_session",
+        "group": "behavior",
+        "key": "messaging.agent_feed",
+        "kind": "bool",
+        "label": "feed 总结约定",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "Claude 请求授权或提问时转为飞书卡片，在卡片上作答；关闭后回到终端中的对话框处理。",
+        "effect": "immediate",
+        "group": "behavior",
+        "key": "messaging.claude_permission_hook",
+        "kind": "bool",
+        "label": "Claude 授权请求转为卡片",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "Claude 会话中每轮完成的对话都同步到飞书，包括在终端中直接输入触发的轮次。",
+        "effect": "next_turn",
+        "group": "behavior",
+        "key": "messaging.session_mirror",
+        "kind": "bool",
+        "label": "会话镜像",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "将文件预览、添加表情、发送图片注册为 Codex 的原生工具，模型可直接调用。其中两项会直接向群聊发送内容。",
+        "effect": "new_session",
+        "group": "behavior",
+        "key": "messaging.codex_platform_tools",
+        "kind": "bool",
+        "label": "Codex 平台工具",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "收到消息后立即添加到该消息上的飞书表情键，须在表情安全集（reactions）中。",
+        "effect": "next_turn",
+        "group": "behavior",
+        "key": "messaging.working_reaction",
+        "kind": "string",
+        "label": "处理中表情",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "轮次完成后替换为的飞书表情键。",
+        "effect": "next_turn",
+        "group": "behavior",
+        "key": "messaging.done_reaction",
+        "kind": "string",
+        "label": "完成表情",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "轮次被中断时追加的飞书表情键。",
+        "effect": "next_turn",
+        "group": "behavior",
+        "key": "messaging.interrupted_reaction",
+        "kind": "string",
+        "label": "中断表情",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "agent 选择的表情不在安全集中时，改用此表情。",
+        "effect": "next_turn",
+        "group": "behavior",
+        "key": "messaging.default_reaction",
+        "kind": "string",
+        "label": "备用表情",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "summon 启动的 Claude 会话中是否照常执行你配置的 statusLine 命令。该命令同时承担数据上报时请开启；仅用于显示时可保持关闭，额度与上下文仍会显示在飞书角标上。",
+        "effect": "immediate",
+        "group": "behavior",
+        "key": "claude.status_line_in_managed_sessions",
+        "kind": "bool",
+        "label": "托管会话执行 statusLine",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "键为 CLI（claude / codex / cursor / traex），值为该 CLI 支持的模型 id。未指定的 CLI 使用其自报的默认模型。",
+        "effect": "next_turn",
+        "group": "models",
+        "key": "messaging.default_model_by_cli",
+        "kind": "string_map",
+        "label": "按 CLI 指定默认模型",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "会话面板中可选的推理强度，与各 CLI 支持的取值取交集后显示。",
+        "effect": "next_turn",
+        "group": "models",
+        "key": "messaging.efforts",
+        "kind": "string_list",
+        "label": "推理强度候选",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "总开关，默认关闭。开启前将核验 lark-cli 中登录的是否为你本人的用户身份。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.enabled",
+        "kind": "bool",
+        "label": "启用",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "guarded"
+      },
+      {
+        "description": "只记录命中，不执行拉群、建群等任何对外操作。首次安装或大幅调整后，建议先演练一轮。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.dry_run",
+        "kind": "bool",
+        "label": "演练模式",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "未设置免打扰的活跃会话的扫描间隔。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.fast_interval_secs",
+        "kind": "duration_secs",
+        "label": "快速扫描间隔",
+        "layers": [
+          "global"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "快速通道每次扫描的未设置免打扰活跃会话数量。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.fast_top_k",
+        "kind": "int",
+        "label": "快速通道会话数",
+        "layers": [
+          "global"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "慢速补偿队列刷新与 /summon 全文搜索的间隔。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.interval_secs",
+        "kind": "duration_secs",
+        "label": "慢速补偿间隔",
+        "layers": [
+          "global"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "每个快速扫描周期从慢速补偿队列中取出的会话数。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.slow_batch_size",
+        "kind": "int",
+        "label": "慢速每批会话数",
+        "layers": [
+          "global"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "慢速补偿队列最多容纳的活跃会话数。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.top_k",
+        "kind": "int",
+        "label": "慢速队列上限",
+        "layers": [
+          "global"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "触发消息发出超过该时长后不再处理，防止重启后重放旧消息。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.max_age_secs",
+        "kind": "duration_secs",
+        "label": "触发时效",
+        "layers": [
+          "global"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "每小时自动拉群与建群的合计上限，超出后仅记录并私聊通知你。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.per_hour",
+        "kind": "int",
+        "label": "每小时操作上限",
+        "layers": [
+          "global"
+        ],
+        "min": 0,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "消息以这些词开头时，将 agent 拉入群聊并回答。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.join_verbs",
+        "kind": "string_list",
+        "label": "「进来回答」触发词",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "消息以这些词开头时，新建群聊并将 agent 拉入。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.create_verbs",
+        "kind": "string_list",
+        "label": "「建群」触发词",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "仅将 agent 拉入群聊待命、不启动会话的指令，默认为 /invite。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.invite_verbs",
+        "kind": "string_list",
+        "label": "「仅拉入」触发词",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "这些 chat id 中的消息一律忽略。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.blocklist",
+        "kind": "string_list",
+        "label": "忽略的群聊",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "仅响应此人发送的触发消息。留空时使用「lark-cli 配置名」对应配置中登录的用户。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.owner_open_id",
+        "kind": "string",
+        "label": "你的 open_id",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "登录了你本人用户身份的 lark-cli profile。留空时使用默认 profile；若默认 profile 被改为仅有 Bot 身份，sentinel 将停止工作，建议显式填写。",
+        "effect": "next_poll",
+        "group": "sentinel",
+        "key": "sentinel.lark_profile",
+        "kind": "string",
+        "label": "lark-cli 配置名",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "未设置时为完全访问。只读搭配「从不审批」会导致 agent 无法写入文件，且没有审批途径可以提升权限。",
+        "effect": "new_session",
+        "group": "codex",
+        "key": "codex.sandbox",
+        "kind": "enum",
+        "label": "sandbox",
+        "layers": [
+          "global"
+        ],
+        "options": [
+          {
+            "label": "只读",
+            "value": "read-only"
+          },
+          {
+            "label": "可写工作区",
+            "value": "workspace-write"
+          },
+          {
+            "label": "完全访问",
+            "value": "danger-full-access"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "未设置时为从不审批。改为其他取值后，Codex 的审批请求会暂停当前轮次，等待飞书中的 operator 裁决，无人处理时超时取消。",
+        "effect": "new_session",
+        "group": "codex",
+        "key": "codex.approval_policy",
+        "kind": "enum",
+        "label": "审批策略",
+        "layers": [
+          "global"
+        ],
+        "options": [
+          {
+            "label": "不受信任的命令需审批",
+            "value": "untrusted"
+          },
+          {
+            "label": "模型请求时审批",
+            "value": "on-request"
+          },
+          {
+            "label": "从不审批",
+            "value": "never"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "本机是否向 cursor.com 查询个人额度。仅对开启了额度显示的会话查询。",
+        "effect": "next_poll",
+        "group": "cursor_quota",
+        "key": "cursor.quota.enabled",
+        "kind": "bool",
+        "label": "额度查询",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "同一份登录凭据两次查询的最小间隔，失败也计入。低于 60 秒按 60 秒处理。",
+        "effect": "next_poll",
+        "group": "cursor_quota",
+        "key": "cursor.quota.interval_secs",
+        "kind": "duration_secs",
+        "label": "查询间隔",
+        "layers": [
+          "global"
+        ],
+        "min": 60,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "经 sh -c 执行，输出的第一行即 access token。留空时读取 cursor-agent 自身的登录状态。",
+        "effect": "next_poll",
+        "group": "cursor_quota",
+        "key": "cursor.quota.token_command",
+        "kind": "string",
+        "label": "凭据获取命令",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "将回复中提到的本地文件生成为卡片按钮，点击后在浏览器中查看。",
+        "effect": "restart",
+        "group": "web",
+        "key": "preview_server.enabled",
+        "kind": "bool",
+        "label": "文件预览",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "文件预览、浏览器终端与控制台共用。127.0.0.1 仅限本机访问；如需其他机器访问，请填写 0.0.0.0 并配置对外地址。",
+        "effect": "restart",
+        "group": "web",
+        "key": "preview_server.bind",
+        "kind": "string",
+        "label": "监听地址",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "文件预览的监听端口。",
+        "effect": "restart",
+        "group": "web",
+        "key": "preview_server.port",
+        "kind": "int",
+        "label": "预览端口",
+        "layers": [
+          "global"
+        ],
+        "max": 65535,
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "卡片按钮使用的链接地址，例如 http://10.1.2.3:7765。留空时根据本机可路由地址推断；经过 NAT 或端口转发的机器需手动填写。",
+        "effect": "restart",
+        "group": "web",
+        "key": "preview_server.public_base_url",
+        "kind": "string",
+        "label": "预览对外地址",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "预览链接与控制台链接签发后的有效时长。",
+        "effect": "restart",
+        "group": "web",
+        "key": "preview_server.token_ttl_secs",
+        "kind": "duration_secs",
+        "label": "链接有效期",
+        "layers": [
+          "global"
+        ],
+        "min": 60,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "超过该大小的文件不提供预览。",
+        "effect": "restart",
+        "group": "web",
+        "key": "preview_server.max_file_mb",
+        "kind": "int",
+        "label": "单个文件上限（MB）",
+        "layers": [
+          "global"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "在浏览器中查看或操作 Claude 会话的终端。链接仅私聊发送给有操作权限的人。",
+        "effect": "restart",
+        "group": "web",
+        "key": "web_terminal.enabled",
+        "kind": "bool",
+        "label": "浏览器终端",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "浏览器终端的监听端口。",
+        "effect": "restart",
+        "group": "web",
+        "key": "web_terminal.port",
+        "kind": "int",
+        "label": "终端端口",
+        "layers": [
+          "global"
+        ],
+        "max": 65535,
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "启用本控制台。关闭后 /dash 与本机入口均不可用，daemon 重启后当前链接失效。",
+        "effect": "restart",
+        "group": "web",
+        "key": "dashboard.enabled",
+        "kind": "bool",
+        "label": "控制台",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "控制台的监听端口。修改后需重启 daemon，当前链接将失效。",
+        "effect": "restart",
+        "group": "web",
+        "key": "dashboard.port",
+        "kind": "int",
+        "label": "控制台端口",
+        "layers": [
+          "global"
+        ],
+        "max": 65535,
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "/dash 链接使用的地址。留空时取文件预览的对外主机，端口替换为控制台端口。",
+        "effect": "restart",
+        "group": "web",
+        "key": "dashboard.public_base_url",
+        "kind": "string",
+        "label": "控制台对外地址",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.tmux",
+        "kind": "path",
+        "label": "tmux",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.lark_cli",
+        "kind": "path",
+        "label": "lark-cli",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.claude",
+        "kind": "path",
+        "label": "claude",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.codex",
+        "kind": "path",
+        "label": "codex",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.traex",
+        "kind": "path",
+        "label": "traex",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.cursor_agent",
+        "kind": "path",
+        "label": "cursor-agent",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.git",
+        "kind": "path",
+        "label": "git",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.ssh",
+        "kind": "path",
+        "label": "ssh",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.npx",
+        "kind": "path",
+        "label": "npx",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.pkill",
+        "kind": "path",
+        "label": "pkill",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.open",
+        "kind": "path",
+        "label": "open",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.xdg_open",
+        "kind": "path",
+        "label": "xdg-open",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.launchctl",
+        "kind": "path",
+        "label": "launchctl",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.systemctl",
+        "kind": "path",
+        "label": "systemctl",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.loginctl",
+        "kind": "path",
+        "label": "loginctl",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.pbcopy",
+        "kind": "path",
+        "label": "pbcopy",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可执行文件的绝对路径（支持 ~/）。留空时按命令名在 PATH 中查找。",
+        "effect": "next_turn",
+        "group": "tools",
+        "key": "tools.osascript",
+        "kind": "path",
+        "label": "osascript",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "在 summon 图标旁显示运行中与待回复的会话数；关闭后仅显示图标，计数仍可在悬停提示中查看。",
+        "effect": "immediate",
+        "group": "menubar",
+        "key": "menubar.show_counts",
+        "kind": "bool",
+        "label": "状态栏计数",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "状态栏中 summon 的图标。",
+        "effect": "immediate",
+        "group": "menubar",
+        "key": "menubar.icon",
+        "kind": "enum",
+        "label": "图标",
+        "layers": [
+          "global"
+        ],
+        "options": [
+          {
+            "label": "超量召唤",
+            "value": "xyz"
+          },
+          {
+            "label": "千年眼",
+            "value": "millennium-eye"
+          },
+          {
+            "label": "连接召唤",
+            "value": "link"
+          },
+          {
+            "label": "同调召唤",
+            "value": "synchro"
+          },
+          {
+            "label": "怪兽卡",
+            "value": "card"
+          },
+          {
+            "label": "融合召唤",
+            "value": "fusion"
+          },
+          {
+            "label": "环与四芒星",
+            "value": "ring-star"
+          },
+          {
+            "label": "六边形与四芒星",
+            "value": "hex-star"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "在终端中打开会话时使用的命令模板，按参数逐项填写，{cmd} 与 {title} 为占位符；留空时使用系统自带的终端。",
+        "effect": "immediate",
+        "group": "menubar",
+        "key": "menubar.terminal",
+        "kind": "string_list",
+        "label": "打开会话使用的终端",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "洞察页的「分析」使用哪个 agent 的 CLI、模型与账号运行。未指定时自动选择：近 30 天 token 用量最多的 agent；尚无用量时，取最早配置的 agent。",
+        "effect": "immediate",
+        "group": "insights",
+        "key": "primary_agent",
+        "kind": "string",
+        "label": "主 agent",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "guarded"
+      },
+      {
+        "description": "各 agent 自我认知目录的上级目录。",
+        "effect": "restart",
+        "group": "advanced",
+        "key": "agents_dir",
+        "kind": "path",
+        "label": "agents 目录",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "飞书开放平台的域名，例如 feishu.cn；海外版 Lark 请填写 larksuite.com。",
+        "effect": "restart",
+        "group": "advanced",
+        "key": "default_domain",
+        "kind": "string",
+        "label": "飞书域名",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "daemon 轮询会话输出的间隔。",
+        "effect": "restart",
+        "group": "advanced",
+        "key": "poll_ms",
+        "kind": "int",
+        "label": "轮询间隔（毫秒）",
+        "layers": [
+          "global"
+        ],
+        "min": 10,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "输出停顿达到该时长后视为一段输出结束。",
+        "effect": "restart",
+        "group": "advanced",
+        "key": "debounce_ms",
+        "kind": "int",
+        "label": "防抖间隔（毫秒）",
+        "layers": [
+          "global"
+        ],
+        "min": 0,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "飞书长连接进程（summon-sidecar）的路径。留空时不启动该进程，将无法接收飞书消息。",
+        "effect": "restart",
+        "group": "advanced",
+        "key": "sidecar_bin",
+        "kind": "path",
+        "label": "sidecar 路径",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "agent.yaml 中的 name，与飞书身份绑定；如需修改，请重新运行 summon bind。",
+        "effect": "restart",
+        "group": "agent_identity",
+        "key": "name",
+        "kind": "string",
+        "label": "名称",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "readonly"
+      },
+      {
+        "description": "卡片与列表中显示的名称。",
+        "effect": "next_turn",
+        "group": "agent_identity",
+        "key": "display",
+        "kind": "string",
+        "label": "显示名称",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "agent.yaml 中的 status，仅 active 会上线。临时停用请使用上方的启用开关。",
+        "effect": "restart",
+        "group": "agent_identity",
+        "key": "status",
+        "kind": "string",
+        "label": "状态",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "readonly"
+      },
+      {
+        "description": "agent 负责处理任务；管家只处理 fleet 管理命令，不启动会话。",
+        "effect": "restart",
+        "group": "agent_identity",
+        "key": "role",
+        "kind": "enum",
+        "label": "角色",
+        "layers": [
+          "agent"
+        ],
+        "options": [
+          {
+            "label": "agent",
+            "value": "agent"
+          },
+          {
+            "label": "管家",
+            "value": "steward"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "readonly"
+      },
+      {
+        "description": "飞书 App ID 所在的环境变量名。变量值保存在 agent 目录的 .env 中，此处不显示。",
+        "effect": "restart",
+        "group": "agent_identity",
+        "key": "feishu.app_id_env",
+        "kind": "string",
+        "label": "App ID 变量名",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "readonly"
+      },
+      {
+        "description": "飞书 App Secret 所在的环境变量名。变量值保存在 agent 目录的 .env 中，此处不显示。",
+        "effect": "restart",
+        "group": "agent_identity",
+        "key": "feishu.app_secret_env",
+        "kind": "string",
+        "label": "App Secret 变量名",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "readonly"
+      },
+      {
+        "description": "绑定时登记的飞书应用权限范围。",
+        "effect": "restart",
+        "group": "agent_identity",
+        "key": "feishu.scope",
+        "kind": "string",
+        "label": "应用权限范围",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "readonly"
+      },
+      {
+        "description": "该 agent 使用的 CLI。更换 CLI 相当于更换一条上下文。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "runtime.cli",
+        "kind": "enum",
+        "label": "CLI",
+        "layers": [
+          "agent"
+        ],
+        "options": [
+          {
+            "label": "Claude Code",
+            "value": "claude"
+          },
+          {
+            "label": "Codex",
+            "value": "codex"
+          },
+          {
+            "label": "Cursor",
+            "value": "cursor"
+          },
+          {
+            "label": "traex",
+            "value": "traex"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "仅对 Cursor 生效。两条通道的会话 id 不互通，切换相当于更换一条上下文。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "runtime.capture",
+        "kind": "enum",
+        "label": "Cursor 捕获方式",
+        "layers": [
+          "agent"
+        ],
+        "options": [
+          {
+            "label": "ACP 常驻进程",
+            "value": "rpc"
+          },
+          {
+            "label": "CLI 会话",
+            "value": "cli"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "传给 CLI 的模型 id，候选来自该 CLI 的模型目录。Claude 会话中即时切换，Codex / Cursor 从下一条消息开始生效。",
+        "effect": "next_turn",
+        "group": "agent_runtime",
+        "key": "model",
+        "kind": "string",
+        "label": "模型",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "guarded"
+      },
+      {
+        "description": "Claude / Codex 的推理强度；Cursor 的推理强度已包含在模型名中，没有此项。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "effort",
+        "kind": "string",
+        "label": "推理强度",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "guarded"
+      },
+      {
+        "description": "仅对 Codex 生效：是否输出思考摘要。未设置时沿用 ~/.codex/config.toml，仍未设置则使用 detailed。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "reasoning_summary",
+        "kind": "enum",
+        "label": "思考摘要",
+        "layers": [
+          "agent"
+        ],
+        "options": [
+          {
+            "label": "不输出",
+            "value": "none"
+          },
+          {
+            "label": "简要",
+            "value": "concise"
+          },
+          {
+            "label": "自动",
+            "value": "auto"
+          },
+          {
+            "label": "详细",
+            "value": "detailed"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "会话启动时所在的目录，支持 ~/。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "runtime.working_dir",
+        "kind": "path",
+        "label": "工作目录",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "键为 chat id，值为目录。优先级：群聊中 /cd 设置的目录 > 此处 > 工作目录。有运行中会话的群聊不能修改。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "runtime.chat_working_dirs",
+        "kind": "string_map",
+        "label": "按群聊工作目录",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "guarded"
+      },
+      {
+        "description": "覆盖整机的会话恢复设置：会话进程退出后，下一条消息是否恢复原上下文。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "runtime.resume",
+        "kind": "bool",
+        "label": "会话恢复",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "启动 CLI 时额外注入的环境变量。值可写成 ${VAR}，从 agent 目录的 .env 中读取；直接填写的值不在页面上显示。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "runtime.env",
+        "kind": "string_map",
+        "label": "环境变量",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": true,
+        "write": "form"
+      },
+      {
+        "description": "替换默认的 CLI 可执行命令，例如指向另一个账号的包装脚本。留空时使用该 CLI 的默认命令。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "runtime.cli_cmd",
+        "kind": "string",
+        "label": "CLI 命令",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "仅对 Codex / traex 生效：启动时传入的上下文窗口 token 数。留空时使用 CLI 自身的配置。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "runtime.model_context_window",
+        "kind": "int",
+        "label": "上下文窗口",
+        "layers": [
+          "agent"
+        ],
+        "min": 1,
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "仅对 Codex 生效：允许在非 Git 仓库的目录中运行。",
+        "effect": "new_session",
+        "group": "agent_runtime",
+        "key": "runtime.codex_skip_git_repo_check",
+        "kind": "bool",
+        "label": "允许非 Git 目录",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "仅对 Cursor 生效：获取本 agent 额度凭据的命令。配置后以此为准，不使用整机设置。",
+        "effect": "next_poll",
+        "group": "agent_runtime",
+        "key": "runtime.cursor_quota_token_command",
+        "kind": "string",
+        "label": "Cursor 额度凭据命令",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "tmux 会话名的前缀。修改后将无法找到已有会话，因此此处仅显示。",
+        "effect": "restart",
+        "group": "agent_runtime",
+        "key": "runtime.tmux_name",
+        "kind": "string",
+        "label": "tmux 会话名前缀",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "readonly"
+      },
+      {
+        "description": "覆盖整机的 Codex sandbox。",
+        "effect": "new_session",
+        "group": "agent_codex",
+        "key": "runtime.codex_sandbox",
+        "kind": "enum",
+        "label": "sandbox",
+        "layers": [
+          "agent"
+        ],
+        "options": [
+          {
+            "label": "只读",
+            "value": "read-only"
+          },
+          {
+            "label": "可写工作区",
+            "value": "workspace-write"
+          },
+          {
+            "label": "完全访问",
+            "value": "danger-full-access"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "覆盖整机的 Codex 审批策略。",
+        "effect": "new_session",
+        "group": "agent_codex",
+        "key": "runtime.codex_approval_policy",
+        "kind": "enum",
+        "label": "审批策略",
+        "layers": [
+          "agent"
+        ],
+        "options": [
+          {
+            "label": "不受信任的命令需审批",
+            "value": "untrusted"
+          },
+          {
+            "label": "模型请求时审批",
+            "value": "on-request"
+          },
+          {
+            "label": "从不审批",
+            "value": "never"
+          }
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "可让 agent 回应的成员，留空表示所有人。填写 union_id（on_ 开头）或 open_id（ou_ 开头）；跨 agent 识别成员时仅认 union_id。",
+        "effect": "immediate",
+        "group": "agent_permissions",
+        "key": "feishu.allowed_users",
+        "kind": "string_list",
+        "label": "对话名单",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "guarded"
+      },
+      {
+        "description": "可执行清理会话、修改配置等操作的成员。agent 未配置时继承整机名单；显式空名单沿用该 agent 的对话名单。跨 agent 请填写 union_id（on_ 开头）。",
+        "effect": "immediate",
+        "group": "agent_permissions",
+        "key": "feishu.operators",
+        "kind": "string_list",
+        "label": "操作名单",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "guarded"
+      },
+      {
+        "description": "open_id → 昵称。agent 用昵称称呼发送消息的人。",
+        "effect": "next_turn",
+        "group": "agent_permissions",
+        "key": "aliases",
+        "kind": "string_map",
+        "label": "称呼",
+        "layers": [
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      }
+    ],
+    "groups": [
+      {
+        "description": "回复卡片与执行过程（CoT）在飞书中的显示方式。",
+        "id": "cot",
+        "label": "飞书执行过程展示",
+        "section": "messaging"
+      },
+      {
+        "description": "会话空闲提醒与自动退出的时限，以及无响应判定与后台任务等待的上限。",
+        "id": "lifecycle",
+        "label": "会话生命周期",
+        "section": "messaging"
+      },
+      {
+        "description": "轮次运行期间收到新消息时，是否直接交给正在运行的 CLI。三种捕获方式各有一个开关，出现问题时可单独关闭其中一项。",
+        "id": "steer",
+        "label": "运行中追加消息",
+        "section": "messaging"
+      },
+      {
+        "description": "评论回复的起草开关与总时限。",
+        "id": "document_comments",
+        "label": "文档评论",
+        "section": "messaging"
+      },
+      {
+        "description": "向 agent 注入的约定、表情设置，以及若干会话能力。",
+        "id": "behavior",
+        "label": "agent 行为",
+        "section": "messaging"
+      },
+      {
+        "description": "默认模型与会话面板中的推理强度候选。各 CLI 的模型候选列表（models_by_cli）请在 YAML 模式中编辑。",
+        "id": "models",
+        "label": "模型",
+        "section": "messaging"
+      },
+      {
+        "description": "以你本人的飞书身份轮询会话，可在任意群聊中召唤 agent。开启前将核验身份。",
+        "id": "sentinel",
+        "label": "Sentinel",
+        "section": "system"
+      },
+      {
+        "description": "Codex 托管会话的 sandbox 与审批策略，二者共同构成同一条执行策略。agent 可在「运行时」页签中单独覆盖。",
+        "id": "codex",
+        "label": "Codex 策略",
+        "section": "system"
+      },
+      {
+        "description": "飞书角标中「quota N%」的数据来源。仅查询开启了额度显示的会话。",
+        "id": "cursor_quota",
+        "label": "Cursor 额度",
+        "section": "system"
+      },
+      {
+        "description": "文件预览、浏览器终端与控制台的监听设置。均在 daemon 启动时读取，修改后需重启 daemon。",
+        "id": "web",
+        "label": "网页服务",
+        "section": "system"
+      },
+      {
+        "description": "summon 调用的外部命令的绝对路径。留空时按命令名在 PATH 中查找。",
+        "id": "tools",
+        "label": "外部工具",
+        "section": "system"
+      },
+      {
+        "description": "macOS 状态栏。",
+        "id": "menubar",
+        "label": "Menu Bar",
+        "section": "system"
+      },
+      {
+        "description": "控制台洞察页的分析设置，修改后立即生效。",
+        "id": "insights",
+        "label": "洞察",
+        "section": "system"
+      },
+      {
+        "description": "启动参数，修改后需重启 daemon。",
+        "id": "advanced",
+        "label": "高级",
+        "section": "system"
+      },
+      {
+        "description": "agent 的名称与飞书身份。更换飞书凭据请在本机运行 summon bind。",
+        "id": "agent_identity",
+        "label": "概要",
+        "section": "identity"
+      },
+      {
+        "description": "agent 使用的 CLI、模型与工作目录。多数设置从下一个会话开始生效。",
+        "id": "agent_runtime",
+        "label": "运行时",
+        "section": "runtime"
+      },
+      {
+        "description": "仅对 Codex / traex 生效。未设置时沿用整机的 Codex 策略。",
+        "id": "agent_codex",
+        "label": "Codex 策略覆盖",
+        "section": "runtime"
+      },
+      {
+        "description": "整机操作名单可由各 agent 继承；agent 可覆盖操作名单并设置对话名单。按群名单请在「群聊」页编辑。",
+        "id": "agent_permissions",
+        "label": "权限名单",
+        "section": "permissions"
+      }
+    ]
+  },
+  "params": {}
+}

@@ -1,0 +1,27 @@
+name: {{alias}}
+display: "{{display}}"
+status: {{status}}
+{{model_line}}{{effort_line}}# Role: {{role}}
+
+feishu:
+  app_id_env: {{id_env}}
+  app_secret_env: {{secret_env}}
+  scope: thread
+  allowed_users: []   # Who may talk; empty allows all. Restrict after verification.
+  # operators: []     # Unset inherits machine list; empty falls back to allowed_users. Use union_id across apps.
+  # chat_operators:   # Per-chat operators, unioned with operators.
+  #   oc_xxx: []
+
+runtime:
+  working_dir: "{{workspace}}"
+  tmux_name: soul-{{alias}}
+  cli: {{cli}}
+  # codex_skip_git_repo_check: true  # Explicitly allow multi-repository directories.
+
+cognition:
+  history_lookback_days: 2
+  writeback: propose
+
+# Optional per-agent messaging overrides (defaults in ~/.summon/config.yaml / built-in messaging.default.yaml).
+# messaging:
+#   prompt_template: "{source}: {text}"

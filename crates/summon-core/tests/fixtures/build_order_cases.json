@@ -1,0 +1,74 @@
+[
+  {
+    "name": "版本号高的更新,不看提交时间",
+    "a": { "version": "0.6.10", "commit": "aaaaaaa", "commit_time": 100 },
+    "b": { "version": "0.6.9", "commit": "bbbbbbb", "commit_time": 200 },
+    "expect": "newer"
+  },
+  {
+    "name": "版本号按数值比,不按字符串比",
+    "a": { "version": "0.10.0", "commit": "aaaaaaa", "commit_time": 100 },
+    "b": { "version": "0.9.12", "commit": "bbbbbbb", "commit_time": 100 },
+    "expect": "newer"
+  },
+  {
+    "name": "主版本号优先于次版本号",
+    "a": { "version": "1.0.0", "commit": "unknown", "commit_time": null },
+    "b": { "version": "0.99.99", "commit": "bbbbbbb", "commit_time": 999 },
+    "expect": "newer"
+  },
+  {
+    "name": "同号同提交是同一份,提交时间缺一边也一样",
+    "a": { "version": "0.6.9", "commit": "48698ad7", "commit_time": 1760000000 },
+    "b": { "version": "0.6.9", "commit": "48698ad7", "commit_time": null },
+    "expect": "same"
+  },
+  {
+    "name": "短 sha 长度不同(7 位与 8 位)仍是同一个提交",
+    "a": { "version": "0.6.9", "commit": "48698ad", "commit_time": 1760000000 },
+    "b": { "version": "0.6.9", "commit": "48698ad7", "commit_time": 1760000000 },
+    "expect": "same"
+  },
+  {
+    "name": "同号不同提交,提交时间晚的更新",
+    "a": { "version": "0.6.9", "commit": "48698ad7", "commit_time": 1760600000 },
+    "b": { "version": "0.6.9", "commit": "a5b51aca", "commit_time": 1760500000 },
+    "expect": "newer"
+  },
+  {
+    "name": "同号不同提交,一边没有提交时间就判不出",
+    "a": { "version": "0.6.9", "commit": "48698ad7", "commit_time": 1760600000 },
+    "b": { "version": "0.6.9", "commit": "a5b51aca", "commit_time": null },
+    "expect": "unknown"
+  },
+  {
+    "name": "同号不同提交、同一秒提交,判不出",
+    "a": { "version": "0.6.9", "commit": "48698ad7", "commit_time": 1760600000 },
+    "b": { "version": "0.6.9", "commit": "a5b51aca", "commit_time": 1760600000 },
+    "expect": "unknown"
+  },
+  {
+    "name": "两个 unknown 不是同一个提交",
+    "a": { "version": "0.6.9", "commit": "unknown", "commit_time": null },
+    "b": { "version": "0.6.9", "commit": "unknown", "commit_time": null },
+    "expect": "unknown"
+  },
+  {
+    "name": "过短的 sha 不按前缀认",
+    "a": { "version": "0.6.9", "commit": "4869", "commit_time": null },
+    "b": { "version": "0.6.9", "commit": "48698ad7", "commit_time": null },
+    "expect": "unknown"
+  },
+  {
+    "name": "版本号不是纯 x.y.z 就判不出",
+    "a": { "version": "0.7.0-rc.1", "commit": "aaaaaaa", "commit_time": 100 },
+    "b": { "version": "0.6.9", "commit": "bbbbbbb", "commit_time": 200 },
+    "expect": "unknown"
+  },
+  {
+    "name": "版本号读不出就判不出",
+    "a": { "version": "unknown", "commit": "aaaaaaa", "commit_time": 100 },
+    "b": { "version": "0.6.9", "commit": "bbbbbbb", "commit_time": 200 },
+    "expect": "unknown"
+  }
+]

@@ -1,0 +1,8 @@
+name: coder
+display: Coder
+status: active
+feishu:
+  app_id_env: FEISHU_CODER_APP_ID
+runtime:
+  working_dir: "~/code"
+  cli: codex

@@ -1,0 +1,3 @@
+{"op":"StreamBeginCard","chat_id":"oc_replay","card_json":"","id":1}
+{"op":"StreamPatch","id":1,"content":""}
+{"op":"SendMessage","chat_id":"oc_replay","body":"pong"}

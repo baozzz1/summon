@@ -1,0 +1,45 @@
+{
+  "data": [
+    {
+      "detail": "mapping values are not allowed in this context at line 4 column 10",
+      "fix": "请在其 YAML 模式中修复。修复之前该 agent 不会上线，其他 agent 不受影响",
+      "link": {
+        "agent": "saturn",
+        "page": "agent"
+      },
+      "severity": "error",
+      "title": "saturn 的 agent.yaml 读取失败"
+    },
+    {
+      "detail": "监听地址为 127.0.0.1，对外地址却为 http://10.0.0.8:7765，链接指向的地址未在监听",
+      "fix": "将监听地址（preview_server.bind）改为 0.0.0.0，并重启 daemon",
+      "link": {
+        "key": "preview_server.bind",
+        "page": "global"
+      },
+      "severity": "warn",
+      "title": "文件预览链接无法打开"
+    },
+    {
+      "detail": "终端沿用 preview_server.bind = 127.0.0.1，手机与其他机器无法打开链接",
+      "fix": "将监听地址（preview_server.bind）改为 0.0.0.0，并重启 daemon",
+      "link": {
+        "key": "preview_server.bind",
+        "page": "global"
+      },
+      "severity": "warn",
+      "title": "浏览器终端仅能在本机打开"
+    },
+    {
+      "detail": "仅监听回环地址且未配置控制台对外地址，/dash 无法生成链接（本机 summon dashboard open 不受影响）",
+      "fix": "将监听地址（preview_server.bind）改为 0.0.0.0，或配置控制台对外地址（dashboard.public_base_url），然后重启 daemon",
+      "link": {
+        "key": "preview_server.bind",
+        "page": "global"
+      },
+      "severity": "warn",
+      "title": "控制台仅能在本机打开"
+    }
+  ],
+  "params": {}
+}

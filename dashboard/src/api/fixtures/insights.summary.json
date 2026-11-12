@@ -1,0 +1,185 @@
+{
+  "data": {
+    "agent_turns": {
+      "n": 6,
+      "p50_secs": 300.0,
+      "p75_secs": 300.0,
+      "p90_secs": 360.0,
+      "total_secs": 1740.0
+    },
+    "agents": 1,
+    "buckets": [
+      {
+        "count": 0,
+        "key": "lt_1m",
+        "secs": 0.0
+      },
+      {
+        "count": 1,
+        "key": "m1_5",
+        "secs": 60.0
+      },
+      {
+        "count": 0,
+        "key": "m5_15",
+        "secs": 0.0
+      },
+      {
+        "count": 1,
+        "key": "m15_60",
+        "secs": 1800.0
+      },
+      {
+        "count": 2,
+        "key": "h1_4",
+        "secs": 11100.0
+      },
+      {
+        "count": 0,
+        "key": "gte_4h",
+        "secs": 0.0
+      }
+    ],
+    "chats": 2,
+    "day_end_hour": 22,
+    "day_start_hour": 9,
+    "days": [
+      {
+        "chats": 0,
+        "date": "2026-10-14",
+        "messages": 0,
+        "weekday": 3
+      },
+      {
+        "chats": 0,
+        "date": "2026-10-15",
+        "messages": 0,
+        "weekday": 4
+      },
+      {
+        "chats": 0,
+        "date": "2026-10-16",
+        "messages": 0,
+        "weekday": 5
+      },
+      {
+        "chats": 0,
+        "date": "2026-10-17",
+        "messages": 0,
+        "weekday": 6
+      },
+      {
+        "chats": 0,
+        "date": "2026-10-18",
+        "messages": 0,
+        "weekday": 7
+      },
+      {
+        "chats": 2,
+        "date": "2026-10-19",
+        "messages": 6,
+        "weekday": 1
+      },
+      {
+        "chats": 0,
+        "date": "2026-10-20",
+        "messages": 0,
+        "weekday": 2
+      }
+    ],
+    "elsewhere": [
+      {
+        "active_elsewhere": 1,
+        "count": 1,
+        "elsewhere_messages_p50": 1.0,
+        "key": "m15_60",
+        "secs": 1800.0
+      },
+      {
+        "active_elsewhere": 2,
+        "count": 2,
+        "elsewhere_messages_p50": 1.0,
+        "key": "h1_4",
+        "secs": 11100.0
+      },
+      {
+        "active_elsewhere": 0,
+        "count": 0,
+        "elsewhere_messages_p50": 0.0,
+        "key": "gte_4h",
+        "secs": 0.0
+      }
+    ],
+    "findings": [
+      {
+        "key": "sample_small",
+        "params": {
+          "n": 4.0
+        }
+      }
+    ],
+    "from": "2026-10-14",
+    "gaps": {
+      "n": 4,
+      "p50_secs": 2850.0,
+      "p75_secs": 4725.0,
+      "p90_secs": 6210.0,
+      "total_secs": 12960.0
+    },
+    "gaps_including_overnight": 4,
+    "human_turns": 6,
+    "long_gaps": 3,
+    "long_gaps_silent": 0,
+    "next_messages": [
+      {
+        "count": 1,
+        "key": "instruction",
+        "p50_secs": 7200.0,
+        "p90_secs": 7200.0
+      },
+      {
+        "count": 0,
+        "key": "short",
+        "p50_secs": 0.0,
+        "p90_secs": 0.0
+      },
+      {
+        "count": 2,
+        "key": "approve",
+        "p50_secs": 1980.0,
+        "p90_secs": 3516.0
+      },
+      {
+        "count": 1,
+        "key": "poll",
+        "p50_secs": 1800.0,
+        "p90_secs": 1800.0
+      }
+    ],
+    "previous": {
+      "gaps": {
+        "n": 0,
+        "p50_secs": 0.0,
+        "p75_secs": 0.0,
+        "p90_secs": 0.0,
+        "total_secs": 0.0
+      },
+      "over_15m_count_share": 0.0,
+      "over_15m_secs_share": 0.0
+    },
+    "queued": 0,
+    "range": "7d",
+    "to": "2026-10-20",
+    "turns": 6,
+    "workdays": {
+      "chats_p50": 2.0,
+      "chats_p90": 2.0,
+      "days": 1,
+      "messages_p50": 6.0,
+      "messages_p90": 6.0
+    }
+  },
+  "params": {
+    "range": "7d"
+  }
+}

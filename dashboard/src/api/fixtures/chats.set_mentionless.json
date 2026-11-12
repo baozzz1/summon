@@ -1,0 +1,12 @@
+{
+  "data": {
+    "job": "5f0c1e2d3b4a59687766554433221100",
+    "message": "核验中：正在检查应用权限、群成员与你的操作权限",
+    "status": "pending"
+  },
+  "params": {
+    "agent": "starlight",
+    "chat_id": "oc_00000000000000000000000000000001",
+    "enabled": true
+  }
+}

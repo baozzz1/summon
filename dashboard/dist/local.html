@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="same-origin" />
+    <title>summon 控制台 · 本机打开</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon-BRqXXesq.svg" />
+    <script type="module" crossorigin src="/assets/local-CkQ2AqJV.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/i18n-YIZ94PuL.js">
+    <link rel="stylesheet" crossorigin href="/assets/standalone-ChkrDXgE.css">
+  </head>
+  <body>
+    <main class="centered">
+      <div class="notice">
+        <svg class="brand-mark" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M6.419 2.316 A5.9 5.9 0 0 1 13.684 9.581 M9.581 13.684 A5.9 5.9 0 0 1 2.316 6.419" fill="none" stroke="currentColor" stroke-width="1.9"/>
+          <circle cx="8" cy="8" r="3" fill="currentColor"/>
+          <circle cx="3.828" cy="3.828" r="1.9" fill="currentColor"/>
+          <circle cx="12.172" cy="12.172" r="1.9" fill="currentColor"/>
+        </svg>
+        <h1 id="status">进入 summon 控制台</h1>
+        <p id="hint">这是本机签发的一次性链接,60 秒内有效,只能用一次。</p>
+        <!-- 不带 JS 也能用:表单 POST 回同一地址消耗本机码,成功后服务端 303 跳到 / -->
+        <form method="post" id="enter" class="enter">
+          <button class="btn-primary" type="submit" id="enter-btn">进入控制台</button>
+        </form>
+      </div>
+    </main>
+  </body>
+</html>

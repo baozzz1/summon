@@ -1,0 +1,8 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/tmp","session_id":"ms-1","model":"Opus 4.8 (Thinking) 1M High","permissionMode":"default"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"AA"}]},"session_id":"ms-1","timestamp_ms":1}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"BB"}]},"session_id":"ms-1","timestamp_ms":2}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"AABB"}]},"session_id":"ms-1","timestamp_ms":3}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"CC"}]},"session_id":"ms-1","timestamp_ms":4}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"DD"}]},"session_id":"ms-1","timestamp_ms":5}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"CCDD"}]},"session_id":"ms-1"}
+{"type":"result","subtype":"success","duration_ms":100,"is_error":false,"result":"AABBCCDD","session_id":"ms-1","usage":{"inputTokens":2,"outputTokens":4,"cacheReadTokens":0,"cacheWriteTokens":1}}

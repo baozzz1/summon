@@ -1,0 +1,1 @@
+/* empty css                   */var e=document.getElementById(`enter`),t=document.getElementById(`enter-btn`);e?.addEventListener(`submit`,()=>{t&&(t.disabled=!0)}),e&&/^\/l\/[0-9a-f]{32}\/?$/.test(location.pathname)&&e.requestSubmit();

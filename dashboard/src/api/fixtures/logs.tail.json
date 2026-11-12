@@ -1,0 +1,22 @@
+{
+  "data": {
+    "before": "1:0",
+    "entries": [
+      {
+        "at": "2026-10-21T09:30:00+08:00",
+        "error": false,
+        "text": "[2026-10-20 14:31:40] [summon] [starlight] 本轮完成"
+      },
+      {
+        "at": "2026-10-21T09:30:00+08:00",
+        "error": true,
+        "text": "[2026-10-20 14:31:02] [summon] [starlight] 投递失败(将重试):timeout"
+      }
+    ],
+    "file": "daemon"
+  },
+  "params": {
+    "file": "daemon",
+    "limit": 2
+  }
+}

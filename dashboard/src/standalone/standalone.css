@@ -1,0 +1,84 @@
+@import "../styles/tokens.css";
+@import "../styles/base.css";
+
+/* 远程链接与本机码的落地页:不加载控制台本体,只要居中的一段提示。 */
+
+.centered {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: var(--s-6);
+}
+
+.notice {
+  max-width: 400px;
+  text-align: center;
+}
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  margin-bottom: var(--s-5);
+  color: var(--text);
+}
+
+.notice h1 {
+  margin-bottom: var(--s-2);
+}
+
+.notice p {
+  color: var(--text-2);
+}
+
+.notice .hint {
+  margin-top: var(--s-4);
+  color: var(--muted);
+  font-size: var(--fz-13);
+}
+
+.notice.is-bad h1 {
+  color: var(--danger);
+}
+
+.spin {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.enter {
+  margin-top: var(--s-6);
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 var(--s-5);
+  border-radius: var(--r-control);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font-weight: var(--fw-medium);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-fill-hover);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+}

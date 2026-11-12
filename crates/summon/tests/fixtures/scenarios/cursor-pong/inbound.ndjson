@@ -1,0 +1,1 @@
+{"kind":"Message","app_id":"cli_app_replay","inbound":{"chat_id":"oc_replay","chat_type":"p2p","text":"ping","sender":"ou_alice","sender_union_id":"on_alice","message_id":"om_replay_1","parent_id":null,"mentions":[],"resources":[]}}

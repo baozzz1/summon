@@ -1,0 +1,19 @@
+{
+  "data": {
+    "editable": true,
+    "effect": "new_session",
+    "exists": true,
+    "path": "~/.summon/agents/starlight/chats/oc_00000000000000000000000000000001/CLAUDE.md",
+    "revision": "314aa8437a6f01e7",
+    "text": "本群只谈 CI、发布与值班。\n"
+  },
+  "params": {
+    "doc": {
+      "agent": "starlight",
+      "chat_id": "oc_00000000000000000000000000000001",
+      "level": "chat"
+    },
+    "revision": "c5e5b64f46acfec7",
+    "text": "本群只谈 CI、发布与值班。\n"
+  }
+}

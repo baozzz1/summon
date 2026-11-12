@@ -1,0 +1,1 @@
+import{a as e}from"./i18n-YIZ94PuL.js";/* empty css                   */var t=document.getElementById(`enter`),n=document.getElementById(`enter-btn`),r=document.getElementById(`status`);t?.addEventListener(`submit`,()=>{n&&(n.disabled=!0),r&&(r.textContent=e(`d8f0c12`))}),t&&/^\/local\/[A-Za-z0-9_-]{8,256}\/?$/.test(location.pathname)&&t.requestSubmit();

@@ -1,0 +1,18 @@
+{
+  "data": {
+    "diff": "--- a/config.yaml\n+++ b/config.yaml\n@@ -1,4 +1,2 @@\n-# 整机配置\n messaging:\n-  cot_visible: true  # 显示过程\n-  idle_retire_secs: 21600\n+  cot_visable: false\n",
+    "errors": [],
+    "warnings": [
+      {
+        "key": "messaging.cot_visable",
+        "line": 2,
+        "message": "未知键 `messaging.cot_visable`，daemon 将忽略此项",
+        "suggestion": "messaging.cot_visible"
+      }
+    ]
+  },
+  "params": {
+    "file": "global",
+    "text": "messaging:\n  cot_visable: false\n"
+  }
+}

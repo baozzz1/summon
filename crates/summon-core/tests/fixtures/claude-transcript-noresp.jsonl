@@ -1,0 +1,7 @@
+{"type":"queue-operation","operation":"enqueue","sessionId":"sid-y","timestamp":"2026-06-03T00:00:00Z"}
+{"type":"user","sessionId":"sid-y","message":{"role":"user","content":[{"type":"text","text":"在群里 老板 @你:「1 加 22 等于几」"}]}}
+{"type":"assistant","sessionId":"sid-y","message":{"id":"msg_1","role":"assistant","model":"claude","stop_reason":"stop_sequence","content":[{"type":"text","text":"No response requested."}]}}
+{"type":"assistant","sessionId":"sid-y","message":{"id":"msg_2","role":"assistant","model":"claude","stop_reason":"tool_use","content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"echo $((1+22))"}}]}}
+{"type":"file-history-snapshot","sessionId":"sid-y","messageId":"msg_2"}
+{"type":"user","sessionId":"sid-y","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"23"}]}}
+{"type":"assistant","sessionId":"sid-y","message":{"id":"msg_3","role":"assistant","model":"claude","stop_reason":"end_turn","content":[{"type":"text","text":"23"}]}}

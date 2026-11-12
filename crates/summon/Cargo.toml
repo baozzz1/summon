@@ -1,0 +1,45 @@
+[package]
+name = "summon"
+version = "0.6.45"
+edition = "2021"
+description = "本地常驻 CLI:把 agent 自我认知接到飞书 app + tmux(多 CLI 飞书往返 / 定时器 / 记忆分层 / Bridge)"
+repository = "https://github.com/baozzz1/summon"
+keywords = ["feishu", "agent", "tmux", "cli", "daemon"]
+categories = ["command-line-utilities"]
+# 发布是对外动作、且 license/crate 名待 owner 定 —— 先设 publish=false 防误发(owner 解禁见
+# docs/superpowers/specs/2026-06-14-distribution-design.md §5)。
+publish = false
+
+[dependencies]
+summon-i18n = { path = "../summon-i18n" }
+summon-core = { path = "../summon-core" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+reqwest = { version = "0.12", features = ["blocking", "json", "gzip", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sys-locale = "0.3.2"
+serde_yaml = "0.9"  # agent.yaml / config.yaml / schedules.yaml 等盘上 YAML 读写
+dirs = "5"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+uuid = { version = "1.23.2", features = ["v4"] }  # claude 冷启预生成 --session-id 的全新 UUID
+nix = { version = "0.31", features = ["signal", "process", "user", "socket", "net", "term", "uio", "fs", "hostname"] }  # uio/fs:远程工具本机进程监督传递 stdio fd；hostname:控制台显示机器名；其余用于进程组、身份与终端
+signal-hook = "0.3"  # daemon 优雅停机:SIGTERM/SIGINT → flag,主循环 shutdown 分支打断在跑的无头子进程
+qrcode = { version = "0.14", default-features = false }  # onboard:终端二维码(扫码跳飞书建应用页);关掉 image 等重特性
+ring = "0.17"  # daemon epoch 只保留飞书 resolved credential SHA-256，热变更 fail-closed
+tempfile = "3.27.0"  # 有界子进程输出：避免 pipe 继承导致 timeout 后 join 永久阻塞
+rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }  # Cursor CLI 本地 chat metadata；只读打开 store.db
+md5 = "0.8.1"  # Cursor 以 MD5(abs cwd) 分桶 ~/.cursor/chats，召回需把桶精确还原到 cwd
+unicode-width = "0.2.2"
+tiny_http = "0.12"  # 文件预览服务器(HTTP);集成测试也用它
+thiserror = "2"  # 接管一轮的失败类别要能被调用方 downcast 分流,不能靠错误文案
+httparse = "1"  # 网页终端的请求头解析(已在依赖树里)
+base64 = "0.22"  # 网页终端 WebSocket 握手的 Sec-WebSocket-Accept
+clap_complete = { version = "4", features = ["unstable-dynamic"] }
+tar = "0.4"  # 会话诊断包打包(`summon session export`、飞书 `/summon-export`)
+flate2 = "1"  # 诊断包 gzip 压缩(已在依赖树里)
+
+[dev-dependencies]
+
+[build-dependencies]
+summon-i18n = { path = "../summon-i18n" }

@@ -1,0 +1,28 @@
+# Rust
+/target/
+**/target/
+/.cargo/
+
+# Go sidecar 编译产物
+/sidecar/feishu-connector/feishu-connector
+/sidecar/**/*.test
+
+# Swift
+/menubar/.build/
+/menubar/.swiftpm/
+
+# 凭据与本机配置
+.env
+*.env
+**/.env
+*.local
+
+# 测试里给 agent 一个空 `dir` 时运行时状态会落进 crate 根
+/crates/summon/state/
+/crates/summon/runtime/
+/crates/summon/threads/
+
+/.venv/
+**/node_modules/
+__pycache__/
+.DS_Store

@@ -1,0 +1,75 @@
+# Global summon configuration (~/.summon/config.yaml). Messaging applies next turn;
+# listener settings require restart. See summon guide config.
+# Unset fields inherit built-in defaults. Uncomment only the overrides you need.
+# language: auto  # auto follows lark-cli config show .lang, then the OS first preference.
+#                 # zh-CN / en override; hot switching requires no daemon restart.
+#
+# messaging:
+#   # Custom base primer; built-in protocol remains authoritative.
+#   system_prompt: "...{emoji_file}..."
+#   # Case-sensitive safe reaction set; see summon guide reactions.
+#   reactions: [OK, THUMBSUP, THANKS, DONE, THINKING, ERROR]
+#   working_reaction: OnIt
+#   done_reaction: DONE
+#   prompt_template: "{source}: {text}"
+#   idle_ttl_secs: 86400     # Idle reminder after this many seconds; 0 is immediate.
+#   idle_scan_secs: 300
+#   # Per-CLI cold-start candidates. Native catalogs take priority when available;
+#   # Claude has no model catalog API and uses this list. IDs are CLI-specific.
+#   # Supplied CLI buckets merge; omitted buckets inherit built-in defaults.
+#   models_by_cli:
+#     claude:
+#       - claude-opus-5
+#     cursor:
+#       - cursor-grok-4.5-high
+#     codex:
+#       - gpt-5.6-sol
+#   # Pin defaults instead of following backend changes; merged per CLI.
+#   default_model_by_cli:
+#     codex: gpt-5.6-sol
+#   efforts: [low, medium, high, xhigh, max] # Claude/Codex; Cursor encodes effort in model.
+#   default_reaction: OK
+#   document_comments_enabled: false # Global/agent only; drafts require owner approval.
+#   # Layered defaults: built-in → global → agent → chat.
+#   # /set uses dotted keys; YAML uses these flat fields. Unknown fields are ignored.
+#   agent_reactions: true    # Primer only; summon react and OnIt/DONE unaffected.
+#   agent_feed: true         # Off previews body start; existing feed tags still stripped.
+#   cot_visible: true
+#   hide_thinking: false     # Inverse of /set cot.thinking.
+#   cot_tool_details: true   # Built-in default is false.
+#   session_mirror: true     # Claude Transcript includes terminal-triggered replies.
+#   session_exited:          # Partial text overrides, preserved across language switches.
+#     manual_kill: "This session was closed by an administrator."
+#
+# Top-level fields (outside messaging):
+#
+# # Absolute external CLI paths; ~/ supported. Empty uses daemon's clean PATH.
+# # Onboard discovers initial paths. tools overrides legacy tmux_bin / sentinel.lark_cli_path.
+# tools:
+#   tmux: /opt/homebrew/bin/tmux
+#   lark_cli: ~/.local/bin/lark-cli
+#   claude: ~/.local/bin/claude
+#   codex: ~/.local/bin/codex
+#   cursor_agent: ~/.local/bin/cursor-agent
+#   git: /usr/bin/git
+#   ssh: /usr/bin/ssh
+#
+# resume_sessions: true # Native resume after restart; false cold-starts fresh.
+#
+# # Owner sentinel is opt-in. Poll using your own user identity for explicit summons.
+# # Ordinary active sessions use fast polling; DND chats use slow compensation.
+# # Hot-reload switches with summon sentinel set.
+# sentinel:
+#   enabled: false
+#   dry_run: true          # Report matches without actions; start with a dry run.
+#   fast_interval_secs: 5
+#   fast_top_k: 5
+#   interval_secs: 60      # Slow refresh and /summon search.
+#   top_k: 50
+#   slow_batch_size: 2
+#   join_verbs: [join and reply]
+#   create_verbs: [create chat]
+#   aliases:
+#     arcadia: [Arcadia]
+#
+# Agent-specific messaging overrides go in agent.yaml under messaging.

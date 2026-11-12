@@ -1,0 +1,10 @@
+{
+  "language.label": "Language",
+  "language.description": "Applies to Dashboard, CLI, built-in Feishu messages, and Menu Bar on this machine. Auto follows the current lark-cli language, then the system’s first preferred language. Changes apply immediately without restarting the daemon.",
+  "language.auto": "Automatic",
+  "language.zh-CN": "简体中文",
+  "language.en": "English",
+  "common.enabled": "Enabled",
+  "common.disabled": "Disabled",
+  "common.processing": "Working…"
+}

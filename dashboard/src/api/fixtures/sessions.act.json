@@ -1,0 +1,10 @@
+{
+  "data": {
+    "outcome": "done"
+  },
+  "params": {
+    "action": "exit",
+    "agent": "starlight",
+    "chat_id": "oc_00000000000000000000000000000001"
+  }
+}

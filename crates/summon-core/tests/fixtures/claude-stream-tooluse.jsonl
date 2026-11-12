@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"sid-tool-1","model":"claude-opus-4-8"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me check the file."},{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"ls"}}]},"session_id":"sid-tool-1"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"a.txt\nb.txt"}]},"session_id":"sid-tool-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"There are 2 files."}]},"session_id":"sid-tool-1"}
+{"type":"result","subtype":"success","is_error":false,"result":"There are 2 files.","session_id":"sid-tool-1","usage":{"input_tokens":100,"output_tokens":20}}

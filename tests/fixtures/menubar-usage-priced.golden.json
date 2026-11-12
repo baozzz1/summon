@@ -1,0 +1,83 @@
+{
+  "as_of_ms": 1000,
+  "retention_days": 90,
+  "prices_as_of_ms": 100,
+  "windows": [
+    {
+      "key": "24h",
+      "spend": {
+        "tokens": {
+          "input": 0,
+          "output": 100,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "cost": {
+          "total": 1.0,
+          "input": 0.0,
+          "output": 1.0,
+          "cache_read": 0.0,
+          "cache_write": 0.0
+        }
+      },
+      "missing_usage_turns": 0
+    },
+    {
+      "key": "7d",
+      "spend": {
+        "tokens": {
+          "input": 0,
+          "output": 100,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "cost": {
+          "total": 1.0,
+          "input": 0.0,
+          "output": 1.0,
+          "cache_read": 0.0,
+          "cache_write": 0.0
+        }
+      },
+      "missing_usage_turns": 0
+    },
+    {
+      "key": "30d",
+      "spend": {
+        "tokens": {
+          "input": 0,
+          "output": 100,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "cost": {
+          "total": 1.0,
+          "input": 0.0,
+          "output": 1.0,
+          "cache_read": 0.0,
+          "cache_write": 0.0
+        }
+      },
+      "missing_usage_turns": 0
+    },
+    {
+      "key": "all",
+      "spend": {
+        "tokens": {
+          "input": 0,
+          "output": 100,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "cost": {
+          "total": 1.0,
+          "input": 0.0,
+          "output": 1.0,
+          "cache_read": 0.0,
+          "cache_write": 0.0
+        }
+      },
+      "missing_usage_turns": 0
+    }
+  ]
+}

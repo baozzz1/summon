@@ -1,0 +1,6 @@
+{"type":"system","subtype":"hook_started","hook_name":"SessionStart:startup","session_id":"07778859-d337-4a01-a41d-e4c11ae7be81"}
+{"type":"system","subtype":"hook_response","hook_name":"SessionStart:startup","output":"OK\n","exit_code":0,"session_id":"07778859-d337-4a01-a41d-e4c11ae7be81"}
+{"type":"system","subtype":"init","cwd":"/Users/me/Desktop/personal/summon","session_id":"07778859-d337-4a01-a41d-e4c11ae7be81","model":"claude-opus-4-8","permissionMode":"auto"}
+{"type":"assistant","message":{"model":"claude-opus-4-8","id":"msg_01","role":"assistant","content":[{"type":"text","text":"pong"}],"usage":{"input_tokens":15274,"output_tokens":1}},"parent_tool_use_id":null,"session_id":"07778859-d337-4a01-a41d-e4c11ae7be81"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"},"session_id":"07778859-d337-4a01-a41d-e4c11ae7be81"}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":6563,"num_turns":1,"result":"pong","session_id":"07778859-d337-4a01-a41d-e4c11ae7be81","total_cost_usd":0.146574,"usage":{"input_tokens":15274,"output_tokens":4}}
