@@ -474,11 +474,6 @@ models_by_cli:
   - claude-opus-5
   - claude-fable-5
   - claude-sonnet-5
-  cursor:
-  - gpt-5.6-sol-xhigh
-  - claude-opus-5-thinking-xhigh
-  - cursor-grok-4.5-high
-  - composer-2.5
   codex:
   - gpt-5.6-sol
   - gpt-5.6-terra

@@ -813,10 +813,12 @@ mod tests {
 
     #[test]
     fn builtin_defaults_are_self_consistent_per_cli() {
-        // 内置默认表必须每个 CLI 桶都给得出默认 model,且该 model 在自己 CLI 上校验得过——
-        // 否则 onboard 一回车就写进一个起不来的 agent.yaml。
+        // 内置默认表给了桶的 CLI 都要给得出默认 model,且该 model 在自己 CLI 上校验得过——
+        // 否则 onboard 一回车就写进一个起不来的 agent.yaml。cursor 没有内置桶,默认是不写
+        // model 行、交给 cursor-agent 自己选。
         let m = crate::config::config::builtin_messaging();
-        for cli in ["claude", "codex", "cursor"] {
+        assert_eq!(default_model_for(&m, "cursor", None).value, None);
+        for cli in ["claude", "codex"] {
             let model = default_model_for(&m, cli, None)
                 .value
                 .unwrap_or_else(|| panic!("内置 messaging 缺 {cli} 的默认 model"));

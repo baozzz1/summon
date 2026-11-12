@@ -809,8 +809,8 @@ pub struct Messaging {
     #[serde(default)]
     pub models: Vec<String>,
     /// 按 CLI 种类(key=cli kind,如 claude/cursor/codex)分桶的模型候选;渲染/picker 优先查它,
-    /// 命中即用,否则回退扁平 `models`。让 claude 的 `claude-opus-5` 与 cursor 的
-    /// `cursor-grok-4.5-high` 不混。
+    /// 命中即用,否则回退扁平 `models`。让 claude 的 `claude-opus-5` 与 codex 的
+    /// `gpt-5.6-sol` 不混。
     #[serde(default)]
     pub models_by_cli: HashMap<String, Vec<String>>,
     /// codex/traex 的会话是否把 summon 的平台工具(preview / react / send_image)注册成
@@ -1973,10 +1973,10 @@ sentinel:
 
     #[test]
     fn models_by_cli_override_merges_per_key_not_whole_map() {
-        // 内置默认给了 claude/cursor/codex 三桶(见 messaging.default.yaml);traex 不带内置候选。
+        // 内置默认给了 claude/codex 两桶(见 messaging.default.yaml);cursor、traex 不带内置候选。
         let mut m = builtin_messaging();
-        let builtin_cursor = m.models_by_cli.get("cursor").cloned();
-        assert!(builtin_cursor.is_some(), "内置默认应含 cursor 桶(前提)");
+        let builtin_codex = m.models_by_cli.get("codex").cloned();
+        assert!(builtin_codex.is_some(), "内置默认应含 codex 桶(前提)");
 
         // 用户只覆盖 claude 桶。
         let mut override_map = HashMap::new();
@@ -1991,11 +1991,11 @@ sentinel:
             m.models_by_cli.get("claude").unwrap(),
             &vec!["my-claude-model".to_string()]
         );
-        // 关键:用户没提的 cursor 桶仍在(继承内置默认,不被整表替换清空)。
+        // 关键:用户没提的 codex 桶仍在(继承内置默认,不被整表替换清空)。
         assert_eq!(
-            m.models_by_cli.get("cursor").cloned(),
-            builtin_cursor,
-            "未覆盖的 cursor 桶应继承内置默认,而非被整表替换抹掉"
+            m.models_by_cli.get("codex").cloned(),
+            builtin_codex,
+            "未覆盖的 codex 桶应继承内置默认,而非被整表替换抹掉"
         );
     }
 
@@ -2732,16 +2732,10 @@ sentinel:
             m.models_for_cli("claude"),
             ["claude-opus-5", "claude-fable-5", "claude-sonnet-5"]
         );
-        assert_eq!(
-            m.models_for_cli("cursor"),
-            [
-                "gpt-5.6-sol-xhigh",
-                "claude-opus-5-thinking-xhigh",
-                "cursor-grok-4.5-high",
-                "composer-2.5"
-            ]
-        );
-        for cli in ["claude", "codex", "cursor"] {
+        // cursor 只认 ACP 会话下发的目录,内置不给兜底:目录没拿到时要显出来,不拿猜的表顶上。
+        assert!(!m.models_by_cli.contains_key("cursor"));
+        assert!(m.models_for_cli("cursor").is_empty());
+        for cli in ["claude", "codex"] {
             assert!(
                 m.models_for_cli(cli).len() > 1,
                 "{cli} 桶只有一个候选,面板上就切不了模型"
@@ -2815,12 +2809,11 @@ sentinel:
         m.apply(&o);
         assert_eq!(m.efforts, vec!["low".to_string(), "high".to_string()]);
         assert_eq!(m.models_for_cli("claude"), &["my-claude".to_string()]);
-        // per-key merge:只覆盖 claude 桶,未提及的 cursor 桶继承内置默认(不再被整表替换抹掉)。
-        assert!(
-            m.models_for_cli("cursor")
-                .iter()
-                .any(|x| x == "cursor-grok-4.5-high"),
-            "未覆盖的 cursor 桶应保留内置默认,而非回退扁平 models"
+        // per-key merge:只覆盖 claude 桶,未提及的 codex 桶继承内置默认(不再被整表替换抹掉)。
+        assert_eq!(
+            m.models_for_cli("codex"),
+            builtin_messaging().models_for_cli("codex"),
+            "未覆盖的 codex 桶应保留内置默认,而非回退扁平 models"
         );
     }
 

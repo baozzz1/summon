@@ -630,7 +630,7 @@ models: []
 # 面板候选的事实源是各 backend 自报的目录 —— cursor 随 ACP 会话下发 `availableModels`,
 # codex/traex 走 app-server 的 `model/list`。上游今天加一个模型,开一条新会话就能在面板上点到,
 # 这张表不用动。它只在「目录还没抓到」时顶上:daemon 刚起、这台机器还没开过该 CLI 的会话。
-# 所以这里挑的是各家族一个稳定代表,不追新、不求穷举(cursor 有 130+ 个,列全没法看)。
+# 所以这里挑的是各家族一个稳定代表,不追新、不求穷举。cursor 只认会话目录,这里不给它兜底。
 # claude 是例外 —— 它没有列模型的接口,面板候选只有这张表。
 #
 # 模型 id 必须是**该 CLI 自己认的写法**:
@@ -652,26 +652,17 @@ models_by_cli:
     - claude-opus-5
     - claude-fable-5
     - claude-sonnet-5
-  cursor:
-    # `cursor-agent models` 的 id,推理档位烤在名里。四家族各留一个代表:
-    # gpt / opus / grok / composer。会话下发的目录里有的,`/model <id>` 也能切。
-    # 首项 sol-xhigh 是 owner 钦定主力(2026-08-06),也是 onboard/bind 的默认模型 ——
-    # cursor 的目录只随会话下发,onboard 时还没有会话,所以它的默认仍取这张表的首项。
-    # 注意:目录显示名里的「1M」是家族能力
-    # 标注,dash id 的实际窗口是定值(sol 272K、opus 300K),账号 maxMode 开关拉不动它;
-    # 1m 只是 bracket 参数且仅交互 TUI 面吃 —— `-p`(exec 路)上没有任何模型能拿到 1M(真机
-    # 2026-08-06 分面实测)。
-    - gpt-5.6-sol-xhigh
-    - claude-opus-5-thinking-xhigh
-    - cursor-grok-4.5-high
-    - composer-2.5
   codex:
     # `codex -m` 收的 slug。冷启窗口用,抓到 `model/list` 的目录后就以目录为准。
     - gpt-5.6-sol
     - gpt-5.6-terra
     - gpt-5.6-luna
     - gpt-5.5
-  # traex(traecli,codex 的 fork)不带内置候选:它有哪些模型取决于接入的网关,以它经
+  # cursor 不带内置候选:各人账号能用的模型不同,候选只认 ACP 会话下发的目录。目录没拿到
+  # (会话还没建、服务端没给、或走 `runtime.capture: cli`)时面板就没有模型按钮,onboard 不写
+  # model 行、由 cursor-agent 用自己的默认 —— 内置一份猜的表会把「目录没拿到」掩盖成「点了起不来」。
+  # 要固定候选,在 `~/.summon/config.yaml` 的 `messaging.models_by_cli.cursor` 里配。
+  # traex(traecli,codex 的 fork)同理不带内置候选:它有哪些模型取决于接入的网关,以它经
   # `model/list` 自报的目录为准。要在抓到目录之前就有候选,在 `~/.summon/config.yaml` 的
   # `messaging.models_by_cli.traex` 里配。
 
