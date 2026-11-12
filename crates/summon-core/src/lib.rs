@@ -33,7 +33,7 @@ pub mod yaml_edit;
 // 顶层 re-export:跨 crate 消费方(summon)沿用 `summon_core::X` 路径,降低主题化下沉的 churn。
 // crate 内部一律走真实主题路径(`crate::<theme>::X`),不靠这些别名。
 pub use config::{
-    agent_identity, autostart, codex_policy, menubar, model_effort, registry, settings,
+    agent_identity, autostart, codex_policy, menubar, model_effort, model_order, registry, settings,
 };
 pub use messaging::{
     cot, email_mask, feed_tag, feishu, fleet_card, handoff, image, inbound, ipc, progress, quote,

@@ -2364,15 +2364,27 @@ pub(super) fn uses_rpc_model(agent: &Agent) -> bool {
 /// codex/traex 与走 CLI 的 cursor 的目录按账号作用域共享，由后台按需刷新
 /// (后者跑 `cursor-agent models`)。
 /// claude 没有列模型的接口,只能留在配置桶里。
+///
+/// cursor 的目录上百项且服务端顺序把各档位、新旧版本混在一起,两条通道都按
+/// [`summon_core::model_order::order_cursor_models`] 重排(`auto`、各家族推荐项在前),
+/// 面板只列得下开头一截时也能先看到常用的;其余 CLI 保持 backend 原序。
 pub(crate) fn model_candidates(agent: &Agent, tag: &str, from_config: Vec<String>) -> Vec<String> {
-    if uses_rpc_model(agent) {
-        return prefer_dynamic_catalog(
+    let candidates = if uses_rpc_model(agent) {
+        prefer_dynamic_catalog(
             crate::capture::rpc_pool::available_models_shared(&agent.name, tag),
             from_config,
-        );
+        )
+    } else {
+        prefer_dynamic_catalog(
+            crate::codex::model_catalog::models_for_agent(agent),
+            from_config,
+        )
+    };
+    if CliDriver::from_kind(agent.cli_kind()) == CliDriver::Cursor {
+        summon_core::model_order::order_cursor_models(&candidates)
+    } else {
+        candidates
     }
-    let dynamic = crate::codex::model_catalog::models_for_agent(agent);
-    prefer_dynamic_catalog(dynamic, from_config)
 }
 
 /// RPC 面的候选:动态目录优先,**空则回退配置桶**。
@@ -3378,6 +3390,57 @@ pub(super) fn reply_model_usage(
         &shown,
         anchor,
         false,
+    );
+}
+
+/// cursor 的无参 `/model`(`default_layer` 为 true 时是 `/model default`):发一张只有一个下拉框的
+/// 选择卡,列出完整候选目录。选中走与会话面板下拉框相同的 `model` / `model_default` 回调,
+/// 鉴权与校验都沿用卡片回调既有的那一套。没有候选时退回文字用法说明。
+pub(super) fn reply_cursor_model_picker(
+    agent: &Agent,
+    fc: &FeishuClient,
+    chat_id: &str,
+    chat_type: &str,
+    candidates: &[String],
+    anchor: Option<&str>,
+    default_layer: bool,
+) {
+    if candidates.iter().all(|m| m.trim().is_empty()) {
+        let _ = send_markdown_archived_anchored(
+            fc,
+            &agent.state_dir(),
+            chat_type,
+            chat_id,
+            anchor,
+            summon_i18n::text!("rf146a45577"),
+        );
+        return;
+    }
+    let tag = chat_tag(chat_type, chat_id);
+    let messaging = resolve_messaging(agent);
+    // 高亮口径与会话面板相同:本群层是摘要里的生效值,默认层在有本群覆盖时取 bot 默认。
+    let chat = resolve_panel_model(agent, &tag, &messaging);
+    let selected = if !default_layer {
+        chat.value
+    } else if chat.source == summon_core::model_effort::ModelSource::ChatOverride {
+        resolve_default_model(agent, &messaging).value
+    } else {
+        chat.value
+    };
+    let card = summon_core::feishu::card_cursor_model_picker(
+        candidates,
+        selected.as_deref(),
+        &tag,
+        default_layer,
+    );
+    let _ = send_card_archived(
+        fc,
+        &agent.state_dir(),
+        chat_type,
+        chat_id,
+        anchor,
+        "model_picker",
+        &card,
     );
 }
 
@@ -5292,6 +5355,42 @@ mod model_candidates_tests {
         record(&agent, &["gpt-6-astra", "gpt-5.5"], "gpt-6-astra");
         let got = model_candidates(&agent, "g-a", vec!["gpt-5.4-mini".into()]);
         assert_eq!(got, vec!["gpt-6-astra", "gpt-5.5"]);
+    }
+
+    /// cursor(CLI 通道)的候选按展示顺序重排;codex 保持 backend 原序。
+    #[test]
+    fn cursor候选按展示顺序重排而codex保持原序() {
+        let cursor: Agent = serde_yaml::from_str(
+            "name: panel-order-cursor\nruntime:\n  cli: cursor\n  capture: cli\n",
+        )
+        .unwrap();
+        let got = model_candidates(
+            &cursor,
+            "g-a",
+            vec![
+                "gpt-5.2".into(),
+                "composer-2.5-fast".into(),
+                "auto".into(),
+                "gpt-5.6-sol-xhigh".into(),
+                "composer-2.5".into(),
+            ],
+        );
+        assert_eq!(
+            got,
+            vec![
+                "auto",
+                "gpt-5.6-sol-xhigh",
+                "composer-2.5",
+                "gpt-5.2",
+                "composer-2.5-fast"
+            ]
+        );
+        let got = model_candidates(
+            &codex_agent("panel-order-codex"),
+            "g-a",
+            vec!["gpt-5.2".into(), "gpt-5.5".into()],
+        );
+        assert_eq!(got, vec!["gpt-5.2", "gpt-5.5"]);
     }
 
     /// daemon 刚起、还没开过任何会话时目录是空的。此时回退配置桶,别让面板一个按钮都没有。

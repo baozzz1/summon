@@ -6,6 +6,7 @@ pub mod codex_policy;
 pub mod config;
 pub mod menubar;
 pub mod model_effort;
+pub mod model_order;
 pub mod registry;
 pub mod settings;
 

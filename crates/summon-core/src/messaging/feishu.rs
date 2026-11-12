@@ -2690,6 +2690,11 @@ const MODEL_PANEL_BTN_CAP: usize = 12;
 /// 完整面板按同一元素预算收口；三种 mode 与 context/reasoning/fast 参数的测试面板
 /// 每层 43 项的关闭态可发送，44 项被拒。关闭态的 hr + markdown 需预留两个元素。
 const CURSOR_MODEL_OPTION_CAP: usize = 197;
+/// 会话面板里 Cursor 每个模型下拉框最多列几项。目录已按常用程度排好序(推荐段在前),
+/// 面板只放开头这一截;完整目录走无参 `/model` 的选择卡。
+const CURSOR_PANEL_MODEL_OPTION_CAP: usize = 32;
+/// 单卡元素数的安全线(飞书上限 200,留出余量);会话面板与无参 `/model` 选择卡共用。
+const SAFE_OBJECT_LIMIT: usize = 190;
 /// Cursor mode 同样来自 server 动态目录；异常膨胀时不能把整张卡撑成非法 body。
 const CURSOR_MODE_BTN_CAP: usize = 9;
 /// 飞书 plain_text 也有尺寸边界；含省略号在内，单个动态标签最多占这些字符。
@@ -3115,8 +3120,95 @@ fn model_dropdown(
     select
 }
 
+/// 取下拉框要列的前 `limit` 项;当前选中的模型排在外面时,用它顶替最后一项,
+/// 让下拉框仍能高亮当前值、也能原样选回。总数不超过 `limit`。
+fn capped_model_options<'a>(
+    models: &[&'a String],
+    limit: usize,
+    selected: Option<&str>,
+) -> Vec<&'a String> {
+    let limit = limit.min(models.len());
+    let mut shown: Vec<&'a String> = models.iter().take(limit).copied().collect();
+    let outside = selected.and_then(|selected| {
+        models
+            .iter()
+            .skip(limit)
+            .find(|model| model.as_str() == selected)
+            .copied()
+    });
+    if let Some(outside) = outside {
+        if shown.pop().is_some() {
+            shown.push(outside);
+        }
+    }
+    shown
+}
+
+/// 无参 `/model`(或 `/model default`)给 Cursor 发的选择卡:一个下拉框列出完整目录(已排好序)。
+/// 选中即走与会话面板下拉框相同的 `model` / `model_default` 回调,鉴权与校验沿用既有处理。
+/// 选项数先按 [`CURSOR_MODEL_OPTION_CAP`] 截,再按整卡(含关闭按钮)的元素数安全线与体积收口;
+/// 截掉的部分提示改用 `/model <id>`。
+pub fn card_cursor_model_picker(
+    models: &[String],
+    selected: Option<&str>,
+    chat_tag: &str,
+    default_layer: bool,
+) -> String {
+    use serde_json::json;
+    let mut seen = std::collections::HashSet::new();
+    let models: Vec<&String> = models
+        .iter()
+        .filter(|m| !m.trim().is_empty() && seen.insert(m.as_str()))
+        .collect();
+    let total = models.len();
+    let (header, action) = if default_layer {
+        (summon_i18n::format!("r1a96031a27"), "model_default")
+    } else {
+        (summon_i18n::format!("rb3ed27d837"), "model")
+    };
+    let build = |limit: usize| {
+        let options = capped_model_options(&models, limit, selected);
+        let mut elements = vec![json!({"tag": "markdown", "content": header})];
+        if !options.is_empty() {
+            elements.push(model_dropdown(&options, selected, action, chat_tag));
+        }
+        if total > options.len() {
+            let extra = total - options.len();
+            elements.push(json!({
+                "tag": "markdown",
+                "content": summon_i18n::format!("r735865b2b5")
+            }));
+        }
+        closeable_card(json!({"schema": "2.0", "body": {"elements": elements}}).to_string())
+    };
+    let fits = |card: &str| {
+        card.len() <= CARD_TOTAL_SAFE_LIMIT
+            && serde_json::from_str::<serde_json::Value>(card)
+                .is_ok_and(|value| tagged_object_count(&value) <= SAFE_OBJECT_LIMIT)
+    };
+    let cap = CURSOR_MODEL_OPTION_CAP.min(total);
+    for limit in (1..=cap).rev() {
+        let card = build(limit);
+        if fits(&card) {
+            return card;
+        }
+    }
+    build(0)
+}
+
+/// 卡片里带 `tag` 的对象个数,即飞书计入单卡元素上限的那些。
+fn tagged_object_count(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Object(map) => {
+            usize::from(map.contains_key("tag"))
+                + map.values().map(tagged_object_count).sum::<usize>()
+        }
+        serde_json::Value::Array(values) => values.iter().map(tagged_object_count).sum(),
+        _ => 0,
+    }
+}
+
 fn session_panel_elements_fit_card_budget(elements: &[serde_json::Value], cli: &str) -> bool {
-    const SAFE_OBJECT_LIMIT: usize = 190;
     fn object_count(value: &serde_json::Value, tagged_only: bool) -> usize {
         match value {
             serde_json::Value::Object(map) => {
@@ -3160,7 +3252,7 @@ fn session_panel_elements(
     // Cursor 两层下拉框共享条数预算，优先保留动态参数控件。
     // 按钮式面板优先保留本群操作，默认层可经 `/model default <id>` 设置。
     let model_cap = if cli == "cursor" {
-        CURSOR_MODEL_OPTION_CAP
+        CURSOR_PANEL_MODEL_OPTION_CAP
     } else {
         MODEL_PANEL_BTN_CAP
     }
@@ -3310,7 +3402,7 @@ fn session_panel_elements_with(
         if cli == "cursor" {
             if shown > 0 {
                 elements.push(model_dropdown(
-                    &model_btns[..shown],
+                    &capped_model_options(&model_btns, shown, model.value.as_deref()),
                     model.value.as_deref(),
                     "model",
                     chat_tag,
@@ -3333,9 +3425,14 @@ fn session_panel_elements_with(
         }
         if model_btns.len() > shown {
             let extra = model_btns.len() - shown;
+            let total = model_btns.len();
             elements.push(json!({
                 "tag": "markdown",
-                "content": summon_i18n::format!("r3215c530e5")
+                "content": if cli == "cursor" {
+                    summon_i18n::format!("rea56fde596")
+                } else {
+                    summon_i18n::format!("r3215c530e5")
+                }
             }));
         }
         if default_rows {
@@ -3346,7 +3443,7 @@ fn session_panel_elements_with(
             if cli == "cursor" {
                 if shown > 0 {
                     elements.push(model_dropdown(
-                        &model_btns[..shown],
+                        &capped_model_options(&model_btns, shown, default_value.as_deref()),
                         default_value.as_deref(),
                         "model_default",
                         chat_tag,
@@ -13081,7 +13178,7 @@ mod tests {
         assert!(shown > 12 && shown < models.len());
         assert_eq!(selects[1]["options"].as_array().unwrap().len(), shown);
         assert!(selects.iter().all(|v| v.get("initial_option").is_none()));
-        assert!(card.contains("可直接 /model"));
+        assert!(card.contains("这里只列"));
         assert!(card.len() <= CARD_TOTAL_SAFE_LIMIT);
         let mut callbacks = Vec::new();
         collect_callback_values(&value, &mut callbacks);
@@ -13112,6 +13209,129 @@ mod tests {
             .collect();
         assert_eq!(selects.len(), 2);
         assert!(selects.iter().all(|v| v["disabled"] == true));
+    }
+
+    fn select_values(select: &serde_json::Value) -> Vec<String> {
+        select["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["value"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn cursor_panel_lists_first_32_and_keeps_selected_models_selectable() {
+        let models: Vec<_> = (0..110).map(|i| format!("model-{i}")).collect();
+        let card = card_session_panel(
+            "tag-cap",
+            "cursor",
+            "RPC",
+            &rm(Some("model-80"), ModelSource::ChatOverride),
+            &reff(None, EffortSource::ModelInherent),
+            &models,
+            &[],
+            &crate::subagent::SubagentDisplay::default(),
+            SessionPanelControls {
+                model_default: Some(rm(Some("model-3"), ModelSource::AgentConfig)),
+                ..Default::default()
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&card).unwrap();
+        let selects: Vec<_> = value["body"]["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v["tag"] == "select_static")
+            .collect();
+        assert_eq!(selects.len(), 2);
+        // 本群当前值排在 32 名之外:顶替最后一项,总数仍是 32,且被高亮。
+        let chat = select_values(selects[0]);
+        assert_eq!(chat.len(), 32);
+        assert_eq!(chat[..31], models[..31]);
+        assert_eq!(chat[31], "model-80");
+        assert_eq!(selects[0]["initial_option"], "model-80");
+        // 默认层当前值本就在前 32 里:原样列前 32。
+        assert_eq!(select_values(selects[1]), models[..32]);
+        assert_eq!(selects[1]["initial_option"], "model-3");
+        assert!(card.contains("共 110 个模型,这里只列 32 个"));
+        assert!(session_panel_elements_fit_card_budget(
+            value["body"]["elements"].as_array().unwrap(),
+            "cursor"
+        ));
+    }
+
+    #[test]
+    fn capped_model_options_never_exceed_limit() {
+        let models: Vec<String> = (0..5).map(|i| format!("m{i}")).collect();
+        let refs: Vec<&String> = models.iter().collect();
+        let shown = |limit, selected| {
+            capped_model_options(&refs, limit, selected)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shown(3, Some("m4")), ["m0", "m1", "m4"]);
+        assert_eq!(shown(3, Some("m1")), ["m0", "m1", "m2"]);
+        assert_eq!(shown(3, Some("absent")), ["m0", "m1", "m2"]);
+        assert!(shown(0, Some("m4")).is_empty());
+        assert_eq!(shown(9, None).len(), 5);
+    }
+
+    #[test]
+    fn cursor_model_picker_lists_full_catalog_with_layer_actions() {
+        let models: Vec<_> = (0..110).map(|i| format!("model-{i}")).collect();
+        for (default_layer, action) in [(false, "model"), (true, "model_default")] {
+            let card =
+                card_cursor_model_picker(&models, Some("model-100"), "tag-pick", default_layer);
+            let value: serde_json::Value = serde_json::from_str(&card).unwrap();
+            let elements = value["body"]["elements"].as_array().unwrap();
+            let selects: Vec<_> = elements
+                .iter()
+                .filter(|v| v["tag"] == "select_static")
+                .collect();
+            assert_eq!(selects.len(), 1);
+            assert_eq!(select_values(selects[0]), models);
+            assert_eq!(selects[0]["initial_option"], "model-100");
+            assert_eq!(selects[0]["behaviors"][0]["value"]["action"], action);
+            assert_eq!(selects[0]["behaviors"][0]["value"]["chat"], "tag-pick");
+            assert!(card.contains("共 110 个"));
+            assert!(!card.contains("个模型未列出"));
+            let mut callbacks = Vec::new();
+            collect_callback_values(&value, &mut callbacks);
+            assert!(callbacks.iter().any(|v| v["action"] == "card_close"));
+        }
+    }
+
+    #[test]
+    fn cursor_model_picker_truncates_huge_catalog_within_card_budget() {
+        let models: Vec<_> = (0..500).map(|i| format!("model-{i}")).collect();
+        let card = card_cursor_model_picker(&models, Some("model-499"), "tag-pick", false);
+        let value: serde_json::Value = serde_json::from_str(&card).unwrap();
+        let select = value["body"]["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["tag"] == "select_static")
+            .unwrap();
+        let shown = select_values(select);
+        assert!(shown.len() <= CURSOR_MODEL_OPTION_CAP && shown.len() > 150);
+        assert_eq!(shown.last().map(String::as_str), Some("model-499"));
+        assert_eq!(select["initial_option"], "model-499");
+        assert!(tagged_object_count(&value) <= SAFE_OBJECT_LIMIT);
+        assert!(card.len() <= CARD_TOTAL_SAFE_LIMIT);
+        assert!(card.contains(&format!("还有 {} 个模型未列出", 500 - shown.len())));
+    }
+
+    #[test]
+    fn cursor_model_picker_survives_empty_catalog() {
+        let card = card_cursor_model_picker(&[], None, "tag-pick", false);
+        let value: serde_json::Value = serde_json::from_str(&card).unwrap();
+        assert!(value["body"]["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v["tag"] != "select_static"));
     }
 
     #[test]

@@ -3788,6 +3788,8 @@ pub(super) fn agent_dispatcher_with_stores(
                         continue;
                     }
                     let tag = chat_tag(&chat_type, &chat_id);
+                    let cli_driver_is_cursor =
+                        CliDriver::from_kind(agent.cli_kind()) == CliDriver::Cursor;
                     // 人很难手打对模型名：只认候选目录里的 id(claude 另认它内置的别名与当前配置的
                     // 模型),对不上就不改、回候选按钮。
                     let candidates = cards::model_candidates(
@@ -3799,6 +3801,25 @@ pub(super) fn agent_dispatcher_with_stores(
                         )
                         .models,
                     );
+                    // cursor 目录上百项,按钮放不下:无参 `/model` / `/model default` 发完整目录的
+                    // 下拉选择卡,分别写本群与 bot 默认(判权已按各自范围做过)。
+                    if cli_driver_is_cursor
+                        && matches!(
+                            command,
+                            LayeredCommand::Picker | LayeredCommand::DefaultWithoutValue
+                        )
+                    {
+                        cards::reply_cursor_model_picker(
+                            &agent,
+                            &fc,
+                            &chat_id,
+                            &chat_type,
+                            &candidates,
+                            command_anchor(&msg),
+                            default_layer,
+                        );
+                        continue;
+                    }
                     let (input, target) = match command {
                         LayeredCommand::Picker => {
                             cards::reply_model_usage(

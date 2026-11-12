@@ -6895,5 +6895,9 @@
   "rc7a1e0d93b": "cursor-agent models exited abnormally: {}",
   "rc7a1e0d93c": "cursor-agent models did not finish within {} seconds",
   "rc7a1e0d93d": "[{}] cursor-agent models background refresh failed: {error}",
-  "rc7a1e0d93e": "cursor-agent models has no stdout pipe"
+  "rc7a1e0d93e": "cursor-agent models has no stdout pipe",
+  "rea56fde596": "<font color='grey'>{total} models in total, only {shown} listed here; send /model for the full list, or /model <id> to switch directly.</font>",
+  "rb3ed27d837": "Chat model ({total} available). Pick one from the dropdown to switch this chat:",
+  "r1a96031a27": "Bot default model ({total} available). Pick one to change the default for every chat without a model override:",
+  "r735865b2b5": "<font color='grey'>{extra} more models not listed; set one directly with /model <id> (or /model default <id>).</font>"
 }
