@@ -10,6 +10,10 @@
 发版时把条目移到新的版本节，写明版本号和日期，再保留空的「未发布」节；版本对应的提交记在 RELEASE_COMMITS.md。
 每条说明用户能做什么或哪个问题得到修复；有配置开关、默认值变化、兼容限制时一并写明。 -->
 
+### 升级注意
+
+- 经 npm 包安装的用户：这是最后一个发到 npm 的版本，之后只发布到 GitHub Releases。装上这一版后，`summon upgrade` 与自动升级改从 GitHub Releases 取新版、装进 `~/.summon/bin/`，不需要重装，npm 包里的 `summon` 入口会把调用转交给那里更新的那份。机器需要能访问 github.com；访问不了的可以手动下载 Release 的 `manifest.json` 与本平台的包到一个目录，再执行 `summon upgrade --from <目录>`。`summon upgrade --channel github` 仍可用（这个参数可以去掉），`--channel` 的其他取值会报错；配置里的 `upgrade.channel: npm` 按 `github` 处理，`summon doctor` 提示可以删掉这一行。
+
 ## 0.6.53 · 2026-11-13
 
 ### 修复

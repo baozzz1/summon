@@ -40,7 +40,8 @@ pub(crate) struct Pending {
     pub(crate) version: String,
     /// 换代前在跑的版本,退回到它。
     pub(crate) previous: String,
-    /// 取到本机的新版所在的暂存目录;新版留在别处(比如包管理器的全局目录)的渠道没有它。
+    /// 取到本机的新版所在的暂存目录。更早的版本经 npm 取的新版留在 npm 全局目录里,记录里没有它;
+    /// 换代前复核时这样的记录作废。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) stage: Option<PathBuf>,
 }
@@ -194,15 +195,14 @@ pub(crate) fn previous_dir(home: &Path) -> PathBuf {
     run_dir(home).join(PREVIOUS_DIR)
 }
 
-/// 守望进程退回时为装回旧版另起的进程(自成一组)的 pid 记在这里。
-pub(crate) fn restore_pid_path(home: &Path) -> PathBuf {
-    run_dir(home).join("auto-upgrade.restore.pid")
-}
-
-/// 更早的版本给 [`restore_pid_path`] 用的文件名。只有那一版的守望进程与兜底进程读写它(它们都
-/// 出自换代前那一版的同一个二进制),新版不认它;启动对账清痕迹时一并删掉。
-pub(super) fn legacy_restore_pid_path(home: &Path) -> PathBuf {
-    run_dir(home).join("auto-upgrade.npm.pid")
+/// 更早的版本里,守望进程退回时为装回旧版 npm 包另起的进程(自成一组)的 pid 记在这些文件里。只有
+/// 那一版的守望进程与兜底进程读写它们(都出自换代前那一版的同一个二进制),如今的退回只靠落点快照、
+/// 不再写它们;启动对账清痕迹时一并删掉。
+pub(super) fn legacy_restore_pid_paths(home: &Path) -> [PathBuf; 2] {
+    [
+        run_dir(home).join("auto-upgrade.restore.pid"),
+        run_dir(home).join("auto-upgrade.npm.pid"),
+    ]
 }
 
 /// 启动对账的判定:改状态,返回这次换代留下的痕迹(守望进程 pid 文件、快照)能不能清掉。

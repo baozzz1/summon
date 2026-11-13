@@ -1217,43 +1217,42 @@ fn the_restart_path_never_touches_tmux() {
 }
 
 /// 命令面:公开构建里 `summon upgrade` 就是 GitHub 渠道;带 npm 渠道的构建默认仍是 npm,
-/// `--channel github` 带着同样的参数转给 GitHub 渠道。
+/// 所有构建(含带 npm 分发渠道的)里 `summon upgrade` 都落到 GitHub 渠道。隐藏的 `--channel` 只认
+/// `github`,别的值(含停用的 npm)报错说明只有 GitHub Releases;npm 专有的 `--registry` 不再认。
 #[test]
-fn the_command_line_reaches_the_github_channel() {
+fn the_command_line_reaches_the_github_channel_in_every_build() {
     use clap::Parser;
-    let argv = [
-        "summon",
-        "upgrade",
-        "--version",
-        "0.7.0",
-        "--from",
-        "release-dir",
-        "--check",
-    ];
-    #[cfg(not(npm_dist))]
-    {
-        let cli = crate::cli::cli::Cli::try_parse_from(argv).unwrap();
-        let crate::cli::cli::Cmd::Upgrade(args) = cli.cmd else {
+    let parse = |extra: &[&str]| {
+        let argv = [
+            "summon",
+            "upgrade",
+            "--version",
+            "0.7.0",
+            "--from",
+            "release-dir",
+            "--check",
+        ];
+        crate::cli::cli::Cli::try_parse_from(argv.iter().chain(extra))
+    };
+    for extra in [&[][..], &["--channel", "github"][..]] {
+        let cli = parse(extra).unwrap();
+        let crate::cli::cli::Cmd::Upgrade(command) = cli.cmd else {
             panic!("summon upgrade 没有落到 GitHub 渠道");
         };
-        assert_eq!(args.version.as_deref(), Some("0.7.0"));
-        assert_eq!(args.from.as_deref(), Some("release-dir"));
-        assert!(args.check);
+        assert_eq!(command.args.version.as_deref(), Some("0.7.0"));
+        assert_eq!(command.args.from.as_deref(), Some("release-dir"));
+        assert!(command.args.check);
+        assert_eq!(command.channel.is_some(), !extra.is_empty(), "{extra:?}");
     }
-    #[cfg(npm_dist)]
-    {
-        use crate::setup::npm_dist::{upgrade::Channel, Command};
-        let parse = |extra: &[&str]| {
-            let argv: Vec<&str> = argv.iter().chain(extra).copied().collect();
-            match crate::cli::cli::Cli::try_parse_from(argv).unwrap().cmd {
-                crate::cli::cli::Cmd::NpmDist(Command::Upgrade(args)) => args,
-                _ => panic!("summon upgrade 没有落到升级命令"),
-            }
+    for channel in ["npm", "gitlab"] {
+        let Err(error) = parse(&["--channel", channel]) else {
+            panic!("--channel {channel} 应被拒绝");
         };
-        assert_eq!(parse(&[]).channel, Channel::Npm, "默认仍是 npm 渠道");
-        let args = parse(&["--channel", "github"]);
-        assert_eq!(args.channel, Channel::Github);
-        assert_eq!(args.from.as_deref(), Some("release-dir"));
-        assert!(args.check);
+        let error = error.to_string();
+        assert!(
+            error.contains("GitHub Releases") && error.contains("npm"),
+            "{channel}: {error}"
+        );
     }
+    assert!(parse(&["--registry", "https://registry.test"]).is_err());
 }

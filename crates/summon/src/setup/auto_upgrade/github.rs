@@ -186,14 +186,16 @@ impl Channel for GithubChannel {
             &mut out,
         )?;
         Ok(Fetched::Ready {
-            stage: Some(stage.keep()),
+            stage: stage.keep(),
         })
     }
 
     fn recheck(&self, pending: &Pending) -> Result<Result<Rechecked, String>> {
         let version = &pending.version;
         let Some(stage) = &pending.stage else {
-            return Ok(Err(summon_i18n::format!("r8c83ee939b")));
+            return Ok(Err(summon_i18n::format!(
+                "auto_upgrade.pending_without_stage"
+            )));
         };
         let entry = stage.join("pkg").join(companion::SUMMON);
         if !entry.is_file() {
@@ -219,7 +221,7 @@ impl Channel for GithubChannel {
             let at = drill.describe();
             notes.push(summon_i18n::format!("rc3b41ce575"));
         }
-        // 带 npm 分发渠道的构建显式选了这条渠道:Release 里是公开构建。
+        // 带 npm 分发渠道的构建:Release 里是公开构建,换代之后落点那份不再看 npm 包。
         if cfg!(npm_dist) {
             notes.push(summon_i18n::text!("r2c8b639d7a").to_string());
         }

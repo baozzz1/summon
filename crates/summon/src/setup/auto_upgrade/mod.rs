@@ -28,15 +28,9 @@ mod swap;
 pub(crate) mod watch;
 
 pub(crate) use runner::{doctor_lines, spawn};
-pub(crate) use state::{lift_rollback, refuses_publish};
-// 下面这些只有 npm 渠道(在 `npm_dist` 里)从外面用。
-#[cfg(npm_dist)]
-pub(crate) use channel::{Channel, CheckFailed, Fetched, Rechecked, RestoreSource, RESTORE_LIMIT};
 #[cfg(test)]
 pub(crate) use state::Store;
+pub(crate) use state::{lift_rollback, refuses_publish};
+// 运行期从 npm 包拉取更新的那份(在 `npm_dist` 里)的测试用。
 #[cfg(all(test, npm_dist))]
-pub(crate) use state::{forget_rollback, previous_dir, State};
-#[cfg(npm_dist)]
-pub(crate) use state::{restore_pid_path, Pending, Seen};
-#[cfg(all(test, npm_dist))]
-pub(crate) use swap::seal_snapshot;
+pub(crate) use state::forget_rollback;

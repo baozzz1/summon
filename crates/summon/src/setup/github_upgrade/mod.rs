@@ -1,6 +1,5 @@
 //! `summon upgrade` 的 GitHub Releases 渠道:从 Release 取 manifest 与本平台的包,核对后换进落点
-//! `~/.summon/bin/`,用新的那份重启 daemon。没有 npm 分发渠道的构建里它就是 `summon upgrade`,
-//! 带 npm 渠道的构建经 `summon upgrade --channel github` 走它。
+//! `~/.summon/bin/`,用新的那份重启 daemon。所有构建里 `summon upgrade` 都只走这一条渠道。
 //!
 //! 顺序(前面任何一步不成立都不碰落点,暂存目录随之删掉,退出码非零):
 //!
@@ -48,6 +47,33 @@ pub struct UpgradeArgs {
     /// 只报告有没有新版,不下载
     #[arg(long)]
     pub check: bool,
+}
+
+/// 命令行上的 `summon upgrade`:升级参数之外还收一个隐藏的 `--channel`。早先带 npm 分发渠道的构建
+/// 用它在 npm 与 GitHub Releases 之间选,如今只剩 GitHub Releases:照旧写 `--channel github` 的命令
+/// 仍能跑(stderr 提示可以去掉它),写别的值直接报错说明,不悄悄改走别处。
+#[derive(clap::Args, Debug)]
+pub struct UpgradeCommand {
+    #[command(flatten)]
+    pub args: UpgradeArgs,
+    /// 只认 github,可以不写
+    #[arg(long, hide = true, value_name = "github", value_parser = parse_channel)]
+    pub channel: Option<String>,
+}
+
+fn parse_channel(value: &str) -> Result<String, String> {
+    if value == "github" {
+        Ok(value.to_string())
+    } else {
+        Err(summon_i18n::format!("upgrade.channel_flag.retired"))
+    }
+}
+
+pub fn run_command(command: &UpgradeCommand) -> Result<()> {
+    if command.channel.is_some() {
+        eprintln!("{}", summon_i18n::text!("upgrade.channel_flag.redundant"));
+    }
+    run(&command.args)
 }
 
 /// 暂存那份 `install-stamp print` 的时限。刚解出的二进制在 macOS 首次执行要过一遍系统评估。
@@ -168,7 +194,7 @@ fn untouched(error: impl Into<anyhow::Error>) -> anyhow::Error {
 }
 
 /// daemon 在跑、却证不了跑的就是 `new` 这一版(报的版本不同,或报不出版本):落点已是这一版时
-/// 也要用落点那份换代。判据与 npm 渠道的 `next_step` 相同。
+/// 也要用落点那份换代。
 fn daemon_is_stale(daemon: &Daemon, new: &BuildInfo) -> bool {
     match daemon {
         Daemon::Stopped => false,

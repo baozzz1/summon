@@ -474,7 +474,7 @@ impl Default for Dashboard {
 ///   min_age_hours: 2          # 新版发布满这么久才采用
 ///   idle_minutes: 10          # 整机连续空闲这么久才重启
 ///   range: minor              # minor:跟到同一主版本内的次版本;patch:只跟同一 x.y 的补丁版本
-///   channel: github           # 新版从哪个渠道取;不写用本构建的默认渠道
+///   channel: github           # 只有 github(GitHub Releases),可以不写
 ///   from: /path/to/release    # 演练用的 Release 来源;不写即 GitHub 上的 Release
 /// ```
 ///
@@ -487,8 +487,8 @@ pub struct Upgrade {
     pub min_age_hours: u64,
     pub idle_minutes: u64,
     pub range: UpgradeRange,
-    /// 新版从哪个渠道取:`github` 是 GitHub Releases,其余取值看本构建带了哪些渠道。取值在用时
-    /// 校验(写错只让自动升级不生效、doctor 说明,不影响别的配置)。
+    /// 新版从哪个渠道取:只有 `github`(GitHub Releases),不写也是它;停用的 `npm` 按 `github`
+    /// 处理。取值在用时校验(写错只让自动升级不生效、doctor 说明,不影响别的配置)。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     /// 演练用的 Release 来源(只用于 github 渠道):绝对路径的本地目录,或本机回环地址上的明文

@@ -285,9 +285,9 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 
 自动升级 `upgrade`:`auto: false`(默认关)、`check_interval_hours: 6`、`min_age_hours: 2`(新版发布满这么久
 才采用)、`idle_minutes: 10`(整机连续空闲这么久才换代)、`range: minor`(`patch` 只跟同一 x.y 的补丁版本;
-主版本变化一律不自动跟)。`channel` 选新版从哪个渠道取:`github` 是 GitHub Releases,不写用本构建的默认
-渠道。`from` 是演练用的 Release 来源,只收绝对路径的本地目录或本机回环地址上的明文 `http://`,其下直接有
-`manifest.json` 与各平台的包。换代后观察 10 分钟,新版起不来或很快崩了就放回换代前的落点、不再自动采用
+主版本变化一律不自动跟)。新版只从 GitHub Releases 取:`channel` 不写或写 `github` 都是它,旧配置里的
+`npm` 按 `github` 处理(doctor 提示可删)。`from` 是演练用的 Release 来源,只收绝对路径的本地目录或本机
+回环地址上的明文 `http://`,其下直接有 `manifest.json` 与各平台的包。换代后观察 10 分钟,新版起不来或很快崩了就放回换代前的落点、不再自动采用
 它;过程写 `~/.summon/run/upgrade.log`,状态看 `summon doctor`。
 
 ## 改配置的正确姿势

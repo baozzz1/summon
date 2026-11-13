@@ -4,10 +4,10 @@
 //! 它先用与 `summon upgrade` 同一段脚本([`upgrade_restart::RESTART_SCRIPT`])让 daemon 换代,再
 //! 观察新版 [`OBSERVE`] 这么久:新版没起来,或观察期内退出了而不是人经 `summon daemon stop` 停的
 //! (崩溃、被杀、自己有序退出),就退回 —— 先记下这一版不再自动采用(运行期发布也据此不再把它装进
-//! 落点),再让发布源那一侧回到旧版,停掉还在跑的新版,把快照里的旧文件放回落点,钉住落点起旧版。
+//! 落点),再停掉还在跑的新版,把快照里的旧文件放回落点,钉住落点起旧版。退回只靠这份快照,不经任何
+//! 包管理器。
 //! 人在观察期内停掉 daemon 是人的决定,不退回。
 
-use super::channel::RestoreSource;
 use super::github;
 use super::state::{previous_dir, unix_now, Store};
 use crate::setup::upgrade_restart;
@@ -38,13 +38,9 @@ pub struct WatchArgs {
     /// 换代前在跑的版本
     #[arg(long)]
     pub previous: String,
-    /// 新版的暂存目录:换代后核对落点里的文件都已是它;新版不在暂存里的渠道不给
+    /// 新版的暂存目录:换代后核对落点里的文件都已是它
     #[arg(long)]
-    pub stage: Option<PathBuf>,
-    /// 退回时让发布源那一侧回到旧版要用的参数
-    #[cfg(npm_dist)]
-    #[command(flatten)]
-    pub restore: crate::setup::npm_dist::upgrade_watch::RestoreArgs,
+    pub stage: PathBuf,
     #[arg(help = summon_i18n::text!("rcb3e341539"))]
     /// 装过 Menu Bar
     #[arg(long)]
@@ -53,15 +49,10 @@ pub struct WatchArgs {
 
 pub fn run(args: &WatchArgs) -> Result<()> {
     let home = dirs::home_dir().context(summon_i18n::text!("rc086b7ca57"))?;
-    #[cfg(npm_dist)]
-    let restore: &dyn RestoreSource = &args.restore;
-    #[cfg(not(npm_dist))]
-    let restore: &dyn RestoreSource = &super::channel::NoRestore;
     Watch {
         home: &home,
         args,
         probe: &LiveProbe,
-        restore,
         platform: summon_core::release::platform(std::env::consts::OS, std::env::consts::ARCH),
         observe: OBSERVE,
         poll: OBSERVE_POLL,
@@ -140,8 +131,6 @@ pub(crate) struct Watch<'a> {
     pub(crate) home: &'a Path,
     pub(crate) args: &'a WatchArgs,
     pub(crate) probe: &'a dyn Probe,
-    /// 退回时发布源那一侧怎么回到旧版。
-    pub(crate) restore: &'a dyn RestoreSource,
     /// 本机的发布平台:换代后按它的文件清单核对落点。
     pub(crate) platform: Option<&'static str>,
     pub(crate) observe: Duration,
@@ -186,11 +175,9 @@ impl Watch<'_> {
                 return self.roll_back(&why, out);
             }
         };
-        // 新版在暂存里的渠道:daemon 报的是新版还不够,落点里本平台的每个文件都得已是它。
-        if let Some(stage) = &self.args.stage {
-            if let Err(why) = github::landed(self.home, stage, self.platform) {
-                return self.roll_back(&why, out);
-            }
+        // daemon 报的是新版还不够,落点里本平台的每个文件都得已是暂存里的那份。
+        if let Err(why) = github::landed(self.home, &self.args.stage, self.platform) {
+            return self.roll_back(&why, out);
         }
         writeln!(
             out,
@@ -258,8 +245,6 @@ impl Watch<'_> {
             self.summon(&install, &["daemon", "status"], false);
             bail!(summon_i18n::format!("r672e87e576"));
         }
-        // 发布源那一侧回到旧版;没成只记进结局,落点照样放回。
-        let restore_failed = self.restore.restore(self.home, new, previous, why);
         if self.probe.running().is_some() {
             self.summon(&install, &["daemon", "stop"], false);
         }
@@ -269,8 +254,7 @@ impl Watch<'_> {
             self.summon(&install, &["menubar", "restart"], false);
         }
         self.summon(&install, &["daemon", "status"], false);
-        let outcome = restore_failed.unwrap_or_else(|| summon_i18n::format!("rb00395ce9a"));
-        self.note(out, &outcome)
+        self.note(out, &summon_i18n::format!("rb00395ce9a"))
     }
 
     /// 跑落点那份 summon;输出进日志,失败只记下来、不中断退回。`pinned`:钉住落点,不从别的安装源拉。
@@ -413,6 +397,7 @@ esac
 echo "$role $* pin=${SUMMON_PIN_INSTALL:-}" >> "$home/calls.log"
 case "$1 ${2:-}" in
   "daemon restart")
+    if [ -e "$home/restart-fails" ]; then exit 1; fi
     for f in $(cat "$home/publish" 2>/dev/null); do
       cp "$here/$f" "$home/.summon/bin/.$f.new" && mv -f "$home/.summon/bin/.$f.new" "$home/.summon/bin/$f"
     done ;;
@@ -452,12 +437,7 @@ exit 0
                 entry: stage.join("pkg").join(companion::SUMMON),
                 version: "0.6.35".into(),
                 previous: "0.6.34".into(),
-                stage: Some(stage.clone()),
-                #[cfg(npm_dist)]
-                restore: crate::setup::npm_dist::upgrade_watch::RestoreArgs {
-                    registry: None,
-                    npm: None,
-                },
+                stage: stage.clone(),
                 menubar: false,
             };
             Self {
@@ -469,17 +449,22 @@ exit 0
         }
 
         fn run(&self, probe: &FakeProbe) -> Result<()> {
-            Watch {
+            self.run_with_output(probe).0
+        }
+
+        fn run_with_output(&self, probe: &FakeProbe) -> (Result<()>, String) {
+            let mut out = Vec::new();
+            let result = Watch {
                 home: &self.home,
                 args: &self.args,
                 probe,
-                restore: &super::super::channel::NoRestore,
                 platform: Some("linux-x64"),
                 observe: Duration::from_secs(60),
                 poll: Duration::from_secs(10),
                 restore_delay_secs: 0,
             }
-            .run(&mut Vec::new(), |_| {})
+            .run(&mut out, |_| {});
+            (result, String::from_utf8(out).unwrap())
         }
 
         fn calls(&self) -> String {
@@ -548,7 +533,95 @@ exit 0
         }
     }
 
-    /// 守望命令两种构建里都在顶层(隐藏),GitHub 渠道带 `--stage`。
+    /// 换代成了还要观察:观察期内运行正常就留着新版,收尾删掉旧版快照。
+    #[test]
+    fn a_new_version_that_stays_up_is_kept() {
+        let github = Github::new("summon summon-sidecar");
+        let (result, out) = github.run_with_output(&FakeProbe::new(&[Some(9)], Some("0.6.35")));
+        result.unwrap();
+        assert!(out.contains("观察 1 分钟"), "{out}");
+        let state = github.state();
+        assert!(state.rolled_back.is_empty());
+        assert!(state.last_event.unwrap().text.contains("观察期内运行正常"));
+        assert!(!previous_dir(&github.home).exists(), "收尾删掉旧版快照");
+    }
+
+    /// 新版没起来(重启失败、没有 daemon):不停、放回快照、钉住落点起旧版,这一版进退回名单。
+    #[test]
+    fn a_new_version_that_does_not_come_up_is_rolled_back() {
+        let github = Github::new("summon summon-sidecar");
+        std::fs::write(github.home.join("restart-fails"), "").unwrap();
+        let (result, out) = github.run_with_output(&FakeProbe::new(&[None], None));
+        result.unwrap();
+        assert!(out.contains("0.6.35 没起来"), "{out}");
+        let calls = github.calls();
+        assert!(
+            !calls.contains("install daemon stop"),
+            "没在跑就不停:{calls}"
+        );
+        assert!(calls.contains("install daemon start pin=1"), "{calls}");
+        assert_eq!(github.installed(companion::SIDECAR), "old sidecar");
+        assert!(github.installed(companion::SUMMON).ends_with("# old\n"));
+        assert!(!previous_dir(&github.home).exists());
+        let state = github.state();
+        assert_eq!(state.rolled_back, ["0.6.35"]);
+        assert!(state.pending.is_none());
+        assert!(state.last_event.unwrap().text.contains("已退回 0.6.34"));
+    }
+
+    /// 起来了,观察期里没走完停机就没了:退回。
+    #[test]
+    fn a_new_version_that_crashes_while_watched_is_rolled_back() {
+        let github = Github::new("summon summon-sidecar");
+        let mut probe = FakeProbe::new(&[Some(9), Some(9), None], Some("0.6.35"));
+        probe.unfinished = vec![9];
+        let (result, out) = github.run_with_output(&probe);
+        result.unwrap();
+        assert!(out.contains("在观察期内异常退出"), "{out}");
+        assert!(github.calls().contains("install daemon start pin=1"));
+        assert_eq!(github.state().rolled_back, ["0.6.35"]);
+        assert_eq!(github.installed(companion::SIDECAR), "old sidecar");
+    }
+
+    /// 起来的不是新版(重启没换进去、兜底起了旧的):照样退回,先停掉在跑的那一个再起。
+    #[test]
+    fn a_restart_that_did_not_take_the_new_version_is_rolled_back() {
+        let github = Github::new("summon summon-sidecar");
+        let (result, out) = github.run_with_output(&FakeProbe::new(&[Some(5)], Some("0.6.34")));
+        result.unwrap();
+        assert!(out.contains("daemon 当前 0.6.34"), "{out}");
+        let calls = github.calls();
+        let stop = calls.find("install daemon stop").expect("先停在跑的");
+        let start = calls.find("install daemon start pin=1").expect("再起旧版");
+        assert!(stop < start, "{calls}");
+    }
+
+    /// 人在观察期内停掉 daemon 是人的决定:不退回。
+    #[test]
+    fn a_human_stop_during_observation_is_left_alone() {
+        let github = Github::new("summon summon-sidecar");
+        let mut probe = FakeProbe::new(&[Some(9), None], Some("0.6.35"));
+        probe.stopped_by_human = vec![9];
+        github.run(&probe).unwrap();
+        let state = github.state();
+        assert!(state.rolled_back.is_empty());
+        assert!(state.last_event.unwrap().text.contains("被人停止,不退回"));
+        assert!(!github.calls().contains("daemon start"));
+    }
+
+    /// 走完停机退出、却没有人停它:机器上没有 daemon 了,按新版出了问题退回。
+    #[test]
+    fn a_new_version_that_exits_on_its_own_is_rolled_back() {
+        let github = Github::new("summon summon-sidecar");
+        let (result, out) =
+            github.run_with_output(&FakeProbe::new(&[Some(9), None], Some("0.6.35")));
+        result.unwrap();
+        assert!(out.contains("不是人停的"), "{out}");
+        assert!(github.calls().contains("install daemon start pin=1"));
+        assert_eq!(github.state().rolled_back, ["0.6.35"]);
+    }
+
+    /// 守望命令在顶层(隐藏),必须带新版的暂存目录 `--stage`。
     #[test]
     fn the_watch_command_takes_the_stage_in_every_build() {
         use clap::Parser;
@@ -568,7 +641,18 @@ exit 0
         let crate::cli::cli::Cmd::AutoUpgradeWatch(args) = cli.cmd else {
             panic!("守望命令没落到顶层");
         };
-        assert_eq!(args.stage.as_deref(), Some(Path::new("/s")));
+        assert_eq!(args.stage, Path::new("/s"));
+        let without_stage = crate::cli::cli::Cli::try_parse_from([
+            "summon",
+            "auto-upgrade-watch",
+            "--entry",
+            "/s/pkg/summon",
+            "--version",
+            "0.6.35",
+            "--previous",
+            "0.6.34",
+        ]);
+        assert!(without_stage.is_err(), "没有暂存就核对不了落点");
     }
 
     /// 守望进程自己出错(这里是退回时写不进状态文件)就留着快照:兜底进程还要拿它放回换代前的落点。

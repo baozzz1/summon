@@ -3,7 +3,7 @@
 use super::channel::{self, Channel, Fetched};
 use super::decide::{check_due, decide, machine_quiet, IdleClock, Verdict};
 use super::state::{
-    legacy_restore_pid_path, reconcile_state, today, unix_now, Pending, State, Store,
+    legacy_restore_pid_paths, reconcile_state, today, unix_now, Pending, State, Store,
 };
 use super::swap::{attempt_restart, inbox_wal, settle, GuardFiles};
 use crate::setup::upgrade_restart;
@@ -122,8 +122,9 @@ impl Runner {
             // 删不掉留着无妨:下一次换代开始前会重做快照、重写 pid 文件。
             let _ = std::fs::remove_dir_all(&files.snapshot);
             let _ = std::fs::remove_file(&files.watcher);
-            let _ = std::fs::remove_file(&files.restore);
-            let _ = std::fs::remove_file(legacy_restore_pid_path(&self.home));
+            for legacy in legacy_restore_pid_paths(&self.home) {
+                let _ = std::fs::remove_file(legacy);
+            }
         } else if !files.snapshot.exists() && !super::swap::watcher_alive(&files.watcher) {
             // 上一次换代成了、守望进程已经走了,它的 pid 文件只是残留;不清掉,下一次换代尝试若在
             // 起守望进程之前留下了快照,两者一凑就像一次被中断的换代。
@@ -274,7 +275,7 @@ impl Runner {
                 state.pending = Some(Pending {
                     version: version.clone(),
                     previous: self.running.clone(),
-                    stage,
+                    stage: Some(stage),
                 });
                 state.note(
                     now_secs,
@@ -356,6 +357,7 @@ pub(super) fn doctor_lines_at(cfg: &Config, home: &Path) -> Vec<String> {
         policy.idle_minutes
     )];
     lines.extend(channel.doctor_notes());
+    lines.extend(channel::retired_note(policy));
     let state = match Store::at_home(home).load() {
         Ok(state) => state,
         Err(error) => {

@@ -7,16 +7,12 @@
 //! agent 友好硬约束:纯 markdown 到 stdout、无交互、无颜色码;未知章节 exit 非 0 并列出
 //! 可用章节(让 agent 知道自己拼错了,而不是拿到一段错误文本当答案)。
 
-/// 怎么升级取决于这份二进制带了哪条安装渠道:手册里的 `{{upgrade}}`(manage 的升级条目)与
-/// `{{upgrade_fix}}`(troubleshooting 的「升级到最新版」)按渠道填。
-#[cfg(npm_dist)]
-use crate::setup::npm_dist::{GUIDE_UPGRADE as UPGRADE, GUIDE_UPGRADE_FIX as UPGRADE_FIX};
-#[cfg(not(npm_dist))]
+/// 手册里的占位符换成升级说明:`{{upgrade}}`(manage 的升级条目)与 `{{upgrade_fix}}`
+/// (troubleshooting 的「升级到最新版」)。
 const UPGRADE: &str = "r948e9b5246";
-#[cfg(not(npm_dist))]
 const UPGRADE_FIX: &str = "re506263175";
 
-fn fill_channel(text: &'static str) -> std::borrow::Cow<'static, str> {
+fn fill_upgrade(text: &'static str) -> std::borrow::Cow<'static, str> {
     if !text.contains("{{upgrade") {
         return text.into();
     }
@@ -75,11 +71,11 @@ fn resolve(section: Option<&str>) -> Option<std::borrow::Cow<'static, str>> {
             Some(summon_i18n::include_text!("guide/mentionless.md").into())
         }
         Some(s) if s == "config" => Some(summon_i18n::include_text!("guide/config.md").into()),
-        Some(s) if s == "troubleshooting" => Some(fill_channel(summon_i18n::include_text!(
+        Some(s) if s == "troubleshooting" => Some(fill_upgrade(summon_i18n::include_text!(
             "guide/troubleshooting.md"
         ))),
         Some(s) if s == "manage" => {
-            Some(fill_channel(summon_i18n::include_text!("guide/manage.md")))
+            Some(fill_upgrade(summon_i18n::include_text!("guide/manage.md")))
         }
         Some(_) => None,
     }

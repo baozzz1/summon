@@ -1,8 +1,8 @@
 //! 一次换代:落点快照、兜底进程、关闸等本代进入停机、拉起守望进程,以及换代尝试之后的落账。
 
-use super::channel::{self, Rechecked, RESTORE_LIMIT};
+use super::channel::{self, Rechecked};
 use super::decide::machine_quiet;
-use super::state::{previous_dir, restore_pid_path, run_dir, Pending, Store};
+use super::state::{previous_dir, run_dir, Pending, Store};
 use crate::runtime::admission::{Freeze, Gate};
 use crate::runtime::inbox_wal::InboxWal;
 use crate::setup::self_install;
@@ -26,13 +26,10 @@ const KILL_SETTLE: Duration = Duration::from_millis(500);
 
 /// 守望进程命令行里认它的那一段。
 const WATCHER_MARK: &str = "auto-upgrade-watch --entry";
-/// 守望进程退回时为装回旧版另起的进程,命令行里认它的那一段。
-const RESTORE_MARK: &str = "install -g";
 
-/// 兜底进程要用到的几样:守望进程与它装回旧版另起的进程的 pid 文件,换代前的落点快照。
+/// 兜底进程要用到的几样:守望进程的 pid 文件,换代前的落点快照。
 pub(super) struct GuardFiles {
     pub(super) watcher: PathBuf,
-    pub(super) restore: PathBuf,
     pub(super) snapshot: PathBuf,
 }
 
@@ -40,7 +37,6 @@ impl GuardFiles {
     pub(super) fn at_home(home: &Path) -> Self {
         Self {
             watcher: run_dir(home).join("auto-upgrade.watcher.pid"),
-            restore: restore_pid_path(home),
             snapshot: previous_dir(home),
         }
     }
@@ -250,19 +246,18 @@ pub(crate) fn hold_until_stopping(
 
 /// 兜底进程:本代一退出就保证有下一代。先等本代退出 —— 进程没了,或 `daemon status` 不再报它
 /// (僵尸、pid 复用都卡不住)。然后守望进程还在就由它起新一代、兜底进程不动手,免得和它的退回争着
-/// 起 daemon;过了 [`watcher_cap`] 它还在、新一代还没起来,就结束它整组,连同它装回旧版另起的那
-/// 一组(都先确认组长仍是那个进程,pid 被复用了就不动)。守望进程不在了,快照还在就先把换代前的
-/// 落点放回去,再钉住落点起 daemon(不从别的安装源拉),直到 `daemon status` 报出一个不是旧 pid 的
-/// daemon;起不来就退避重试,不设上限。新一代起来就退。守望进程的 pid 文件读不到时当它还在,同样
-/// 至多等 [`watcher_cap`]。认守望进程与装回进程的命令行片段经环境变量交进来,不出现在自己的
-/// 命令行里。参数:旧 daemon 的 pid、落点 summon、守望进程的 pid 文件、装回进程的 pid 文件、落点
-/// 快照、看的间隔、首次重试间隔(整秒,翻倍到 60)、等守望进程的上限(秒)。
+/// 起 daemon;过了 [`watcher_cap`] 它还在、新一代还没起来,就结束它整组(先确认组长仍是那个进程,
+/// pid 被复用了就不动)。守望进程不在了,快照还在就先把换代前的落点放回去,再钉住落点起 daemon
+/// (不从别的安装源拉),直到 `daemon status` 报出一个不是旧 pid 的 daemon;起不来就退避重试,不设
+/// 上限。新一代起来就退。守望进程的 pid 文件读不到时当它还在,同样至多等 [`watcher_cap`]。认守望
+/// 进程的命令行片段经环境变量交进来,不出现在自己的命令行里。参数:旧 daemon 的 pid、落点 summon、
+/// 守望进程的 pid 文件、落点快照、看的间隔、首次重试间隔(整秒,翻倍到 60)、等守望进程的上限(秒)。
 const GUARD_SCRIPT: &str = "r7d3ca328e7";
 
-/// 兜底进程等守望进程起新一代的上限:盖住守望进程正常要做的全部 —— 观察新版,退回时装回旧版,
-/// 再留出几次停起 daemon 与重启 Menu Bar 的余量。过了它还没有新一代,就当守望进程卡住了。
+/// 兜底进程等守望进程起新一代的上限:盖住守望进程正常要做的全部 —— 观察新版,再留出几次停起
+/// daemon 与重启 Menu Bar 的余量。过了它还没有新一代,就当守望进程卡住了。
 fn watcher_cap() -> Duration {
-    super::watch::OBSERVE + RESTORE_LIMIT + Duration::from_secs(10 * 60)
+    super::watch::OBSERVE + Duration::from_secs(10 * 60)
 }
 
 /// 生产上的兜底进程参数:每 0.5 秒看一次旧进程,重试间隔 3 秒起、翻倍到 60 秒。
@@ -297,11 +292,9 @@ fn spawn_guardian(
         .arg(old.to_string())
         .arg(companion::install_target(home))
         .arg(&files.watcher)
-        .arg(&files.restore)
         .arg(&files.snapshot)
         .args(args)
         .env("GUARD_WATCHER_MARK", WATCHER_MARK)
-        .env("GUARD_RESTORE_MARK", RESTORE_MARK)
         .env(upgrade_restart::PIN_ENV, "1")
         .stdin(Stdio::null());
     match sink {
@@ -401,7 +394,6 @@ pub(super) fn attempt_restart(
     let files = GuardFiles::at_home(home);
     // 上一次尝试留下的不作数;删不掉时兜底进程按「读不到」处理,至多等上限。
     let _ = std::fs::remove_file(&files.watcher);
-    let _ = std::fs::remove_file(&files.restore);
     let mut guardian = spawn_guardian(home, log, std::process::id(), &files, guard_args())?;
     let mut command = Command::new(previous.join(companion::SUMMON));
     command
@@ -844,8 +836,8 @@ mod tests {
             assert!(!is_held);
             assert_eq!(stored, Some(pending()));
         }
-        // npm 入口被人动过:作废,不罚。
-        let (next, is_held, stored) = held(Ok(Attempt::Stale("npm 包已是 0.6.36".into())));
+        // 新版入口被人动过:作废,不罚。
+        let (next, is_held, stored) = held(Ok(Attempt::Stale("暂存里已是 0.6.36".into())));
         assert_eq!((next, is_held, stored), (None, false, None));
         // 其余没换成的结局:当天不再试。
         for attempt in [
@@ -899,11 +891,10 @@ esac
         );
     }
 
-    /// 起一个兜底进程。旧 daemon、守望进程与装回进程各用一个真子进程代表;落点里的构建戳是新版的,
-    /// 快照里是旧版的,看兜底进程有没有把它放回去。
+    /// 起一个兜底进程。旧 daemon 与守望进程各用一个真子进程代表;落点里的构建戳是新版的,快照里是
+    /// 旧版的,看兜底进程有没有把它放回去。
     fn guardian_fixture(
         watcher_pid: Option<u32>,
-        restore_pid: Option<u32>,
         cap: &str,
     ) -> (
         tempfile::TempDir,
@@ -923,16 +914,12 @@ esac
         std::fs::write(bin.join("old-alive"), "").unwrap();
         let files = GuardFiles {
             watcher: home.join("watcher.pid"),
-            restore: home.join("npm.pid"),
             snapshot: home.join("snapshot"),
         };
         std::fs::create_dir_all(&files.snapshot).unwrap();
         std::fs::write(files.snapshot.join(install_stamp::STAMP_FILE), "old stamp").unwrap();
         if let Some(pid) = watcher_pid {
             std::fs::write(&files.watcher, pid.to_string()).unwrap();
-        }
-        if let Some(pid) = restore_pid {
-            std::fs::write(&files.restore, pid.to_string()).unwrap();
         }
         let unopenable_log = home.join("no-such-dir/upgrade.log");
         let guardian = spawn_guardian(
@@ -950,7 +937,7 @@ esac
         std::fs::read_to_string(bin.join(install_stamp::STAMP_FILE)).unwrap()
     }
 
-    /// 自成一组、命令行里带给定片段的进程,代表守望进程或它的装回进程。
+    /// 自成一组、命令行里带给定片段的进程,代表守望进程。
     fn group_leader(args: &[&str]) -> std::process::Child {
         use std::os::unix::process::CommandExt as _;
         Command::new("/bin/sh")
@@ -993,7 +980,7 @@ esac
     #[test]
     fn the_guardian_starts_a_daemon_once_the_old_one_and_the_watcher_are_gone() {
         let mut watcher = Command::new("sleep").arg("30").spawn().unwrap();
-        let (_tmp, bin, mut old, mut guardian) = guardian_fixture(Some(watcher.id()), None, "30");
+        let (_tmp, bin, mut old, mut guardian) = guardian_fixture(Some(watcher.id()), "30");
         std::thread::sleep(Duration::from_millis(500));
         assert!(!bin.join("starts").exists(), "旧 daemon 还在,不该起");
         // 旧进程还在、status 已不报它(停机时先撤 pid 文件):轮到守望进程,它还在就不起。
@@ -1017,16 +1004,13 @@ esac
     #[test]
     fn a_watcher_stuck_past_the_cap_is_ended_and_the_guardian_starts_a_daemon() {
         let mut watcher = group_leader(&["auto-upgrade-watch", "--entry", "x"]);
-        let mut npm = group_leader(&["install", "-g", "x"]);
-        let (_tmp, bin, mut old, mut guardian) =
-            guardian_fixture(Some(watcher.id()), Some(npm.id()), "1");
+        let (_tmp, bin, mut old, mut guardian) = guardian_fixture(Some(watcher.id()), "1");
         std::fs::remove_file(bin.join("old-alive")).unwrap();
         reap(&mut old);
         assert!(wait_for_exit(&mut guardian).success());
         assert!(bin.join("up").exists(), "过了上限自己起");
         assert_eq!(stamp(&bin), "old stamp", "起之前先放回换代前的落点");
         assert!(ended(&mut watcher), "卡住的守望进程应被结束");
-        assert!(ended(&mut npm), "它装回旧版用的 npm 一并结束");
     }
 
     /// pid 文件里的进程已经不是守望进程(pid 被复用):过了上限照样自己起,但不结束那个进程。
@@ -1038,7 +1022,7 @@ esac
             .process_group(0)
             .spawn()
             .unwrap();
-        let (_tmp, bin, mut old, mut guardian) = guardian_fixture(Some(stranger.id()), None, "1");
+        let (_tmp, bin, mut old, mut guardian) = guardian_fixture(Some(stranger.id()), "1");
         std::fs::remove_file(bin.join("old-alive")).unwrap();
         reap(&mut old);
         assert!(wait_for_exit(&mut guardian).success());
@@ -1053,7 +1037,7 @@ esac
     /// 读不到守望进程的 pid 文件时当它还在,同样至多等上限:过了就自己起。
     #[test]
     fn the_guardian_waits_for_an_unknown_watcher_only_up_to_the_cap() {
-        let (_tmp, bin, mut old, mut guardian) = guardian_fixture(None, None, "1");
+        let (_tmp, bin, mut old, mut guardian) = guardian_fixture(None, "1");
         std::fs::remove_file(bin.join("old-alive")).unwrap();
         reap(&mut old);
         assert!(wait_for_exit(&mut guardian).success());
@@ -1065,7 +1049,7 @@ esac
     fn the_guardian_leaves_once_a_new_daemon_is_running() {
         // 新一代起来了:落点照旧是新版,不放回。
         let mut watcher = Command::new("sleep").arg("30").spawn().unwrap();
-        let (_tmp, bin, mut old, mut guardian) = guardian_fixture(Some(watcher.id()), None, "30");
+        let (_tmp, bin, mut old, mut guardian) = guardian_fixture(Some(watcher.id()), "30");
         std::fs::remove_file(bin.join("old-alive")).unwrap();
         reap(&mut old);
         std::fs::write(bin.join("up"), "").unwrap();
@@ -1116,16 +1100,21 @@ esac
         }
     }
 
-    /// 兜底脚本与 Rust 这一侧说的是同一组名字:装回进程的 pid 文件与命令行标记都已是中性的名字。
+    /// 兜底脚本与 Rust 这一侧说的是同一组参数:位置参数的个数与 `spawn_guardian` 传的一致,认守望
+    /// 进程的命令行片段经环境变量交进来;退回只靠快照,脚本里没有任何包管理器。
     #[test]
     fn the_guard_script_uses_the_names_rust_passes() {
         let script = summon_core::i18n::label(GUARD_SCRIPT);
-        assert!(script.contains("\"$GUARD_RESTORE_MARK\""), "{script}");
         assert!(script.contains("\"$GUARD_WATCHER_MARK\""), "{script}");
+        assert!(
+            !script.contains("$8") && script.contains("cap=\"$7\""),
+            "{script}"
+        );
         assert!(!script.to_lowercase().contains("npm"), "{script}");
+        assert!(!script.contains("install -g"), "{script}");
         let source = include_str!("swap.rs");
         let spawn = &source[source.find("fn spawn_guardian(").unwrap()..];
-        assert!(spawn.contains(".env(\"GUARD_RESTORE_MARK\", RESTORE_MARK)"));
+        assert!(spawn.contains(".env(\"GUARD_WATCHER_MARK\", WATCHER_MARK)"));
     }
 
     /// 一次换代尝试要的本机:落点里正是在跑的这一份(fixture 的 0.6.9),暂存里是待换的 0.7.0。

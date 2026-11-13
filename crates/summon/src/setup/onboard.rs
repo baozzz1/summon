@@ -492,21 +492,14 @@ fn ensure_lark_cli_installed(cfg: &Config, yes: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 改 npm 全局目录时要补的说明:分发渠道可能在原目录里装着一份 summon(见 `setup::npm_dist`)。
-#[derive(Debug, Default)]
-pub(crate) struct PrefixMoveNotes {
-    /// 接在「之后 npm i -g 都装到这里」后面的半句。
-    pub upgrade_also: &'static str,
-    /// 改完之后提醒原目录里还剩什么。
-    pub leftover: Option<String>,
-}
-
+/// 改 npm 全局目录时要补的说明:分发渠道可能在原目录里装着一份 summon(见 `setup::npm_dist`),
+/// 改完之后提醒原目录里还剩什么。
 #[cfg(npm_dist)]
-use crate::setup::npm_dist::prefix_move_notes;
+use crate::setup::npm_dist::prefix_leftover;
 
 #[cfg(not(npm_dist))]
-fn prefix_move_notes(_current: &Path) -> PrefixMoveNotes {
-    PrefixMoveNotes::default()
+fn prefix_leftover(_current: &Path) -> Option<String> {
+    None
 }
 
 /// npm 全局目录对当前用户不可写时(系统自带的 node,目录属 root),官方安装器里的
@@ -522,7 +515,7 @@ fn move_npm_prefix_home(
     let target = crate::setup::npm::user_prefix(home);
     let bin = target.join("bin");
     let rc = crate::setup::npm::shell_rc(home, shell);
-    let notes = prefix_move_notes(current);
+    let leftover = prefix_leftover(current);
     let path_step = match &rc {
         Some(rc) => summon_i18n::format!("r13647f6d75", rc.display(), bin.display()),
         None => summon_i18n::format!("rf14906beb5", bin.display()),
@@ -533,7 +526,6 @@ fn move_npm_prefix_home(
             "rea5a5b260a",
             current = current.display(),
             target = target.display(),
-            upgrade = notes.upgrade_also,
         )
     );
     if !confirm()? {
@@ -582,7 +574,7 @@ fn move_npm_prefix_home(
         None => println!("{}", summon_i18n::format!("r45aba76a15", bin.display())),
     }
     println!("{}", summon_i18n::format!("r4f581d8530", target.display()));
-    if let Some(leftover) = &notes.leftover {
+    if let Some(leftover) = &leftover {
         println!("  {leftover}");
     }
     println!();

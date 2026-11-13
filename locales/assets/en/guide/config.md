@@ -320,9 +320,10 @@ lark_profile selects login identity. Deployment/user authorization still bounds 
 Automatic upgrades `upgrade`: `auto: false` (off by default), `check_interval_hours: 6`, `min_age_hours: 2`
 (a release must be this old before it is adopted), `idle_minutes: 10` (the machine must be idle this long before
 the swap), `range: minor` (`patch` follows only patch releases of the same x.y; major versions are never
-followed automatically). `channel` selects where new versions come from: `github` is GitHub Releases; unset
-means this build's default channel. `from` is a rehearsal Release source and only accepts an absolute local
-directory or plain `http://` on a loopback address, holding `manifest.json` and the platform packages directly.
+followed automatically). New versions come only from GitHub Releases: `channel` unset or `github` both mean
+it, and a leftover `npm` is treated as `github` (doctor suggests removing it). `from` is a rehearsal Release
+source and only accepts an absolute local directory or plain `http://` on a loopback address, holding
+`manifest.json` and the platform packages directly.
 After a swap the new version is watched for 10 minutes; if it fails to start or quickly crashes, the previous
 install is restored and that version is no longer adopted automatically. Progress goes to
 `~/.summon/run/upgrade.log`; check status with `summon doctor`.

@@ -1,28 +1,28 @@
 //! 自动升级的发布渠道:新版从哪里查、怎么取到本机、换代前怎么复核。判据、空闲等待、换代、守望
 //! 与退回都与渠道无关,在本模块的其余部分。
 //!
-//! 渠道由 `upgrade.channel` 选:`github`(GitHub Releases,见 [`super::github`])在所有构建里都有;
-//! 不写时用本构建的默认渠道 —— 带 npm 分发渠道的构建是 npm,其余是 github。
+//! 只有一条渠道:GitHub Releases(见 [`super::github`]),`upgrade.channel` 不写或写 `github` 都是它。
+//! 停用的 npm 渠道的写法 `npm` 照样按 GitHub Releases 走,doctor 提示删掉它(见 [`retired_note`])。
 
 use super::state::{Pending, Seen};
 use anyhow::Result;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use summon_core::config::Upgrade;
 
-/// 守望进程退回时让发布源那一侧回到旧版(见 [`RestoreSource`])的时限。兜底进程等守望进程的上限
-/// 把它算在里面。
-pub(crate) const RESTORE_LIMIT: Duration = Duration::from_secs(600);
-
 /// `upgrade.channel` 里 GitHub Releases 渠道的写法。
-pub(crate) const GITHUB: &str = "github";
+const GITHUB: &str = "github";
+
+/// 已停用的 npm 渠道在 `upgrade.channel` 里的写法。它是早先带 npm 分发渠道的构建的默认渠道,写着它
+/// 的机器是有意打开了自动升级;如今新版只发在 GitHub Releases,按 GitHub Releases 走才不让自动升级
+/// 悄悄停掉。
+const RETIRED_NPM: &str = "npm";
 
 /// 取新版到本机之后该做什么。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Fetched {
-    /// 已取到本机,等整机空闲换代。`stage`:新版所在的暂存目录(新版留在别处的渠道没有)。
-    Ready { stage: Option<PathBuf> },
+    /// 已取到本机,等整机空闲换代。`stage`:新版所在的暂存目录。
+    Ready { stage: PathBuf },
     /// 落点里是更新的版本,不替换。
     InstallIsNewer,
     /// 落点换不进去,换代也没用。
@@ -62,23 +62,6 @@ pub(crate) trait Channel {
     fn doctor_notes(&self) -> Vec<String>;
 }
 
-/// 守望进程退回时,发布源那一侧怎么回到旧版。没有这一侧的渠道什么都不做。
-pub(crate) trait RestoreSource {
-    /// 成了(或无事可做)返回 `None`;没成返回这次退回的结局说明 —— 落点照样放回旧版。
-    fn restore(&self, home: &Path, new: &str, previous: &str, why: &str) -> Option<String>;
-}
-
-/// 没有发布源那一侧可退的渠道(GitHub Releases:退回只靠换代前的落点快照)。
-#[cfg(any(test, not(npm_dist)))]
-pub(crate) struct NoRestore;
-
-#[cfg(any(test, not(npm_dist)))]
-impl RestoreSource for NoRestore {
-    fn restore(&self, _home: &Path, _new: &str, _previous: &str, _why: &str) -> Option<String> {
-        None
-    }
-}
-
 /// 这台机器此刻按配置能走的渠道;走不了就说明为什么不自动升级。
 pub(crate) fn open(home: &Path, policy: &Upgrade) -> Result<Box<dyn Channel>, String> {
     let from = policy
@@ -86,42 +69,15 @@ pub(crate) fn open(home: &Path, policy: &Upgrade) -> Result<Box<dyn Channel>, St
         .as_deref()
         .filter(|from| !from.trim().is_empty());
     match policy.channel.as_deref().map(str::trim) {
-        Some(GITHUB) => github(home, from),
-        Some(other) => other_channel(home, other, from),
-        None => default_channel(home, from),
+        None | Some(GITHUB) | Some(RETIRED_NPM) => {
+            super::github::GithubChannel::open(home, from).map(|c| Box::new(c) as Box<dyn Channel>)
+        }
+        Some(name) => Err(summon_i18n::format!("raee0004506")),
     }
 }
 
-fn github(home: &Path, from: Option<&str>) -> Result<Box<dyn Channel>, String> {
-    super::github::GithubChannel::open(home, from).map(|c| Box::new(c) as Box<dyn Channel>)
-}
-
-/// 带 npm 分发渠道的构建:默认 npm。
-#[cfg(npm_dist)]
-fn default_channel(home: &Path, from: Option<&str>) -> Result<Box<dyn Channel>, String> {
-    npm(home, from)
-}
-
-/// 只有 GitHub Releases 渠道的构建。
-#[cfg(not(npm_dist))]
-fn default_channel(home: &Path, from: Option<&str>) -> Result<Box<dyn Channel>, String> {
-    github(home, from)
-}
-
-#[cfg(npm_dist)]
-fn npm(home: &Path, from: Option<&str>) -> Result<Box<dyn Channel>, String> {
-    if from.is_some() {
-        return Err(summon_i18n::text!("re4d19e09fd").to_string());
-    }
-    crate::setup::npm_dist::auto_upgrade::NpmChannel::open(home)
-        .map(|channel| Box::new(channel) as Box<dyn Channel>)
-}
-
-fn other_channel(home: &Path, name: &str, from: Option<&str>) -> Result<Box<dyn Channel>, String> {
-    #[cfg(npm_dist)]
-    if name == crate::setup::npm_dist::auto_upgrade::CHANNEL {
-        return npm(home, from);
-    }
-    let _ = (home, from);
-    Err(summon_i18n::format!("raee0004506"))
+/// 配置里还写着停用的 npm 渠道时,doctor 多说的一行。
+pub(crate) fn retired_note(policy: &Upgrade) -> Option<String> {
+    (policy.channel.as_deref().map(str::trim) == Some(RETIRED_NPM))
+        .then(|| summon_i18n::text!("upgrade.channel.npm_retired").to_string())
 }

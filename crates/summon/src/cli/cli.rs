@@ -442,13 +442,9 @@ pub enum Cmd {
         #[command(subcommand)]
         action: DaemonAction,
     },
-    #[cfg(npm_dist)]
-    #[command(flatten)]
-    NpmDist(crate::setup::npm_dist::Command),
-    #[cfg(not(npm_dist))]
     #[command(about = summon_i18n::text!("rb8fcf9182a"))]
     /// 从 GitHub Releases 升级 summon,并用新版重启 daemon(装过 Menu Bar 的一并重启)
-    Upgrade(crate::setup::github_upgrade::UpgradeArgs),
+    Upgrade(crate::setup::github_upgrade::UpgradeCommand),
     #[command(about = summon_i18n::text!("r105af306ec"))]
     /// 自动升级换代时由 daemon 拉起:重启 daemon、观察新版,必要时退回旧版
     #[command(hide = true)]
@@ -1231,10 +1227,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         ),
         Cmd::Sentinel { action } => sentinel_cmd(&cfg, action),
         Cmd::Daemon { action } => daemon_cmd(&cfg, action),
-        #[cfg(npm_dist)]
-        Cmd::NpmDist(command) => crate::setup::npm_dist::run(command),
-        #[cfg(not(npm_dist))]
-        Cmd::Upgrade(args) => crate::setup::github_upgrade::run(&args),
+        Cmd::Upgrade(command) => crate::setup::github_upgrade::run_command(&command),
         Cmd::AutoUpgradeWatch(args) => crate::setup::auto_upgrade::watch::run(&args),
         Cmd::Bridge { action } => bridge_cmd(action),
         Cmd::Autostart { action } => autostart_cmd(action),

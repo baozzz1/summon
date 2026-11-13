@@ -410,7 +410,7 @@ fn the_stage_is_rechecked_before_the_swap() {
     );
 
     let stale = |pending: &Pending| channel.recheck(pending).unwrap().unwrap_err();
-    assert!(stale(&pending_at(None)).contains("不是这条渠道"));
+    assert!(stale(&pending_at(None)).contains("没有暂存目录"));
     fixture.reports(&gh::build("0.7.1", "abcdef12", 2_000));
     assert!(stale(&pending_at(Some(stage.clone()))).contains("0.7.1"));
     std::fs::remove_dir_all(&stage).unwrap();
@@ -482,19 +482,46 @@ fn a_misconfigured_channel_is_refused_with_a_reason() {
             .unwrap()
             .contains("upgrade.from"));
         assert!(open(Some("github"), Some("relative")).is_some());
+        assert!(
+            open(Some("npm"), Some("http://example.com/r"))
+                .unwrap()
+                .contains("upgrade.from"),
+            "停用的 npm 写法按 GitHub 渠道走,同样的 upgrade.from 闸"
+        );
     }
-    #[cfg(not(npm_dist))]
-    assert!(
-        open(Some("npm"), None).unwrap().contains("npm"),
-        "公开构建没有 npm 渠道"
-    );
-    #[cfg(npm_dist)]
-    assert!(
-        open(Some("npm"), Some(&home.display().to_string()))
-            .unwrap()
-            .contains("upgrade.from"),
-        "npm 渠道不认 upgrade.from"
-    );
+}
+
+/// 只有 GitHub Releases 一条渠道:不写 `upgrade.channel`、写 `github`、写停用的 `npm`,所有构建里
+/// 打开的都是它;只有写着 `npm` 时 doctor 多一行提示删掉它。
+#[test]
+fn every_build_defaults_to_github_and_reads_the_retired_npm_channel_as_github() {
+    let Some(platform) = release::platform(std::env::consts::OS, std::env::consts::ARCH) else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    for channel in [None, Some("github"), Some("npm"), Some(" npm ")] {
+        let policy = Upgrade {
+            auto: true,
+            channel: channel.map(str::to_string),
+            ..Upgrade::default()
+        };
+        let opened = super::super::channel::open(tmp.path(), &policy)
+            .unwrap_or_else(|why| panic!("{channel:?}: {why}"));
+        assert_eq!(opened.platform(), platform, "{channel:?}");
+        assert!(
+            opened.doctor_notes().join("\n").contains("GitHub Releases"),
+            "{channel:?}"
+        );
+        let note = super::super::channel::retired_note(&policy);
+        assert_eq!(
+            note.is_some(),
+            channel.is_some_and(|c| c.trim() == "npm"),
+            "{channel:?}"
+        );
+        if let Some(note) = note {
+            assert!(note.contains("npm") && note.contains("github"), "{note}");
+        }
+    }
 }
 
 fn make_stage(home: &Path, name: &str) -> PathBuf {
@@ -640,13 +667,17 @@ fn a_finished_swap_clears_its_stage_once_the_watcher_is_gone() {
     );
     let _ = watcher.wait();
     std::fs::create_dir_all(run.join("auto-upgrade-previous")).unwrap();
-    std::fs::write(run.join("auto-upgrade.npm.pid"), "1").unwrap();
+    for legacy in ["auto-upgrade.npm.pid", "auto-upgrade.restore.pid"] {
+        std::fs::write(run.join(legacy), "1").unwrap();
+    }
     Runner::new(home.clone(), "0.7.0").reconcile();
     assert!(!stage.exists(), "守望进程不在了,暂存清掉");
-    assert!(
-        !run.join("auto-upgrade.npm.pid").exists(),
-        "旧名字的 pid 文件一并清掉"
-    );
+    for legacy in ["auto-upgrade.npm.pid", "auto-upgrade.restore.pid"] {
+        assert!(
+            !run.join(legacy).exists(),
+            "更早版本退回时写的 pid 文件一并清掉:{legacy}"
+        );
+    }
 }
 
 fn doctor(fixture_home: &Path, from: &str, event: Option<Event>) -> String {
@@ -660,7 +691,8 @@ fn doctor(fixture_home: &Path, from: &str, event: Option<Event>) -> String {
     doctor_lines_at(&cfg, fixture_home).join("\n")
 }
 
-/// doctor:写明渠道、标出演练来源;同一原因接连出现时写出次数;带 npm 渠道的构建说清换成公开构建。
+/// doctor:写明渠道、标出演练来源;同一原因接连出现时写出次数;带 npm 渠道的构建说清换成公开构建;
+/// 还写着停用的 npm 渠道时提示删掉。
 #[test]
 fn doctor_names_the_channel_the_rehearsal_source_and_repeats() {
     if release::platform(std::env::consts::OS, std::env::consts::ARCH).is_none() {
@@ -681,6 +713,20 @@ fn doctor_names_the_channel_the_rehearsal_source_and_repeats() {
     assert!(lines.contains(&from) && lines.contains("演练"), "{lines}");
     assert!(lines.contains("连续 3 次"), "{lines}");
     assert_eq!(lines.contains("公开构建"), cfg!(npm_dist), "{lines}");
+    assert!(!lines.contains("已停用"), "{lines}");
+
+    // 配置里还写着停用的 npm 渠道:照样是 GitHub Releases,多一行提示删掉它。
+    let cfg = Config {
+        upgrade: Upgrade {
+            channel: Some("npm".into()),
+            ..policy(&from)
+        },
+        ..Config::default()
+    };
+    let lines = doctor_lines_at(&cfg, &fixture.home).join("\n");
+    assert!(lines.contains("GitHub Releases"), "{lines}");
+    assert!(lines.contains("upgrade.channel: npm 已停用"), "{lines}");
+    assert!(!lines.contains("不生效"), "{lines}");
 
     let lines = doctor(&fixture.home, "http://example.com/r", None);
     assert!(
