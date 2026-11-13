@@ -492,16 +492,6 @@ fn ensure_lark_cli_installed(cfg: &Config, yes: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 改 npm 全局目录时要补的说明:分发渠道可能在原目录里装着一份 summon(见 `setup::npm_dist`),
-/// 改完之后提醒原目录里还剩什么。
-#[cfg(npm_dist)]
-use crate::setup::npm_dist::prefix_leftover;
-
-#[cfg(not(npm_dist))]
-fn prefix_leftover(_current: &Path) -> Option<String> {
-    None
-}
-
 /// npm 全局目录对当前用户不可写时(系统自带的 node,目录属 root),官方安装器里的
 /// `npm install -g` 必然失败。说清要改什么,同意就把 npm 全局目录改到家目录并让新开的 shell
 /// 把它放进 PATH;不同意就列出其它做法后退出。返回改好的前缀。
@@ -515,7 +505,6 @@ fn move_npm_prefix_home(
     let target = crate::setup::npm::user_prefix(home);
     let bin = target.join("bin");
     let rc = crate::setup::npm::shell_rc(home, shell);
-    let leftover = prefix_leftover(current);
     let path_step = match &rc {
         Some(rc) => summon_i18n::format!("r13647f6d75", rc.display(), bin.display()),
         None => summon_i18n::format!("rf14906beb5", bin.display()),
@@ -574,9 +563,6 @@ fn move_npm_prefix_home(
         None => println!("{}", summon_i18n::format!("r45aba76a15", bin.display())),
     }
     println!("{}", summon_i18n::format!("r4f581d8530", target.display()));
-    if let Some(leftover) = &leftover {
-        println!("  {leftover}");
-    }
     println!();
     Ok(target)
 }

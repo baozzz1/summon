@@ -26,8 +26,8 @@ const OBSERVE_POLL: Duration = Duration::from_secs(10);
 
 #[derive(clap::Args, Debug)]
 pub struct WatchArgs {
-    #[arg(help = summon_i18n::text!("r069a729998"))]
-    /// 新版的入口
+    #[arg(help = summon_i18n::text!("rc60def0f56"))]
+    /// 新版的入口(暂存目录里的 summon)
     #[arg(long)]
     pub entry: PathBuf,
     #[arg(help = summon_i18n::text!("r38468e4c6f"))]
@@ -238,32 +238,29 @@ impl Watch<'_> {
             if self.probe.running().is_some() {
                 bail!(summon_i18n::format!("r44dbb630d8"));
             }
-            self.summon(&install, &["daemon", "start"], true);
+            self.summon(&install, &["daemon", "start"]);
             if self.args.menubar {
-                self.summon(&install, &["menubar", "restart"], false);
+                self.summon(&install, &["menubar", "restart"]);
             }
-            self.summon(&install, &["daemon", "status"], false);
+            self.summon(&install, &["daemon", "status"]);
             bail!(summon_i18n::format!("r672e87e576"));
         }
         if self.probe.running().is_some() {
-            self.summon(&install, &["daemon", "stop"], false);
+            self.summon(&install, &["daemon", "stop"]);
         }
         restore_install(self.home, &snapshot)?;
-        self.summon(&install, &["daemon", "start"], true);
+        self.summon(&install, &["daemon", "start"]);
         if self.args.menubar {
-            self.summon(&install, &["menubar", "restart"], false);
+            self.summon(&install, &["menubar", "restart"]);
         }
-        self.summon(&install, &["daemon", "status"], false);
+        self.summon(&install, &["daemon", "status"]);
         self.note(out, &summon_i18n::format!("rb00395ce9a"))
     }
 
-    /// 跑落点那份 summon;输出进日志,失败只记下来、不中断退回。`pinned`:钉住落点,不从别的安装源拉。
-    fn summon(&self, install: &Path, args: &[&str], pinned: bool) {
+    /// 跑落点那份 summon;输出进日志,失败只记下来、不中断退回。
+    fn summon(&self, install: &Path, args: &[&str]) {
         let mut command = Command::new(install);
         command.args(args).stdin(Stdio::null());
-        if pinned {
-            command.env(upgrade_restart::PIN_ENV, "1");
-        }
         if let Err(error) = command.status() {
             println!(
                 "{}",
@@ -394,7 +391,7 @@ case "$here" in
   */.summon/bin) home="$(cd "$here/../.." && pwd)"; role=install ;;
   *) home="$(cd "$here/../../../.." && pwd)"; role=stage ;;
 esac
-echo "$role $* pin=${SUMMON_PIN_INSTALL:-}" >> "$home/calls.log"
+echo "$role $*" >> "$home/calls.log"
 case "$1 ${2:-}" in
   "daemon restart")
     if [ -e "$home/restart-fails" ]; then exit 1; fi
@@ -493,7 +490,7 @@ exit 0
         let calls = github.calls();
         assert_eq!(
             calls.lines().collect::<Vec<_>>(),
-            ["stage daemon restart pin=", "install daemon status pin="],
+            ["stage daemon restart", "install daemon status"],
             "没退回就不停、不起:{calls}"
         );
     }
@@ -521,11 +518,11 @@ exit 0
             assert_eq!(
                 lines,
                 [
-                    "stage daemon restart pin=",
-                    "install daemon status pin=",
-                    "install daemon stop pin=",
-                    "install daemon start pin=1",
-                    "install daemon status pin=",
+                    "stage daemon restart",
+                    "install daemon status",
+                    "install daemon stop",
+                    "install daemon start",
+                    "install daemon status",
                 ],
                 "{publish:?}"
             );
@@ -559,7 +556,7 @@ exit 0
             !calls.contains("install daemon stop"),
             "没在跑就不停:{calls}"
         );
-        assert!(calls.contains("install daemon start pin=1"), "{calls}");
+        assert!(calls.contains("install daemon start"), "{calls}");
         assert_eq!(github.installed(companion::SIDECAR), "old sidecar");
         assert!(github.installed(companion::SUMMON).ends_with("# old\n"));
         assert!(!previous_dir(&github.home).exists());
@@ -578,7 +575,7 @@ exit 0
         let (result, out) = github.run_with_output(&probe);
         result.unwrap();
         assert!(out.contains("在观察期内异常退出"), "{out}");
-        assert!(github.calls().contains("install daemon start pin=1"));
+        assert!(github.calls().contains("install daemon start"));
         assert_eq!(github.state().rolled_back, ["0.6.35"]);
         assert_eq!(github.installed(companion::SIDECAR), "old sidecar");
     }
@@ -592,7 +589,7 @@ exit 0
         assert!(out.contains("daemon 当前 0.6.34"), "{out}");
         let calls = github.calls();
         let stop = calls.find("install daemon stop").expect("先停在跑的");
-        let start = calls.find("install daemon start pin=1").expect("再起旧版");
+        let start = calls.find("install daemon start").expect("再起旧版");
         assert!(stop < start, "{calls}");
     }
 
@@ -617,7 +614,7 @@ exit 0
             github.run_with_output(&FakeProbe::new(&[Some(9), None], Some("0.6.35")));
         result.unwrap();
         assert!(out.contains("不是人停的"), "{out}");
-        assert!(github.calls().contains("install daemon start pin=1"));
+        assert!(github.calls().contains("install daemon start"));
         assert_eq!(github.state().rolled_back, ["0.6.35"]);
     }
 
@@ -680,7 +677,7 @@ exit 0
         );
         assert_eq!(
             github.calls().lines().collect::<Vec<_>>(),
-            ["stage daemon restart pin=", "install daemon status pin="],
+            ["stage daemon restart", "install daemon status"],
             "不停、不起"
         );
         assert!(
@@ -705,7 +702,7 @@ exit 0
         assert!(error.contains("快照"), "{error}");
         let calls = github.calls();
         assert!(!calls.contains("daemon stop"), "{calls}");
-        assert!(calls.contains("install daemon start pin=1"), "{calls}");
+        assert!(calls.contains("install daemon start"), "{calls}");
         assert!(
             github.installed(companion::SUMMON).ends_with("# new\n"),
             "落点不动"

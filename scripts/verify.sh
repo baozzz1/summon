@@ -14,11 +14,6 @@ python3 scripts/tests/test_github_release_info.py
 python3 scripts/tests/test_github_release_plan.py
 python3 scripts/tests/test_github_release_workflow.py
 python3 scripts/tests/test_install_script.py
-# 安装渠道自带的检查:scripts/verify.d/*.sh 按文件名顺序跑,源码安装没有。
-for check in scripts/verify.d/*.sh; do
-  [ -f "$check" ] || continue
-  bash "$check"
-done
 
 echo "[2/8] rustfmt"
 cargo fmt --all -- --check
@@ -60,13 +55,6 @@ echo "[7/8] Feishu sidecar"
 
 echo "[8/8] build"
 cargo build --workspace
-# 渠道检查里要拿刚构建的真 summon 跑的那一段(给了 SUMMON_TEST_BIN 才跑)。
-TARGET_DIR="$(cargo metadata --format-version 1 --no-deps \
-  | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
-for check in scripts/verify.d/*.sh; do
-  [ -f "$check" ] || continue
-  SUMMON_TEST_BIN="${TARGET_DIR:-target}/debug/summon" bash "$check"
-done
 
 cat <<'EOF'
 

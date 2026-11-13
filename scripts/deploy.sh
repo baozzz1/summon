@@ -41,16 +41,6 @@ unset SUMMON_DEPLOY_DETACHED
 cd "$(dirname "$0")/.."          # 仓库根
 source scripts/build-version.sh
 source scripts/codesign.sh
-# 安装渠道钩子:`scripts/deploy.d/*.sh` 按文件名顺序 source,可以给 daemon start 补环境
-# (DAEMON_START_ENV,若干个 KEY=VALUE)、换掉「本次比落点旧」的提示(OLDER_INSTALL_NOTE)。
-# 没有钩子时两项保持默认,源码安装就是这样。
-DAEMON_START_ENV=""
-OLDER_INSTALL_NOTE="⚠ 照装。"
-for hook in "${SUMMON_DEPLOY_HOOKS_DIR:-scripts/deploy.d}"/*.sh; do
-  [ -f "$hook" ] || continue
-  # shellcheck source=/dev/null
-  source "$hook"
-done
 # 生产默认 release:daemon 是常驻进程,debug 构建的解析/序列化热点比 release 慢一个量级
 # (实测同一份 234,888 B state.json:serde 解析 debug 4.96ms / release 0.67ms = 7.4×),
 # 且 debug 产物会带上 `summon dev` 调试命令面。要装 debug 显式加 --debug。
@@ -290,9 +280,7 @@ restore_daemon() {
   log "部署中断在停机之后,拉回 daemon 以免裸奔…"
   # 用安装态那份而不是 target 产物:cleanup_staged 刚把线上产物恢复成自洽的一代,
   # 起回来的 daemon 必须与机器上的 CLI 同代。daemon start 自带单例保护,不会起出双实例。
-  # 与第 3 步一样带上渠道钩子给的环境。
-  # shellcheck disable=SC2086 # 钩子给的是若干个 KEY=VALUE,按空白拆开交给 env
-  env $DAEMON_START_ENV "$INSTALL_BIN" daemon start \
+  "$INSTALL_BIN" daemon start \
     || printf '\033[31m[deploy] 停机后拉回 daemon 失败;机器当前没有 daemon,需手工处理\033[0m\n' >&2
 }
 
@@ -474,7 +462,7 @@ if [ "$DO_INSTALL" = 1 ]; then
   case "$INSTALL_RELATION" in
     older\ *)
       log "⚠ 本次构建比 ~/.summon/bin 里那份旧:${INSTALL_RELATION#older }"
-      log "$OLDER_INSTALL_NOTE"
+      log "⚠ 照装。"
       ;;
     unknown\ *)
       log "提示:判不出本次构建与 ~/.summon/bin 里那份谁新(${INSTALL_RELATION#unknown }),照装"
@@ -641,9 +629,7 @@ if ! AGENT_LIST="$("$BIN" agents ls 2>&1)"; then
   esac
 fi
 log "启动新 daemon …"
-# 起 daemon 时带上渠道钩子给的环境(见文件开头)。
-# shellcheck disable=SC2086 # 钩子给的是若干个 KEY=VALUE,按空白拆开交给 env
-env $DAEMON_START_ENV "$BIN" daemon start || die "daemon start 失败"
+"$BIN" daemon start || die "daemon start 失败"
 DAEMON_RESTORE_PENDING=0
 sleep 1
 NEW_PID="$(sed -n '1p' "$HOME/.summon/run/daemon.pid" 2>/dev/null || true)"

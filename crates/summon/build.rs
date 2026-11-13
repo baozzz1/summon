@@ -12,7 +12,6 @@ use std::process::Command;
 fn main() {
     emit_commit();
     emit_dashboard_assets();
-    emit_optional_modules();
     println!("cargo:rerun-if-env-changed=SUMMON_BUILD_SIDECAR");
     // 仅显式 opt-in 才编 sidecar(cargo install 分发路径);默认/dev build 直接返回、零行为变化。
     if std::env::var("SUMMON_BUILD_SIDECAR").as_deref() != Ok("1") {
@@ -112,23 +111,6 @@ fn content_type(path: &str) -> &'static str {
         "woff2" => "font/woff2",
         "txt" => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
-    }
-}
-
-/// 可整目录摘掉的模块:目录在就编进来(`cfg(npm_dist)`),不在就当它不存在。
-///
-/// npm 分发渠道(`src/setup/npm_dist/`)只在带这条渠道的源码树里有;没有它的源码树照样能构建,
-/// 引用它的地方都在 `cfg(npm_dist)` 后面。判据看文件在不在,而不是 Cargo feature:源码树里
-/// 没有这个目录时,打开 feature 只会编译失败。
-///
-/// 盯的是 `src/setup` 整个目录而不是那个文件:文件不在时盯它,cargo 会把「缺失」当作「变了」,
-/// 每次构建都重跑本脚本、连带重编整个 crate。
-fn emit_optional_modules() {
-    println!("cargo:rustc-check-cfg=cfg(npm_dist)");
-    let setup = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/setup");
-    println!("cargo:rerun-if-changed={}", setup.display());
-    if setup.join("npm_dist/mod.rs").is_file() {
-        println!("cargo:rustc-cfg=npm_dist");
     }
 }
 

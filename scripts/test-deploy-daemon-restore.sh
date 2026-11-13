@@ -16,8 +16,6 @@
 #
 # 同一套隔离环境顺带锁住 --install 与落点构建戳的契约:
 #   D 本次构建比落点旧 → 提示但照装,且新 CLI 发布进落点之后、起 daemon 之前登记构建戳。
-# C、D 顺带锁住:deploy 起 daemon(含停机后拉回)都带上安装渠道钩子给的环境。钩子换成测试自己
-# 的一份,只放一个探针变量:断言的是「钩子给的环境每次都送到了 daemon start」这条通路。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -32,9 +30,6 @@ cleanup() {
 trap cleanup EXIT
 
 fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
-
-mkdir -p "$WORK/deploy.d"
-printf 'DAEMON_START_ENV="SUMMON_DEPLOY_PROBE=1"\n' > "$WORK/deploy.d/probe.sh"
 
 # deploy.sh 会通过 /proc 或 lsof 反查活 daemon 的可执行文件,拿它当停机控制程序。假 daemon
 # 实际是 sleep,这两条路只会报出 sleep——在测试里没有意义。让反查返回空,脚本便退回
@@ -77,7 +72,6 @@ case "$*" in
     exit 1 ;;
   "daemon start")
     echo "daemon start" >> "$CALLS"
-    echo "probe=${SUMMON_DEPLOY_PROBE:-}" >> "$HOME/.summon/stub-start-env"
     # 镜像真 CLI 的单例保护:已有存活 daemon 就不起第二个。
     running && { echo "daemon 已在运行"; exit 0; }
     setsid sleep 300 >/dev/null 2>&1 &
@@ -117,7 +111,6 @@ run_deploy() {
     HOME="$WORK/home" \
     TEST_TARGET_DIR="$WORK/target" \
     SUMMON_DEPLOY_NO_DETACH=1 \
-    SUMMON_DEPLOY_HOOKS_DIR="$WORK/deploy.d" \
     SUMMON_CODESIGN_MODE=adhoc \
     SUMMON_CODESIGN_TIMESTAMP=none \
     STUB_DAEMON_EXITS="$1" \
@@ -130,13 +123,11 @@ run_deploy() {
 }
 
 daemon_alive() { [ "$(cat "$WORK/home/.summon/stub-state" 2>/dev/null)" = running ]; }
-# deploy 发出的每一次 daemon start 都带着钩子给的环境(至少一次,且没有漏带的)。
-require_hooked_starts() {
-  local seen="$WORK/home/.summon/stub-start-env"
-  [ -s "$seen" ] || { dump; fail "$1: 没有起过 daemon,场景没摆成"; }
-  ! grep -qv '^probe=1$' "$seen" || { dump; fail "$1: 有 daemon start 没带上钩子给的环境"; }
-}
 start_count() { grep -c '^daemon start$' "$WORK/home/.summon/stub-calls" 2>/dev/null || true; }
+# C、D 都要真的起过 daemon,否则后面的断言是空转。
+require_started() {
+  [ "$(start_count)" -gt 0 ] || { dump; fail "$1: 没有起过 daemon,场景没摆成"; }
+}
 dump() {
   echo "--- deploy 输出 ---" >&2; cat "$WORK/out" >&2
   echo "--- stub 调用流水 ---" >&2; cat "$WORK/home/.summon/stub-calls" >&2
@@ -168,7 +159,7 @@ run_deploy 1 1
 require_stop_attempted C
 [ "$DEPLOY_RC" -ne 0 ] || { dump; fail "C: registry 不可读却报成功了"; }
 daemon_alive || { dump; fail "C: 停机之后失败退出,daemon 没被拉回来(裸奔)"; }
-require_hooked_starts C
+require_started C
 
 # ── 场景 D:装的比落点旧 → 提示但照装,并由落点那份登记构建戳 ─────────────────
 setup_scene
@@ -184,6 +175,6 @@ case "$CALL_ORDER" in
   "daemon stop|install-stamp record $WORK/home/.summon/bin/summon|daemon start|") ;;
   *) dump; fail "D: 构建戳登记的时机或执行者不对:$CALL_ORDER" ;;
 esac
-require_hooked_starts D
+require_started D
 
-echo "PASS deploy 停机后不留裸奔,且不为此制造双实例;装旧版本只提示、照装并登记构建戳;起 daemon 都带上渠道钩子的环境"
+echo "PASS deploy 停机后不留裸奔,且不为此制造双实例;装旧版本只提示、照装并登记构建戳"

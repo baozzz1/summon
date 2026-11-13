@@ -221,10 +221,6 @@ impl Channel for GithubChannel {
             let at = drill.describe();
             notes.push(summon_i18n::format!("rc3b41ce575"));
         }
-        // 带 npm 分发渠道的构建:Release 里是公开构建,换代之后落点那份不再看 npm 包。
-        if cfg!(npm_dist) {
-            notes.push(summon_i18n::text!("r2c8b639d7a").to_string());
-        }
         notes
     }
 }

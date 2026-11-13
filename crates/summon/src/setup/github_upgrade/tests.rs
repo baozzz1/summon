@@ -588,7 +588,7 @@ fn an_up_to_date_install_with_a_current_daemon_is_left_alone() {
 }
 
 /// 落点已是这一版而 daemon 还在跑别的版本(或报不出版本):不下载,用落点那份走同一段脱离会话的
-/// 重启 —— 与 npm 渠道的处置相同。
+/// 重启。
 #[test]
 fn an_up_to_date_install_restarts_a_stale_daemon_from_the_install() {
     for daemon in [running(), Daemon::Running(None)] {
@@ -1216,9 +1216,8 @@ fn the_restart_path_never_touches_tmux() {
     }
 }
 
-/// 命令面:公开构建里 `summon upgrade` 就是 GitHub 渠道;带 npm 渠道的构建默认仍是 npm,
-/// 所有构建(含带 npm 分发渠道的)里 `summon upgrade` 都落到 GitHub 渠道。隐藏的 `--channel` 只认
-/// `github`,别的值(含停用的 npm)报错说明只有 GitHub Releases;npm 专有的 `--registry` 不再认。
+/// 命令面:`summon upgrade` 落到 GitHub 渠道。隐藏的 `--channel` 只认 `github`,其余取值报错;
+/// `--registry` 不是合法参数。
 #[test]
 fn the_command_line_reaches_the_github_channel_in_every_build() {
     use clap::Parser;

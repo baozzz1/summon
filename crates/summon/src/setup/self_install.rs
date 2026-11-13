@@ -7,6 +7,16 @@
 //! 那份的构建(判据见 `summon_core::install_stamp`):落点更新、或判不出新旧,都不碰它,daemon 用
 //! 落点那份起(自启单元登记的就是它)。发布后在落点旁写构建戳,下一次发布据此比新旧。
 //!
+//! **停在旧版的 npm 启动器读落点**:早先经 npm 包装的机器上,`summon` 命令仍先进 npm 包里的
+//! 入口垫片(版本永远停在 0.6.54 及以前),它只在能证明落点那份严格更新时把调用原样转交给落点。
+//! 它认的东西都在这里与 `summon_core::install_stamp` 写出,今后的版本必须保持,否则这些机器的
+//! `summon` 一直跑 npm 包里的旧版:落点路径 `~/.summon/bin/summon`;落点旁的构建戳
+//! `summon.build.json`,形如 `{"file": "size:mtime_ns:ino", "build": {version, commit,
+//! commit_time}}`,安装、升级与发布进落点时写;落点 `--version` 打的 `summon <x.y.z> (<sha>)`
+//! (npm 包里那份在没有戳时据此判新旧);`~/.summon/run/daemon.pid` 的位置;发版版本号只用纯
+//! `x.y.z`(垫片判不出带后缀的版本,`scripts/release.sh` 拒发)。见测试
+//! `legacy_npm_launchers_still_find_the_install_and_trust_its_stamp`。
+//!
 //! **有 daemon 在跑时不换落点里已有的文件**:跑着的 daemon 每次重启 sidecar(崩溃、agent 热加载)
 //! 都按路径重新 exec 落点里的 summon-sidecar,而协议版本不同的 sidecar 会被它拒掉 —— 这时换掉
 //! 落点,飞书长连接可能在下一次重启 sidecar 时断开,直到 daemon 也换代。所以这时只记下「该发布」,
@@ -49,7 +59,7 @@ impl Outcome {
 pub fn publish_current_exe() -> Result<Outcome> {
     let exe = current_exe()?;
     let home = dirs::home_dir().context(summon_i18n::text!("rc086b7ca57"))?;
-    publish_for(
+    publish_from(
         &exe,
         &home,
         &crate::version::build_info(),
@@ -62,28 +72,6 @@ pub fn publish_current_exe() -> Result<Outcome> {
 pub(crate) enum Daemon {
     Stopped,
     Running(Option<String>),
-}
-
-/// [`publish_current_exe`] 的编排:当前这份不在落点就把自己发布进去;就是落点时交给
-/// [`refresh_install`]。
-fn publish_for(exe: &Path, home: &Path, mine: &BuildInfo, daemon: &Daemon) -> Result<Outcome> {
-    if companion::needs_install(exe, home) {
-        return publish_from(exe, home, mine, daemon);
-    }
-    refresh_install(home, mine, daemon)
-}
-
-/// 当前这份就是落点:带 npm 分发渠道的构建去看 PATH 上的 npm 包是否严格更新(见
-/// `setup::npm_dist`)。
-#[cfg(npm_dist)]
-fn refresh_install(home: &Path, mine: &BuildInfo, daemon: &Daemon) -> Result<Outcome> {
-    crate::setup::npm_dist::pull_newer(home, mine, daemon)
-}
-
-/// 当前这份就是落点:没有别的渠道可比,落点原样。
-#[cfg(not(npm_dist))]
-fn refresh_install(home: &Path, _mine: &BuildInfo, _daemon: &Daemon) -> Result<Outcome> {
-    Ok(Outcome::untouched(companion::install_target(home), None))
 }
 
 /// 此刻 daemon 的状态。锁的状态读不出时按「在跑」算:宁可这次不发布,也不在 daemon 底下换文件。
@@ -718,7 +706,7 @@ pub(crate) mod tests {
         installed_as(&home, &older());
         let src = source_dir(tmp.path(), "new");
 
-        let outcome = publish_for(
+        let outcome = publish_from(
             &src.join(companion::SUMMON),
             &home,
             &mine(),
@@ -900,5 +888,65 @@ pub(crate) mod tests {
         assert!(line.starts_with("older "), "{line}");
         let line = check_line(&mine(), &Installed::Absent);
         assert!(line.starts_with("absent "), "{line}");
+    }
+
+    /// 停在旧版的 npm 启动器(见模块文档)认的四样东西。它在用户机器上、不随本仓更新,这里按它的
+    /// 读法逐项钉住:落点路径;戳的 JSON 形状,文件身份按 `stat` 的十进制 `size:mtime_ns:ino`
+    /// 独立拼出来比;`--version` 的那一行;daemon pid 文件的位置;版本号是纯 `x.y.z`。
+    #[test]
+    fn legacy_npm_launchers_still_find_the_install_and_trust_its_stamp() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let target = companion::install_target(&home);
+        assert_eq!(target, home.join(".summon/bin/summon"));
+
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "summon-落点").unwrap();
+        record_from(&target.canonicalize().unwrap(), &home, &mine()).unwrap();
+        let stamp: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(home.join(".summon/bin/summon.build.json")).unwrap(),
+        )
+        .unwrap();
+        let meta = std::fs::metadata(&target).unwrap();
+        let mtime_ns = meta
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        assert_eq!(
+            stamp,
+            serde_json::json!({
+                "file": format!("{}:{mtime_ns}:{}", meta.len(), meta.ino()),
+                "build": {"version": "0.6.9", "commit": "48698ad7", "commit_time": 2000},
+            })
+        );
+
+        use clap::CommandFactory;
+        let version = crate::cli::cli::Cli::command().render_version();
+        assert_eq!(
+            install_stamp::parse_version_output(&version).map(|b| (b.version, b.commit)),
+            Some((
+                crate::version::VERSION.to_string(),
+                crate::version::COMMIT.to_string()
+            )),
+            "{version}"
+        );
+
+        assert_eq!(
+            crate::runtime::paths::pid_file(),
+            dirs::home_dir().unwrap().join(".summon/run/daemon.pid")
+        );
+
+        let parts: Vec<&str> = crate::version::VERSION.split('.').collect();
+        assert!(
+            parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())),
+            "旧 npm 垫片只认纯 x.y.z:{}",
+            crate::version::VERSION
+        );
     }
 }

@@ -776,9 +776,6 @@ pub enum InstallStampAction {
     #[command(about = summon_i18n::text!("r5da7edc93d"))]
     /// 登记落点的构建戳,描述落点里的 summon 自己(只有落点那份能跑)
     Record,
-    #[cfg(npm_dist)]
-    #[command(flatten)]
-    NpmDist(crate::setup::npm_dist::StampAction),
 }
 
 #[derive(Subcommand)]
@@ -1250,8 +1247,6 @@ fn install_stamp_cmd(action: &InstallStampAction) -> anyhow::Result<()> {
             let target = self_install::record_current_exe()?;
             println!("{}", summon_i18n::format!("r477d22d4ad", target.display()));
         }
-        #[cfg(npm_dist)]
-        InstallStampAction::NpmDist(action) => crate::setup::npm_dist::stamp_cmd(action)?,
     }
     Ok(())
 }
@@ -2827,8 +2822,6 @@ pub(crate) fn daemon_run_command(exe: &std::path::Path) -> Command {
         .arg0(DAEMON_PROCESS_NAME) // 按功能命名进程(ps 显示 summond,区别于 CLI 的 summon)
         .args(["daemon", "run"])
         .env_remove(RESTART_NO_DETACH_ENV);
-    #[cfg(npm_dist)]
-    crate::setup::npm_dist::scrub_daemon_env(&mut command);
     command
 }
 
@@ -6679,12 +6672,8 @@ fn format_codex_policy_section(
     out
 }
 
-/// sidecar 缺失时的修法:源码构建的用 deploy.sh 装齐;安装包装的由分发渠道给修法。
+/// sidecar 缺失时的修法。
 fn sidecar_missing_fix() -> String {
-    #[cfg(npm_dist)]
-    if let Some(fix) = crate::setup::npm_dist::sidecar_missing_fix() {
-        return fix;
-    }
     summon_i18n::format!(
         "rd1fdf63da1",
         summon_core::companion::SIDECAR,

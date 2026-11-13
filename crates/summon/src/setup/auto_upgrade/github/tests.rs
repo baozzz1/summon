@@ -691,8 +691,7 @@ fn doctor(fixture_home: &Path, from: &str, event: Option<Event>) -> String {
     doctor_lines_at(&cfg, fixture_home).join("\n")
 }
 
-/// doctor:写明渠道、标出演练来源;同一原因接连出现时写出次数;带 npm 渠道的构建说清换成公开构建;
-/// 还写着停用的 npm 渠道时提示删掉。
+/// doctor:写明渠道、标出演练来源;同一原因接连出现时写出次数;还写着停用的 npm 渠道时提示删掉。
 #[test]
 fn doctor_names_the_channel_the_rehearsal_source_and_repeats() {
     if release::platform(std::env::consts::OS, std::env::consts::ARCH).is_none() {
@@ -712,7 +711,6 @@ fn doctor_names_the_channel_the_rehearsal_source_and_repeats() {
     assert!(lines.contains("GitHub Releases"), "{lines}");
     assert!(lines.contains(&from) && lines.contains("演练"), "{lines}");
     assert!(lines.contains("连续 3 次"), "{lines}");
-    assert_eq!(lines.contains("公开构建"), cfg!(npm_dist), "{lines}");
     assert!(!lines.contains("已停用"), "{lines}");
 
     // 配置里还写着停用的 npm 渠道:照样是 GitHub Releases,多一行提示删掉它。

@@ -295,7 +295,6 @@ fn spawn_guardian(
         .arg(&files.snapshot)
         .args(args)
         .env("GUARD_WATCHER_MARK", WATCHER_MARK)
-        .env(upgrade_restart::PIN_ENV, "1")
         .stdin(Stdio::null());
     match sink {
         Some(sink) => command.stdout(sink.try_clone()?).stderr(sink),
@@ -864,7 +863,7 @@ case "$1 ${2:-}" in
     elif [ -e "$here/up" ]; then echo "running(pid 222, version 0.6.34)"
     else echo "daemon 未运行"; fi ;;
   "daemon start")
-    echo "start pin=${SUMMON_PIN_INSTALL:-}" >> "$here/starts"
+    echo start >> "$here/starts"
     if [ "$(wc -l < "$here/starts")" -ge 2 ]; then touch "$here/up"; exit 0; fi
     exit 1 ;;
 esac
@@ -993,8 +992,8 @@ esac
         assert!(wait_for_exit(&mut guardian).success());
         assert_eq!(
             std::fs::read_to_string(bin.join("starts")).unwrap(),
-            "start pin=1\nstart pin=1\n",
-            "起不来就重试,钉住落点"
+            "start\nstart\n",
+            "起不来就重试"
         );
         assert!(bin.join("up").exists());
         assert_eq!(stamp(&bin), "old stamp", "新一代没起来,先放回换代前的落点");

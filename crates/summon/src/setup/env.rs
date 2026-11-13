@@ -111,8 +111,8 @@ pub fn apply_saved_user_path() {
 }
 
 /// daemon 启动期调用(单线程段,在 [`apply_saved_user_path`] 之后):把 summon 自己的落点目录补在
-/// PATH 末尾。agent 在会话里要跑 `summon react / remind / preview`,而 npm 安装的 summon 入口所在
-/// 目录、`~/.local/bin` 都不一定在自启单元或非交互 ssh 给的 PATH 上;补上落点保证会话里总有一份
+/// PATH 末尾。agent 在会话里要跑 `summon react / remind / preview`,而 `summon` 入口所在目录、
+/// `~/.local/bin` 都不一定在自启单元或非交互 ssh 给的 PATH 上;补上落点保证会话里总有一份
 /// summon 可用。
 pub fn append_summon_bin_dir() {
     let Some(home) = dirs::home_dir() else {

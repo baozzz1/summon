@@ -31,6 +31,3 @@ pub(crate) use runner::{doctor_lines, spawn};
 #[cfg(test)]
 pub(crate) use state::Store;
 pub(crate) use state::{lift_rollback, refuses_publish};
-// 运行期从 npm 包拉取更新的那份(在 `npm_dist` 里)的测试用。
-#[cfg(all(test, npm_dist))]
-pub(crate) use state::forget_rollback;

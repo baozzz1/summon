@@ -12,6 +12,12 @@
 
 ### 升级注意
 
+- 从 0.7.0 起，新版只发布到 GitHub Releases。升级用 `summon upgrade` 或打开自动升级；自动升级默认会从 0.6.x 跟到 0.7.0，配置了 `range: patch` 的不会跨次版本，需要手动 `summon upgrade`。还在 0.6.54 以前、经 npm 包安装的，先执行一次 `summon upgrade` 装上 0.6.54，之后同上。
+
+## 0.6.54 · 2026-11-13
+
+### 升级注意
+
 - 经 npm 包安装的用户：这是最后一个发到 npm 的版本，之后只发布到 GitHub Releases。装上这一版后，`summon upgrade` 与自动升级改从 GitHub Releases 取新版、装进 `~/.summon/bin/`，不需要重装，npm 包里的 `summon` 入口会把调用转交给那里更新的那份。机器需要能访问 github.com；访问不了的可以手动下载 Release 的 `manifest.json` 与本平台的包到一个目录，再执行 `summon upgrade --from <目录>`。`summon upgrade --channel github` 仍可用（这个参数可以去掉），`--channel` 的其他取值会报错；配置里的 `upgrade.channel: npm` 按 `github` 处理，`summon doctor` 提示可以删掉这一行。
 
 ## 0.6.53 · 2026-11-13

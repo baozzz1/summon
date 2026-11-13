@@ -20,11 +20,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use summon_core::install_stamp::BuildInfo;
 
-/// 钉住落点:设了它的那次 `daemon start` 用落点里那份起,不去别的安装源里找更新的(带别的安装
-/// 渠道的构建才会去找)。deploy.sh、换代失败后的兜底拉起与自动升级的退回都设它。只作用于这一次
-/// CLI 调用,`daemon start` 不把它传给 daemon。
-pub(crate) const PIN_ENV: &str = "SUMMON_PIN_INSTALL";
-
 /// 启动失败后等多久再用落点那份起一次:慢启动被就绪截止判败、首次执行排系统评估,隔几秒多半就好。
 pub(crate) const RESTORE_DELAY_SECS: u32 = 3;
 
@@ -37,7 +32,7 @@ pub(crate) const MENUBAR_FAILED: i32 = 10;
 /// 最后一行总是 `daemon status`,观察者据它报 daemon 的实况。`daemon restart` 带免脱离标记
 /// ([`RESTART_NO_DETACH_ENV`](crate::cli::cli::RESTART_NO_DETACH_ENV)),就在本段的进程组里重启:
 /// 自动升级超时结束守望进程时是整组收掉,再脱离一层就够不着它了。
-pub(crate) const RESTART_SCRIPT: &str = "r692fba9bab";
+pub(crate) const RESTART_SCRIPT: &str = "r838f5152dc";
 
 /// 脱离出去那段的日志,与 deploy.log 同目录。
 pub(crate) fn log_path(home: &Path) -> PathBuf {
