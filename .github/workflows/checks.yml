@@ -14,10 +14,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS runner 暂不启用;macOS 上的检查(含 Menu Bar)在每次同步前于本机跑过。
-        os: [ubuntu-latest]
+        # macos-15 是 arm64,与发布工作流构建 macOS 包的 runner 相同。
+        os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -45,7 +45,7 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest
-      # 每个测试一个进程,与发版同步时在本机跑的检查一致;本地 HTTP 模拟在负载高时偶发超时,重试两次。
+      # 每个测试一个进程;本地 HTTP 模拟在负载高时偶发超时,重试两次。
       - name: Rust checks
         run: |
           cargo +stable fmt --all -- --check
@@ -67,6 +67,7 @@ jobs:
           python3 scripts/tests/test_github_release_manifest.py
           python3 scripts/tests/test_github_release_info.py
           python3 scripts/tests/test_github_release_plan.py
+          python3 scripts/tests/test_github_release_publish.py
           python3 scripts/tests/test_github_release_workflow.py
           python3 scripts/tests/test_install_script.py
       - name: macOS Menu Bar
@@ -74,3 +75,8 @@ jobs:
         run: |
           swift test --package-path menubar
           swift build --package-path menubar -c release
+      # 发布工作流的临时签名钥匙串:用一次性的自签证书走导入、钉住中间证书、清理。会改用户钥匙串
+      # 搜索列表(结束时恢复),只在 CI 的 runner 上跑。
+      - name: Signing keychain
+        if: runner.os == 'macOS'
+        run: bash scripts/tests/test-macos-keychain.sh

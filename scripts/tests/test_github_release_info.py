@@ -35,15 +35,28 @@ NOTES = """# Release Notes
 
 
 class ReleaseInfoTests(unittest.TestCase):
-    def test_tag_on_main_is_version(self):
-        self.assertEqual(info.release_tag('1.2.3', 'main', SHA), 'v1.2.3')
+    def test_release_tag_must_equal_version(self):
+        self.assertEqual(info.tag_kind('v1.2.3', SHA, '1.2.3'), 'release')
+        with self.assertRaisesRegex(info.InfoError, '不符'):
+            info.tag_kind('v1.2.4', SHA, '1.2.3')
 
-    def test_tag_elsewhere_is_test_tag(self):
-        self.assertEqual(info.release_tag('1.2.3', 'release-test/try', SHA), 'test-0123456')
+    def test_release_tag_is_plain_x_y_z(self):
+        for tag in ('v1.2.3-rc.1', 'v1.2', 'v01.2.3', 'v1.2.3+b', '1.2.3', 'V1.2.3', 'v1.2.3 '):
+            with self.assertRaises(info.InfoError, msg=tag):
+                info.tag_kind(tag, SHA, tag.strip().lstrip('vV'))
+
+    def test_rehearsal_tag_is_a_prefix_of_the_commit(self):
+        self.assertEqual(info.tag_kind(f'test-{SHA[:7]}', SHA, '1.2.3'), 'rehearsal')
+        self.assertEqual(info.tag_kind(f'test-{SHA}', SHA, '1.2.3'), 'rehearsal')
+        with self.assertRaisesRegex(info.InfoError, '前缀'):
+            info.tag_kind('test-fffffff', SHA, '1.2.3')
+        for tag in (f'test-{SHA[:6]}', f'test-{SHA[10:17].upper()}', 'test-main'):
+            with self.assertRaises(info.InfoError, msg=tag):
+                info.tag_kind(tag, SHA, '1.2.3')
 
     def test_tag_needs_full_sha(self):
         with self.assertRaises(info.InfoError):
-            info.release_tag('1.2.3', 'main', SHA[:7])
+            info.tag_kind('v1.2.3', SHA[:7], '1.2.3')
 
     def test_notes_take_only_that_version_section(self):
         notes = info.release_notes('1.2.3', NOTES)

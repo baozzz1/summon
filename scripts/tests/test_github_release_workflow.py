@@ -1,8 +1,8 @@
-"""镜像仓工作流文件的结构检查:语法、action 钉哈希、发布工作流的权限边界。
+"""工作流文件的结构检查:语法、action 钉哈希、发布工作流的触发、权限与签名证书的边界。
 
     python3 scripts/tests/test_github_release_workflow.py
 
-工作流文件在源码仓与发布出去的仓里位置不同,两处都认。需要 PyYAML。
+需要 PyYAML。
 """
 import re
 import sys
@@ -15,11 +15,10 @@ except ImportError:  # 缺依赖要明确失败,不能当作检查通过
     sys.exit('需要 PyYAML(python3-yaml)才能检查工作流文件')
 
 ROOT = Path(__file__).resolve().parents[2]
-# 源码仓与发布出去的仓里工作流文件的位置不同,两处都认。
-CANDIDATES = (ROOT / '.github/workflows', ROOT / 'scripts/public/overlay/.github/workflows')
-WORKFLOWS = next((d for d in CANDIDATES if (d / 'release.yml').is_file()), None)
+WORKFLOWS = ROOT / '.github/workflows'
 PINNED = re.compile(r'^[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+@[0-9a-f]{40}$')
-WRITERS = {'prepare', 'upload'}
+WRITERS = {'prepare', 'publish'}
+JOBS = {'prepare', 'build-linux', 'build-macos', 'publish'}
 
 
 def load(path):
@@ -34,6 +33,10 @@ def steps(job):
     return job.get('steps', [])
 
 
+def run_text(job):
+    return '\n'.join(step.get('run', '') for step in steps(job))
+
+
 def grants_write(permissions):
     if permissions in ('write-all',):
         return True
@@ -45,11 +48,11 @@ def grants_write(permissions):
 class WorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if WORKFLOWS is None:
-            raise RuntimeError(f'没找到 release.yml(找过 {", ".join(map(str, CANDIDATES))})')
         cls.release_path = WORKFLOWS / 'release.yml'
         cls.release_text = cls.release_path.read_text(encoding='utf-8')
         cls.release = load(cls.release_path)
+        cls.jobs = cls.release['jobs']
+        cls.checks = load(WORKFLOWS / 'checks.yml')
 
     def test_every_workflow_parses_and_pins_actions_to_full_commit(self):
         files = sorted(WORKFLOWS.glob('*.yml'))
@@ -67,70 +70,107 @@ class WorkflowTests(unittest.TestCase):
                 if match:
                     self.assertRegex(match.group(1), PINNED, f'{path.name}: {line.strip()}')
 
-    def test_triggers(self):
+    def test_release_is_triggered_only_by_release_and_rehearsal_tags(self):
         on = self.release['on']
-        self.assertEqual(set(on['push']['branches']), {'main', 'release-test/**'})
-        self.assertIn('workflow_dispatch', on)
-        self.assertEqual(set(on), {'push', 'workflow_dispatch'})
+        self.assertEqual(set(on), {'push'})
+        self.assertEqual(set(on['push']), {'tags'})
+        self.assertEqual(set(on['push']['tags']), {'v*', 'test-*'})
 
-    def test_only_prepare_and_upload_can_write(self):
+    def test_release_tag_is_checked_against_version_and_main(self):
+        prepare = run_text(self.jobs['prepare'])
+        self.assertIn('release_info.py check-tag --tag "$TAG" --sha "$SHA"', prepare)
+        self.assertIn('git merge-base --is-ancestor "$SHA" origin/main', prepare)
+        self.assertIn('publish.py prepare', prepare)
+        checkout = steps(self.jobs['prepare'])[0]
+        self.assertEqual(checkout['with'].get('fetch-depth'), 0)
+
+    def test_only_prepare_and_publish_can_write(self):
         self.assertEqual(self.release['permissions'], {'contents': 'read'})
-        for name, job in self.release['jobs'].items():
+        self.assertEqual(set(self.jobs), JOBS)
+        for name, job in self.jobs.items():
             permissions = job.get('permissions', self.release['permissions'])
             if name in WRITERS:
                 self.assertEqual(permissions, {'contents': 'write'}, name)
             else:
                 self.assertFalse(grants_write(permissions), name)
-        self.assertEqual(set(self.release['jobs']), {'prepare', 'build', 'upload'})
 
-    def test_upload_uses_no_third_party_action(self):
-        # 有写权限的 job 只用 GitHub 自己的 checkout(取判定脚本)与 download-artifact,其余是 gh。
-        upload = self.release['jobs']['upload']
-        self.assertEqual(sorted(upload['needs']), ['build', 'prepare'])
-        used = {step['uses'].split('@')[0] for step in steps(upload) if 'uses' in step}
+    def test_signing_secrets_only_reach_the_import_step_of_the_macos_job(self):
+        for name, job in self.jobs.items():
+            if name != 'build-macos':
+                self.assertNotIn('secrets.', str(job), name)
+                self.assertNotIn('environment', job, name)
+        macos = self.jobs['build-macos']
+        self.assertEqual(macos['environment'], 'release')
+        self.assertNotIn('secrets.', str(macos.get('env', {})))
+        with_secrets = [s for s in steps(macos) if 'secrets.' in str(s)]
+        self.assertEqual(len(with_secrets), 1)
+        self.assertIn('macos-keychain.sh setup', with_secrets[0]['run'])
+        self.assertEqual(set(with_secrets[0]['env']),
+                         {'SUMMON_MACOS_CERT_P12', 'SUMMON_MACOS_CERT_PASSWORD'})
+        self.assertNotIn('set -x', self.release_text)
+
+    def test_macos_job_builds_before_import_and_always_removes_keychain(self):
+        names = [s.get('name', s.get('uses', '')) for s in steps(self.jobs['build-macos'])]
+        runs = [s.get('run', '') for s in steps(self.jobs['build-macos'])]
+        build = next(i for i, r in enumerate(runs) if '--build-only' in r)
+        setup = next(i for i, r in enumerate(runs) if 'macos-keychain.sh setup' in r)
+        sign = next(i for i, r in enumerate(runs) if '--skip-build' in r)
+        cleanup = next(i for i, r in enumerate(runs) if 'macos-keychain.sh cleanup' in r)
+        self.assertLess(build, setup, names)
+        self.assertLess(setup, sign, names)
+        self.assertLess(sign, cleanup, names)
+        self.assertEqual(steps(self.jobs['build-macos'])[cleanup].get('if'), 'always()')
+        self.assertNotIn('--adhoc-sign', self.release_text)
+
+    def test_publish_waits_for_every_build_and_uses_publish_py(self):
+        publish = self.jobs['publish']
+        self.assertEqual(sorted(publish['needs']), ['build-linux', 'build-macos', 'prepare'])
+        self.assertIn('publish.py finalize', run_text(publish))
+        used = {step['uses'].split('@')[0] for step in steps(publish) if 'uses' in step}
         self.assertEqual(used, {'actions/checkout', 'actions/download-artifact'})
+        # 草稿转为发布只在 publish.py 里做,判定在 release_plan.py。
+        self.assertNotIn('--draft=false', self.release_text)
+        self.assertNotIn('release edit', self.release_text)
 
-    def test_existing_release_decisions_come_from_release_plan(self):
-        # 整轮重跑能接着做:prepare 与 upload 都交给 release_plan.py 判定,不在 YAML 里另写一套。
-        def run_text(job):
-            return '\n'.join(step.get('run', '') for step in steps(self.release['jobs'][job]))
-        # 已有 Release 时把它交给判定脚本,没有时才是 create;两处都带上同名 tag 的状态。
-        prepare = run_text('prepare')
-        self.assertIn('release_plan.py prepare --sha "$SHA" "${TAG_STATE[@]}" --release-json', prepare)
-        self.assertIn('release_plan.py prepare --sha "$SHA" "${TAG_STATE[@]}")', prepare)
-        self.assertIn('targetCommitish', prepare)
-        # 同名 tag:按精确 ref 查,附注 tag 解到提交,只有 404 算不存在。
-        self.assertIn('gh api "repos/$REPO/git/ref/tags/$TAG"', prepare)
-        self.assertIn('gh api "repos/$REPO/git/tags/$OBJ_SHA"', prepare)
-        self.assertIn('TAG_STATE=(--tag-commit "$OBJ_SHA")', prepare)
-        self.assertIn("grep -q 'HTTP 404'", prepare)
-        self.assertIn('release_plan.py upload', run_text('upload'))
-        self.assertNotIn('<< \'PY\'', run_text('upload'))
+    def test_every_build_checks_out_the_prepared_commit(self):
+        for name in ('build-linux', 'build-macos', 'publish'):
+            checkout = steps(self.jobs[name])[0]
+            self.assertTrue(checkout['uses'].startswith('actions/checkout@'), name)
+            self.assertEqual(checkout['with']['ref'], '${{ needs.prepare.outputs.sha }}', name)
+            self.assertIn('prepare', self.jobs[name]['needs'])
 
     def test_checkout_never_persists_credentials(self):
-        for name, job in self.release['jobs'].items():
-            for step in steps(job):
-                if step.get('uses', '').startswith('actions/checkout@'):
-                    self.assertIs(step.get('with', {}).get('persist-credentials'), False, name)
+        for path in sorted(WORKFLOWS.glob('*.yml')):
+            for name, job in load(path)['jobs'].items():
+                for step in steps(job):
+                    if step.get('uses', '').startswith('actions/checkout@'):
+                        self.assertIs(step.get('with', {}).get('persist-credentials'), False,
+                                      f'{path.name}:{name}')
 
     def test_concurrency_and_timeouts(self):
         concurrency = self.release['concurrency']
         self.assertIn('github.ref', concurrency['group'])
         self.assertIs(concurrency['cancel-in-progress'], False)
-        for name, job in self.release['jobs'].items():
+        for name, job in self.jobs.items():
             self.assertIsInstance(job.get('timeout-minutes'), int, name)
 
-    def test_builds_both_linux_platforms_on_ubuntu_22_04(self):
-        include = self.release['jobs']['build']['strategy']['matrix']['include']
+    def test_builds_linux_on_ubuntu_22_04_and_macos_on_arm64(self):
+        include = self.jobs['build-linux']['strategy']['matrix']['include']
         self.assertEqual({(i['runner'], i['platform']) for i in include},
                          {('ubuntu-22.04', 'linux-x64'), ('ubuntu-22.04-arm', 'linux-arm64')})
+        self.assertEqual(self.jobs['build-macos']['runs-on'], 'macos-15')
 
-    def test_never_publishes_and_names_no_repository(self):
-        # 草稿转为发布在发版的 Mac 上做;仓库一律取 github.repository。
-        self.assertNotIn('--draft=false', self.release_text)
-        self.assertNotIn('release edit', self.release_text)
+    def test_names_no_repository(self):
         self.assertNotRegex(self.release_text, r'github\.com[:/]')
         self.assertIn('${{ github.repository }}', self.release_text)
+
+    def test_checks_run_on_linux_and_the_release_macos_runner(self):
+        source = self.checks['jobs']['source']
+        self.assertEqual(source['strategy']['matrix']['os'], ['ubuntu-latest', 'macos-15'])
+        text = run_text(source)
+        for script in sorted((ROOT / 'scripts/tests').glob('test*')):
+            self.assertIn(f'scripts/tests/{script.name}', text, script.name)
+        self.assertIn('swift test --package-path menubar', text)
 
 
 if __name__ == '__main__':

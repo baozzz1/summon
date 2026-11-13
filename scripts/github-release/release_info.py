@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""发布工作流要的几项信息:版本号、Release 的 tag、Release 正文。只用标准库。
+"""发布工作流要的几项信息:版本号、tag 的种类、Release 正文。只用标准库。
 
     python3 scripts/github-release/release_info.py version
-    python3 scripts/github-release/release_info.py tag --ref-name main --sha <提交>
+    python3 scripts/github-release/release_info.py check-tag --tag v1.2.3 --sha <提交>
     python3 scripts/github-release/release_info.py notes --version 1.2.3
 
-tag:`main` 上是 `v<版本>`;其它分支是 `test-<提交前 7 位>`,只用于演练,不会转为发布。
+check-tag 输出 tag 的种类:
+    release    `v<版本>`:版本必须是纯数字的 x.y.z,且等于 crates/summon/Cargo.toml 的版本
+    rehearsal  `test-<提交号前缀>`(7 到 40 位):前缀必须是这个提交的,只走演练、停在草稿
+其它形态失败。tag 是否在 main 上由工作流用 git 查。
 正文取 RELEASE_NOTES.md 里该版本那一节(`## <版本> · <日期>` 到下一个 `## `),没有这一节就写一句
 通用说明。
 """
@@ -16,7 +19,8 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RELEASE_BRANCH = 'main'
+RELEASE_TAG = re.compile(r'v((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))')
+REHEARSAL_TAG = re.compile(r'test-([0-9a-f]{7,40})')
 
 
 class InfoError(Exception):
@@ -32,12 +36,22 @@ def read_version(root=ROOT):
     return version
 
 
-def release_tag(version, ref_name, sha):
+def tag_kind(tag, sha, version):
+    """'release' 或 'rehearsal';tag 与提交、版本对不上就抛 InfoError。"""
     if not re.fullmatch(r'[0-9a-f]{40}', sha or ''):
         raise InfoError(f'不是完整的提交号:{sha!r}')
-    if ref_name == RELEASE_BRANCH:
-        return f'v{version}'
-    return f'test-{sha[:7]}'
+    match = RELEASE_TAG.fullmatch(tag or '')
+    if match:
+        # 已装的启动器只认纯 x.y.z 的版本号,发版 tag 与 Cargo.toml 的版本都必须是这个形态。
+        if match.group(1) != version:
+            raise InfoError(f'tag {tag} 与 crates/summon/Cargo.toml 的版本 {version} 不符')
+        return 'release'
+    match = REHEARSAL_TAG.fullmatch(tag or '')
+    if match:
+        if not sha.startswith(match.group(1)):
+            raise InfoError(f'演练 tag {tag} 不是提交 {sha} 的前缀')
+        return 'rehearsal'
+    raise InfoError(f'不认识的 tag:{tag!r}(发版用 v<x.y.z>,演练用 test-<提交号前缀>)')
 
 
 def release_notes(version, text):
@@ -69,8 +83,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest='cmd', required=True)
     sub.add_parser('version')
-    tag = sub.add_parser('tag')
-    tag.add_argument('--ref-name', required=True)
+    tag = sub.add_parser('check-tag')
+    tag.add_argument('--tag', required=True)
     tag.add_argument('--sha', required=True)
     notes = sub.add_parser('notes')
     notes.add_argument('--version', required=True)
@@ -78,8 +92,8 @@ def main(argv=None):
     try:
         if args.cmd == 'version':
             print(read_version())
-        elif args.cmd == 'tag':
-            print(release_tag(read_version(), args.ref_name, args.sha))
+        elif args.cmd == 'check-tag':
+            print(tag_kind(args.tag, args.sha, read_version()))
         else:
             print(notes_or_default(args.version))
     except InfoError as err:

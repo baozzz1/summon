@@ -42,7 +42,30 @@ python3 scripts/check-public-content.py
   里更新经审查的摘要。
 - 运行数据和个人上下文在源码仓库之外保存。
 
-## 提交
+## 提交与合入
 
 提交前检查暂存区内容、隐私扫描结果、许可证及第三方署名。
 提交消息只描述最终行为。
+
+`main` 只经 PR 合入：在分支上开发，推到 GitHub 开 PR。`checks` 工作流的 Linux 与 macOS
+两个 job 都通过、review 批准后，由作者（包括 agent）自行合入。不直接推送或强推 `main`。
+
+## 发版
+
+发版全部在 GitHub Actions 的 `release` 工作流里完成。版本号只用纯数字的 `x.y.z`：
+已安装的启动器只认这个形态。
+
+1. 开一个发版 PR：改 `crates/summon/Cargo.toml` 的版本与 `Cargo.lock` 里 summon 的版本，
+   把 `RELEASE_NOTES.md`「未发布」里的条目移到新的版本节 `## x.y.z · 日期`。
+2. 合入后，在 `main` 的合入提交上打 tag 并推送：`git tag vX.Y.Z <提交>`、`git push origin vX.Y.Z`。
+   tag 不在 `main` 上，或与 `Cargo.toml` 的版本不符，工作流直接失败。
+3. 工作流建草稿 Release、构建两个 Linux 包；macOS 包的 job 绑定 environment `release`，
+   owner 在 GitHub 上批准后才导入签名证书、签名打包。三个包都到齐后核对字节数、SHA-256、
+   提交与包成员，生成并上传 `manifest.json`，再转为发布；仓库已有更高版本时不标 latest。
+4. 任何一步失败，Release 都停在草稿，对外不可见；修好后在 Actions 里重跑失败的 job。
+   已发布的 Release 不改写，要换内容就发下一个版本。
+
+演练：对任意提交推送 tag `test-<提交号前缀>`（7 到 40 位），走完同样的流程（macOS job 同样要批准），
+停在 prerelease 草稿，永不转为发布。看完删掉草稿和 tag。
+
+发布脚本在 `scripts/github-release/`，改动后跑 `scripts/verify.sh` 第一步里的脚本测试。

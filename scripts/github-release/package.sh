@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 把当前源码树构建成 GitHub Release 的一个平台包。镜像仓的发布工作流(Linux)与发版的 Mac(macOS)
-# 共用这一份。
+# 把当前源码树构建成 GitHub Release 的一个平台包。发布工作流(.github/workflows/release.yml)的
+# Linux 与 macOS job 共用这一份。
 #
-#   bash scripts/github-release/package.sh --out <目录> [--skip-build] [--adhoc-sign]
+#   bash scripts/github-release/package.sh --out <目录> [--build-only | --skip-build] [--adhoc-sign]
 #
 # 产物(都落在 --out):
 #   summon-<平台>.tar.gz     summon、summon-sidecar(macOS 另有 summon-menubar),平铺、0755
@@ -10,6 +10,7 @@
 # 平台名:linux-x64、linux-arm64、darwin-arm64。三个平台的 .build.json 交给 manifest.py 汇总成
 # manifest.json。
 #
+# --build-only  只构建,不签名、不打包(macOS job 先在没有签名证书的环境里构建,再导入证书打包)
 # --skip-build  不构建,直接用已有的构建产物打包;产物自报的提交必须仍是当前 HEAD
 # --adhoc-sign  macOS 上用 ad-hoc 签名(只给测试用);默认要求 Developer ID 签名并带安全时间戳
 #
@@ -33,10 +34,11 @@ fi
 set -euo pipefail
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 OUT=""
+BUILD_ONLY=0
 SKIP_BUILD=0
 ADHOC_SIGN=0
 while [ $# -gt 0 ]; do
@@ -44,6 +46,10 @@ while [ $# -gt 0 ]; do
     --out)
       OUT="${2:?--out 要跟一个目录}"
       shift 2
+      ;;
+    --build-only)
+      BUILD_ONLY=1
+      shift
       ;;
     --skip-build)
       SKIP_BUILD=1
@@ -65,6 +71,10 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$OUT" ] || {
   echo "缺 --out <目录>" >&2
+  exit 2
+}
+[ "$BUILD_ONLY$SKIP_BUILD" != 11 ] || {
+  echo "--build-only 与 --skip-build 不能同时用" >&2
   exit 2
 }
 mkdir -p "$OUT"
@@ -93,8 +103,8 @@ for tool in git python3 cargo go; do
   command -v "$tool" > /dev/null 2>&1 || die "缺 $tool"
 done
 
-# 对外的包默认要求 Developer ID 签名并带安全时间戳,不静默降级成 ad-hoc。
-if [ "$IS_MAC" = 1 ]; then
+# 对外的包默认要求 Developer ID 签名并带安全时间戳,不静默降级成 ad-hoc。只构建时不签名。
+if [ "$IS_MAC" = 1 ] && [ "$BUILD_ONLY" = 0 ]; then
   command -v codesign > /dev/null 2>&1 || die "缺 codesign,macOS 包必须签名"
   if [ "$ADHOC_SIGN" = 1 ]; then
     SUMMON_CODESIGN_MODE=adhoc
@@ -152,6 +162,10 @@ if [ "$SKIP_BUILD" = 0 ]; then
       -Xswiftc -file-prefix-map -Xswiftc "$SWIFT_SCRATCH=/build" \
       -Xlinker -S
   fi
+fi
+if [ "$BUILD_ONLY" = 1 ]; then
+  say "只构建:产物留在 $TARGET_DIR/release 与 $SWIFT_SCRATCH/release,用 --skip-build 打包"
+  exit 0
 fi
 
 source_of() {
