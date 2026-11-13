@@ -5159,8 +5159,14 @@ pub(super) fn agent_dispatcher_with_stores(
                     CardAction::QuotaBadge => {
                         cards::handle_card_quota_badge(&mut chats, &agent, &fc, &card)
                     }
-                    CardAction::BadgeEffort => {
-                        cards::handle_card_badge_effort(&mut chats, &agent, &fc, &card)
+                    action @ (CardAction::BadgeCli
+                    | CardAction::BadgeModel
+                    | CardAction::BadgeEffort
+                    | CardAction::BadgeCtx) => {
+                        // 四个变体都有对应开关,None 走不到;真走到了也只是不处理这次点击。
+                        if let Some(item) = action.badge_setting() {
+                            cards::handle_card_badge_item(&mut chats, &agent, &fc, &card, item);
+                        }
                     }
                     CardAction::SessionCot => {
                         cards::handle_card_session_cot(&mut chats, &agent, &fc, &card)

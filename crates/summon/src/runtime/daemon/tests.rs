@@ -1503,6 +1503,9 @@ fn quota_badge() -> summon_core::feishu::TurnBadge {
         show_quota: true,
         merge_default_codex_quota: false,
         hide_effort: false,
+        hide_cli: false,
+        hide_model: false,
+        hide_ctx: false,
         context_remedy: Default::default(),
     }
 }

@@ -761,10 +761,34 @@
       {
         "editable": true,
         "effective": true,
+        "key": "messaging.badge_cli",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.badge_model",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
         "key": "messaging.badge_effort",
         "overridden_by": [
           "starlight · 示例群"
         ],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": true,
+        "key": "messaging.badge_ctx",
+        "overridden_by": [],
         "source": "builtin",
         "value": null
       },

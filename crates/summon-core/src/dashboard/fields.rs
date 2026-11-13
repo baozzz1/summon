@@ -733,6 +733,28 @@ pub const FIELDS: &[FieldDecl] = &[
     .setting(SettingKey::CotToolDetails)
     .contrast(Contrast::Flip),
     FieldDecl::new(
+        "messaging.badge_cli",
+        "ra638a21754",
+        "cot",
+        Bool,
+        GAC,
+        NextTurn,
+        "",
+    )
+    .setting(SettingKey::BadgeCli)
+    .contrast(Contrast::Flip),
+    FieldDecl::new(
+        "messaging.badge_model",
+        "r5c7fc52bf6",
+        "cot",
+        Bool,
+        GAC,
+        NextTurn,
+        "",
+    )
+    .setting(SettingKey::BadgeModel)
+    .contrast(Contrast::Flip),
+    FieldDecl::new(
         "messaging.badge_effort",
         "r32f3e3871d",
         "cot",
@@ -742,6 +764,17 @@ pub const FIELDS: &[FieldDecl] = &[
         "",
     )
     .setting(SettingKey::BadgeEffort)
+    .contrast(Contrast::Flip),
+    FieldDecl::new(
+        "messaging.badge_ctx",
+        "r8e5ba9c3e5",
+        "cot",
+        Bool,
+        GAC,
+        NextTurn,
+        "",
+    )
+    .setting(SettingKey::BadgeCtx)
     .contrast(Contrast::Flip),
     FieldDecl::new(
         "messaging.tool_trail",

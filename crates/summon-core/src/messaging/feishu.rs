@@ -1434,6 +1434,13 @@ pub struct TurnBadge {
     /// 与 `show_quota` 的另一处差别是生效时机:这一项走分级开关的「一轮一快照」契约,轮中途改了
     /// 要下一轮才生效(回执文案即如此承诺),所以收尾**不重读盘**,照用轮初种子里的值。
     pub hide_effort: bool,
+    /// 是否**不**渲染 CLI 类型项。分级开关 `badge.cli` 的取反,出厂开;方向与生效时机同 `hide_effort`。
+    pub hide_cli: bool,
+    /// 是否**不**渲染模型项。分级开关 `badge.model` 的取反,出厂开;方向与生效时机同 `hide_effort`。
+    pub hide_model: bool,
+    /// 是否**不**渲染上下文用量项。分级开关 `badge.ctx` 的取反,出厂开;方向与生效时机同
+    /// `hide_effort`。**只管角标这一行**:`ctx` 照常填,上下文过重提醒卡与 `context_remedy` 不看它。
+    pub hide_ctx: bool,
     /// 本轮的上下文预算(占用 / 窗口上限)。渲染成进度条,见 [`Self::render`]。
     ///
     /// 三个 backend 走同一个 [`ContextBudget`]：Claude 取 statusLine，Codex 取
@@ -1458,14 +1465,14 @@ impl TurnBadge {
     pub fn render(&self) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
         let cli = self.cli.trim();
-        if !cli.is_empty() {
+        if !self.hide_cli && !cli.is_empty() {
             parts.push(cli.to_string());
         }
         if let Some(model) = self
             .model
             .as_deref()
             .map(str::trim)
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && !self.hide_model)
         {
             parts.push(model.to_string());
         }
@@ -1481,7 +1488,7 @@ impl TurnBadge {
         }
         // 有窗口 → 使用量 + 进度条 + 百分比；缺窗口 → 只报可证实的绝对值。
         // **不渲染空槽进度条**:空条会被读成「0%」,那是错误信息,比不显示更糟。
-        if let Some(context) = self.render_context() {
+        if let Some(context) = self.render_context().filter(|_| !self.hide_ctx) {
             parts.push(context);
         }
         if self.show_quota {
@@ -2564,6 +2571,12 @@ pub struct SessionPanelControls {
     pub quota_badge: bool,
     /// 回复卡角标是否显示思考档位(分级开关 `badge.effort` 的本会话生效值)。
     pub badge_effort: bool,
+    /// 同上,CLI 类型(`badge.cli`)。
+    pub badge_cli: bool,
+    /// 同上,生效模型(`badge.model`)。
+    pub badge_model: bool,
+    /// 同上,上下文用量(`badge.ctx`)。
+    pub badge_ctx: bool,
     /// 当前 agent 账号最后一次可靠的周额度剩余百分比；采集与 `quota_badge` 展示开关解耦。
     pub quota_left_pct: Option<u8>,
     /// 同上,5 小时窗口;只有 [`crate::driver::CliDriver::has_five_hour_and_weekly_quota`]
@@ -2593,6 +2606,9 @@ impl From<bool> for SessionPanelControls {
             quota_badge,
             // 只关心额度角标的老调用点不表达档位偏好;取出厂默认(开),与 `messaging.default.yaml` 一致。
             badge_effort: true,
+            badge_cli: true,
+            badge_model: true,
+            badge_ctx: true,
             quota_left_pct: None,
             quota_5h_left_pct: None,
             context: Default::default(),
@@ -3650,25 +3666,54 @@ fn session_panel_elements_with(
         json!({"action": "quota_badge", "on": !controls.quota_badge, "chat": chat_tag}),
     )]));
 
-    // 档位角标开关:回复卡角标的「思考档位」是否渲染。与额度同属角标显示项,**默认开**
-    // (档位不敏感,只是嫌噪音的人要能关)。按钮标签即当前态,点击发相反值。
+    // 角标四项(CLI / 模型 / 档位 / 上下文用量)的显示开关,与额度同属角标显示项,**默认开**
+    // (都不敏感,只是嫌噪音的人要能关)。一行四个,按钮标签即当前态、开态高亮,点击发相反值;
+    // 每项一个独立 action,沿用 `badge_effort` 的回调与鉴权。按钮收整句标签:模型那一项的
+    // 英文要单数,不能借用候选列表标题那条复数文案。
+    let badge_state = |name: &str, enabled: bool| {
+        format!(
+            "{name}:{}",
+            if enabled {
+                summon_i18n::text!("r39eae64cfc")
+            } else {
+                summon_i18n::text!("r5d0ae622f6")
+            }
+        )
+    };
+    let badge_button = |label: String, action: &str, enabled: bool| {
+        cb_btn(
+            &label,
+            if enabled { "primary" } else { "default" },
+            json!({"action": action, "on": !enabled, "chat": chat_tag}),
+        )
+    };
+    let model_label = if controls.badge_model {
+        summon_i18n::text!("re2c2d63a69")
+    } else {
+        summon_i18n::text!("ra84c0e33d5")
+    };
     elements.push(json!({
         "tag": "markdown",
-        "content": summon_i18n::text!("r7df9169cc0")
+        "content": summon_i18n::text!("r326cb98953")
     }));
-    elements.push(button_row(vec![cb_btn(
-        if controls.badge_effort {
-            summon_i18n::text!("r3479f8c899")
-        } else {
-            summon_i18n::text!("r61428b74dd")
-        },
-        if controls.badge_effort {
-            "primary"
-        } else {
-            "default"
-        },
-        json!({"action": "badge_effort", "on": !controls.badge_effort, "chat": chat_tag}),
-    )]));
+    elements.push(button_row(vec![
+        badge_button(
+            badge_state("cli", controls.badge_cli),
+            "badge_cli",
+            controls.badge_cli,
+        ),
+        badge_button(model_label.to_string(), "badge_model", controls.badge_model),
+        badge_button(
+            badge_state(summon_i18n::text!("r5be7a415a7"), controls.badge_effort),
+            "badge_effort",
+            controls.badge_effort,
+        ),
+        badge_button(
+            badge_state("ctx", controls.badge_ctx),
+            "badge_ctx",
+            controls.badge_ctx,
+        ),
+    ]));
 
     // 归档关闭自动续聊入口，退出保留自动续聊入口。
     // / compact。保活只属于空闲提醒卡片,不放在主动唤出的 session 面板里。
@@ -5232,9 +5277,14 @@ pub enum CardAction {
     /// `quota_badge`:面板「额度显示」开关 → 写 per-chat 标记文件,控制回复卡角标是否渲染
     /// 剩余额度。改本机持久状态且事关敏感面的展示,过 operate-gate。
     QuotaBadge,
-    /// `badge_effort`:面板「档位角标」开关 → 写 per-chat 分级开关,控制回复卡角标是否渲染
-    /// 思考档位。改本机持久状态,与其它配置变更同档,过 operate-gate。
+    /// `badge_effort`:会话面板角标行的档位开关 → 写 per-chat 分级开关 `badge.effort`,控制回复卡
+    /// 角标是否渲染思考档位。改本机持久状态,与其它配置变更同档,过 operate-gate。
     BadgeEffort,
+    /// `badge_cli` / `badge_model` / `badge_ctx`:角标行的另外三个开关,写 per-chat 分级开关
+    /// `badge.cli` / `badge.model` / `badge.ctx`。与 `BadgeEffort` 同一个处理函数、同档鉴权。
+    BadgeCli,
+    BadgeModel,
+    BadgeCtx,
     /// Session 卡 CoT 展示开关：写 per-chat 配置，下一轮生效。
     SessionCot,
     /// Session 卡原地刷新：只重读状态并重绘当前卡。
@@ -5345,6 +5395,9 @@ impl CardAction {
             "interrupt" => Self::Interrupt,
             "quota_badge" => Self::QuotaBadge,
             "badge_effort" => Self::BadgeEffort,
+            "badge_cli" => Self::BadgeCli,
+            "badge_model" => Self::BadgeModel,
+            "badge_ctx" => Self::BadgeCtx,
             "session_cot" => Self::SessionCot,
             "session_refresh" => Self::SessionRefresh,
             "session_close" | "card_close" => Self::SessionClose,
@@ -5381,6 +5434,19 @@ impl CardAction {
     /// 鉴权档位。对枚举**穷举、无通配**:新增变体必须在此显式声明档位,否则不编译。
     /// `Unknown` → `Operate`:未登记动作 fail-closed(最坏后果从「群里任意人可触发」降为
     /// 「仅 operate 名单可触发」),与 CLAUDE.md「破坏性动作经 operate-gate、群里 fail-closed」同向。
+    /// 角标行开关对应的分级开关;其余动作为 None。dispatcher 据此把四个开关交给同一个处理函数,
+    /// 映射只在这一处。
+    pub fn badge_setting(self) -> Option<crate::settings::SettingKey> {
+        use crate::settings::SettingKey;
+        match self {
+            Self::BadgeCli => Some(SettingKey::BadgeCli),
+            Self::BadgeModel => Some(SettingKey::BadgeModel),
+            Self::BadgeEffort => Some(SettingKey::BadgeEffort),
+            Self::BadgeCtx => Some(SettingKey::BadgeCtx),
+            _ => None,
+        }
+    }
+
     pub fn gate(self) -> CardGate {
         match self {
             // 破坏性生命周期 + 配置变更 + 按键注入(自由文本即任意指令)+ 销毁待办 + 打断在跑轮。
@@ -5411,8 +5477,11 @@ impl CardAction {
             | Self::Interrupt
             // 额度显示开关:改本机持久状态 + 决定敏感面进不进群卡,与其它配置变更同档。
             | Self::QuotaBadge
-            // 档位角标开关:同样写 per-chat 持久状态,与额度开关同档。
+            // 角标各项显示开关:同样写 per-chat 持久状态,与额度开关同档。
             | Self::BadgeEffort
+            | Self::BadgeCli
+            | Self::BadgeModel
+            | Self::BadgeCtx
             | Self::SessionCot
             | Self::SessionClose
             // 交接后原地压缩或归档当前会话,与 /handoff 同一道闸;Ignore 收走卡上的入口,与关闭面板卡同档。
@@ -5520,6 +5589,9 @@ impl CardAction {
             | Self::Interrupt
             | Self::QuotaBadge
             | Self::BadgeEffort
+            | Self::BadgeCli
+            | Self::BadgeModel
+            | Self::BadgeCtx
             | Self::SessionCot
             | Self::SessionRefresh
             | Self::SessionClose
@@ -8566,6 +8638,9 @@ mod tests {
             "interrupt",
             "quota_badge",
             "badge_effort",
+            "badge_cli",
+            "badge_model",
+            "badge_ctx",
             "session_cot",
             "retry_now",
             "term_open",
@@ -11491,6 +11566,9 @@ mod tests {
             show_quota: true,
             merge_default_codex_quota: false,
             hide_effort: false,
+            hide_cli: false,
+            hide_model: false,
+            hide_ctx: false,
             context_remedy: Default::default(),
         };
         let local = |ts: i64, fmt: &str| {
@@ -11593,6 +11671,68 @@ mod tests {
         );
     }
 
+    /// CLI / 模型 / 上下文用量与档位同理:出厂显示,各自关掉只少那一项。关上下文只动角标这一行,
+    /// `ctx` 本身照常留着(过重提醒卡读的是它)。
+    #[test]
+    fn turn_badge_cli_model_ctx_disappear_only_when_switched_off() {
+        let on = TurnBadge {
+            cli: "claude".into(),
+            model: Some("Opus 5".into()),
+            effort: Some("xhigh".into()),
+            ctx: ContextBudget::from_reported_pct(35, Some(1_000_000)),
+            ..Default::default()
+        };
+        let cases = [
+            (
+                TurnBadge {
+                    hide_cli: true,
+                    ..on.clone()
+                },
+                "Opus 5 · xhigh · 350k/1.0M ████░░░░░░ 35%",
+            ),
+            (
+                TurnBadge {
+                    hide_model: true,
+                    ..on.clone()
+                },
+                "claude · xhigh · 350k/1.0M ████░░░░░░ 35%",
+            ),
+            (
+                TurnBadge {
+                    hide_ctx: true,
+                    ..on.clone()
+                },
+                "claude · Opus 5 · xhigh",
+            ),
+        ];
+        for (badge, want) in cases {
+            assert_eq!(badge.render().as_deref(), Some(want));
+            assert_eq!(badge.ctx, on.ctx, "关显示不清上下文数据");
+        }
+        let all_off = TurnBadge {
+            hide_cli: true,
+            hide_model: true,
+            hide_effort: true,
+            hide_ctx: true,
+            ..on.clone()
+        };
+        assert_eq!(
+            all_off.render(),
+            None,
+            "四项全关、额度没开 → 退回纯时间戳行"
+        );
+        let quota_only = TurnBadge {
+            show_quota: true,
+            quota_left_pct: Some(87),
+            ..all_off
+        };
+        assert_eq!(
+            quota_only.render().as_deref(),
+            Some("7d 87%"),
+            "额度开关独立于四项"
+        );
+    }
+
     /// 运行中的 subagent 有 last_activity 时,面板行追加「最后活跃 HH:MM:SS」(绝对时刻,
     /// 本地时区,与「更新于」同风格);已完成条目和没回填活跃时间的条目不带。
     #[test]
@@ -11647,11 +11787,13 @@ mod tests {
         assert!(!c.contains("s 前"), "不得出现相对时间措辞:{c}");
     }
 
-    /// 面板「档位角标」开关:与额度同族的显示项,按钮标签即当前态、点击翻转。它走分级开关,
-    /// 所以按钮旁必须写明「下一轮起生效」——用户点完当前这一轮的角标不会变。
+    /// 面板角标那一行:CLI / 模型 / 档位 / 上下文用量四个开关并排,与额度同族的显示项,按钮标签
+    /// 即当前态、点击翻转。它们走分级开关,所以旁边必须写明「下一轮起生效」——用户点完当前这一轮
+    /// 的角标不会变。
     #[test]
-    fn session_panel_badge_effort_toggle_reflects_state() {
+    fn session_panel_badge_item_toggles_reflect_state() {
         use crate::model_effort::{EffortSource, ModelSource, ResolvedEffort, ResolvedModel};
+        use serde_json::Value;
         let rm = ResolvedModel {
             value: Some("m".into()),
             source: ModelSource::AgentConfig,
@@ -11660,7 +11802,7 @@ mod tests {
             value: None,
             source: EffortSource::CliDefault,
         };
-        let panel = |badge_effort: bool| {
+        let panel = |controls: SessionPanelControls| {
             card_session_panel(
                 "tag-x",
                 "claude",
@@ -11670,23 +11812,92 @@ mod tests {
                 &[],
                 &[],
                 &crate::subagent::SubagentDisplay::default(),
-                SessionPanelControls {
-                    badge_effort,
-                    ..Default::default()
-                },
+                controls,
             )
         };
-        let on = panel(true);
-        assert!(on.contains("档位角标:开"), "开态按钮标签:{on}");
+        fn find_button<'a>(v: &'a Value, action: &str) -> Option<&'a Value> {
+            match v {
+                Value::Object(map) => {
+                    let hit = map.get("tag").and_then(Value::as_str) == Some("button")
+                        && map.get("behaviors").map(|b| &b[0]["value"]["action"])
+                            == Some(&Value::from(action));
+                    if hit {
+                        return Some(v);
+                    }
+                    map.values().find_map(|child| find_button(child, action))
+                }
+                Value::Array(items) => items.iter().find_map(|child| find_button(child, action)),
+                _ => None,
+            }
+        }
+        let all_on = SessionPanelControls {
+            badge_cli: true,
+            badge_model: true,
+            badge_effort: true,
+            badge_ctx: true,
+            ..Default::default()
+        };
+        let card = panel(all_on.clone());
+        assert!(card.contains("从下一轮起生效"), "必须说明生效时机:{card}");
+        let value: Value = serde_json::from_str(&card).unwrap();
+        let rows: Vec<&Value> = ["badge_cli", "badge_model", "badge_effort", "badge_ctx"]
+            .iter()
+            .map(|action| find_button(&value, action).expect(action))
+            .collect();
+        let labels: Vec<&str> = rows
+            .iter()
+            .map(|button| button["text"]["content"].as_str().unwrap())
+            .collect();
+        assert_eq!(labels, ["cli:开", "模型:开", "档位:开", "ctx:开"]);
+        let row = card.find("cli:开").unwrap();
         assert!(
-            on.contains(r#""action":"badge_effort","chat":"tag-x","on":false"#)
-                || on.contains(r#""action":"badge_effort""#) && on.contains(r#""on":false"#),
-            "开态点击应发 on:false:{on}"
+            card[row..].find("ctx:开").unwrap() < card[row..].find("\"tag\":\"markdown\"").unwrap(),
+            "四个按钮在同一行:{card}"
         );
-        assert!(on.contains("从下一轮起生效"), "必须说明生效时机:{on}");
-        let off = panel(false);
-        assert!(off.contains("档位角标:关"), "关态按钮标签:{off}");
-        assert!(off.contains(r#""on":true"#), "关态点击应发 on:true:{off}");
+
+        for action in ["badge_cli", "badge_model", "badge_effort", "badge_ctx"] {
+            let mut controls = all_on.clone();
+            *match action {
+                "badge_cli" => &mut controls.badge_cli,
+                "badge_model" => &mut controls.badge_model,
+                "badge_effort" => &mut controls.badge_effort,
+                _ => &mut controls.badge_ctx,
+            } = false;
+            let value: Value = serde_json::from_str(&panel(controls)).unwrap();
+            for other in ["badge_cli", "badge_model", "badge_effort", "badge_ctx"] {
+                let button = find_button(&value, other).unwrap();
+                let behavior = &button["behaviors"][0]["value"];
+                let off = other == action;
+                assert_eq!(behavior["on"], off, "{action} 关时 {other} 点击发相反值");
+                assert_eq!(behavior["chat"], "tag-x");
+                assert_eq!(button["type"], if off { "default" } else { "primary" });
+                let label = button["text"]["content"].as_str().unwrap();
+                assert_eq!(label.ends_with(":关"), off, "{label}");
+            }
+        }
+
+        // 英文面板:模型按钮是单数的 `Model`,其余三项拼法不变。
+        let english = |controls: SessionPanelControls| {
+            crate::i18n::with_language(crate::i18n::Language::English, || panel(controls))
+        };
+        let label_of = |card: &str, action: &str| {
+            let value: Value = serde_json::from_str(card).unwrap();
+            find_button(&value, action).unwrap()["text"]["content"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let on = english(all_on.clone());
+        let labels: Vec<String> = ["badge_cli", "badge_model", "badge_effort", "badge_ctx"]
+            .iter()
+            .map(|action| label_of(&on, action))
+            .collect();
+        assert_eq!(labels, ["cli:On", "Model:On", "Effort:On", "ctx:On"]);
+        let off = english(SessionPanelControls {
+            badge_model: false,
+            ..all_on.clone()
+        });
+        assert_eq!(label_of(&off, "badge_model"), "Model:Off");
     }
 
     /// 面板「额度显示」开关:关态渲「关」按钮(default)、回调带 on:true;开态渲「开」按钮
@@ -11827,6 +12038,9 @@ mod tests {
             SessionPanelControls {
                 quota_badge: false,
                 badge_effort: true,
+                badge_cli: true,
+                badge_model: true,
+                badge_ctx: true,
                 quota_left_pct: None,
                 quota_5h_left_pct: None,
                 context: Default::default(),
@@ -11884,6 +12098,9 @@ mod tests {
                 SessionPanelControls {
                     quota_badge: false,
                     badge_effort: true,
+                    badge_cli: true,
+                    badge_model: true,
+                    badge_ctx: true,
                     quota_left_pct: None,
                     quota_5h_left_pct: None,
                     context: Default::default(),
@@ -11923,6 +12140,33 @@ mod tests {
         assert_eq!(CardAction::QuotaBadge.gate(), CardGate::Operate);
     }
 
+    /// 角标各项开关:解析到各自的变体、对到各自的分级开关,改 per-chat 持久状态,与额度开关同档
+    /// operate。
+    #[test]
+    fn badge_item_actions_parse_and_require_operate() {
+        use crate::settings::SettingKey;
+        for (action, want, key) in [
+            ("badge_cli", CardAction::BadgeCli, SettingKey::BadgeCli),
+            (
+                "badge_model",
+                CardAction::BadgeModel,
+                SettingKey::BadgeModel,
+            ),
+            (
+                "badge_effort",
+                CardAction::BadgeEffort,
+                SettingKey::BadgeEffort,
+            ),
+            ("badge_ctx", CardAction::BadgeCtx, SettingKey::BadgeCtx),
+        ] {
+            assert_eq!(CardAction::from_action(action), want);
+            assert_eq!(want.badge_setting(), Some(key), "{action}");
+            assert_eq!(want.gate(), CardGate::Operate, "{action}");
+        }
+        assert_eq!(CardAction::QuotaBadge.badge_setting(), None);
+        assert_eq!(CardAction::SessionCot.badge_setting(), None);
+    }
+
     #[test]
     fn codex_service_tier_action_parses_and_requires_operate() {
         assert_eq!(
@@ -11953,6 +12197,9 @@ mod tests {
             SessionPanelControls {
                 quota_badge: false,
                 badge_effort: true,
+                badge_cli: true,
+                badge_model: true,
+                badge_ctx: true,
                 quota_left_pct: None,
                 quota_5h_left_pct: None,
                 context: Default::default(),

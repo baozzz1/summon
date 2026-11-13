@@ -817,6 +817,17 @@ pub struct Messaging {
     /// 只管渲染:关掉后档位照常采集,重新打开当轮就有值可显。
     #[serde(default = "default_true")]
     pub badge_effort: bool,
+    /// 回复卡角标是否显示 CLI 类型(**默认开**)。分级开关,同 `badge_effort`。
+    #[serde(default = "default_true")]
+    pub badge_cli: bool,
+    /// 回复卡角标是否显示生效模型(**默认开**)。分级开关,同 `badge_effort`。
+    #[serde(default = "default_true")]
+    pub badge_model: bool,
+    /// 回复卡角标是否显示上下文用量(**默认开**)。分级开关,同 `badge_effort`。
+    ///
+    /// 只管角标渲染:上下文照常采集,过重提醒卡(60% / 80%)与压缩 / 交接入口都不看它。
+    #[serde(default = "default_true")]
+    pub badge_ctx: bool,
     /// 是否强制显示工具轨迹(三行状态栏:**默认 false**)。开 → 即使 thinking 可见(有明文)
     /// 也渲染工具轨迹;关 → 现状(只有 thinking 不可见时才渲染,给看不到思考的模型补形状)。
     /// 按 bot 配:agent.yaml 的 `messaging.tool_trail: true` 只影响该 agent。
@@ -1250,6 +1261,15 @@ impl Messaging {
         if let Some(v) = o.badge_effort {
             self.badge_effort = v;
         }
+        if let Some(v) = o.badge_cli {
+            self.badge_cli = v;
+        }
+        if let Some(v) = o.badge_model {
+            self.badge_model = v;
+        }
+        if let Some(v) = o.badge_ctx {
+            self.badge_ctx = v;
+        }
         if let Some(v) = o.tool_trail {
             self.tool_trail = v;
         }
@@ -1413,6 +1433,12 @@ pub struct MessagingOverride {
     pub cot_tool_details: Option<bool>,
     /// 角标思考档位显示开关。`None` = 没写,跟上一层。
     pub badge_effort: Option<bool>,
+    /// 角标 CLI 类型显示开关。`None` = 没写,跟上一层。
+    pub badge_cli: Option<bool>,
+    /// 角标模型显示开关。`None` = 没写,跟上一层。
+    pub badge_model: Option<bool>,
+    /// 角标上下文用量显示开关。`None` = 没写,跟上一层。
+    pub badge_ctx: Option<bool>,
     pub tool_trail: Option<bool>,
     /// 表情约定段注入开关。`None` = 没写,跟上一层。
     pub agent_reactions: Option<bool>,
@@ -1647,6 +1673,24 @@ pub const CONFIG_FIELD_META: &[ConfigFieldMeta] = &[
         path: "messaging.badge_effort",
         since: "2026-09-01",
         description: "r45741001d9",
+        deprecated_since: None,
+    },
+    ConfigFieldMeta {
+        path: "messaging.badge_cli",
+        since: "2026-11-13",
+        description: "r71f6846dd2",
+        deprecated_since: None,
+    },
+    ConfigFieldMeta {
+        path: "messaging.badge_model",
+        since: "2026-11-13",
+        description: "r9d937d3d51",
+        deprecated_since: None,
+    },
+    ConfigFieldMeta {
+        path: "messaging.badge_ctx",
+        since: "2026-11-13",
+        description: "rc417c65923",
         deprecated_since: None,
     },
     ConfigFieldMeta {
@@ -3042,6 +3086,32 @@ sentinel:
         let o: MessagingOverride = serde_yaml::from_str("cot_visible: false").unwrap();
         m.apply(&o);
         assert!(m.badge_effort);
+    }
+
+    #[test]
+    fn badge_item_switches_default_on_and_override_off_one_by_one() {
+        let m = builtin_messaging();
+        assert!(m.badge_cli && m.badge_model && m.badge_ctx);
+
+        for (field, get) in [
+            (
+                "badge_cli",
+                (|m: &Messaging| m.badge_cli) as fn(&Messaging) -> bool,
+            ),
+            ("badge_model", |m: &Messaging| m.badge_model),
+            ("badge_ctx", |m: &Messaging| m.badge_ctx),
+        ] {
+            let mut m = builtin_messaging();
+            let o: MessagingOverride = serde_yaml::from_str(&format!("{field}: false")).unwrap();
+            m.apply(&o);
+            assert!(!get(&m), "{field}");
+            let others = [m.badge_cli, m.badge_model, m.badge_effort, m.badge_ctx];
+            assert_eq!(
+                others.iter().filter(|on| !**on).count(),
+                1,
+                "{field} 不牵连别的项"
+            );
+        }
     }
 
     #[test]

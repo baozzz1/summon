@@ -107,7 +107,16 @@
       "messaging.agent_reactions": [
         "user"
       ],
+      "messaging.badge_cli": [
+        "reply.2"
+      ],
+      "messaging.badge_ctx": [
+        "reply.2"
+      ],
       "messaging.badge_effort": [
+        "reply.2"
+      ],
+      "messaging.badge_model": [
         "reply.2"
       ],
       "messaging.cot_tool_details": [

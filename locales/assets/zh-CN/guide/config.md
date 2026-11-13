@@ -41,7 +41,10 @@ cursor 时不支持分析(一次性运行无法可靠关闭 hooks)。修改后�
 | `cot.thinking` | `hide_thinking`（语义相反） | 显示；`hide_thinking: false` |
 | `cot.tools` | `cot_tool_details` | `false` |
 | `timer.idle_retire_reset` | `timer_idle_retire_reset` | `false` |
+| `badge.cli` | `badge_cli` | `true` |
+| `badge.model` | `badge_model` | `true` |
 | `badge.effort` | `badge_effort` | `true` |
+| `badge.ctx` | `badge_ctx` | `true` |
 | `agent.reactions` | `agent_reactions` | `true` |
 | `agent.feed` | `agent_feed` | `true` |
 
@@ -193,7 +196,10 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 | `session_mirror` | `true`；Claude Transcript 会话镜像，把终端里产生的回复投回飞书 |
 | `mask_email` | `true`；消息被飞书审核以含邮箱整条拒发时，邮箱只留用户名首字母（`p***@example.com`）后重发一次，没被拒的原样送达；关掉则被拒时改发一句说明；改了即生效 |
 | `progress_max_steps` | `3`；工具轨迹最多保留几步，0 按 1 处理 |
+| `badge_cli` | `true`；回复角标显示 CLI 类型 |
+| `badge_model` | `true`；回复角标显示生效模型 |
 | `badge_effort` | `true`；回复角标显示思考档位 |
+| `badge_ctx` | `true`；回复角标显示上下文用量，只管显示，上下文过重提醒照常 |
 | `agent_reactions` | `true`；向 agent 注入语义表情约定，系统工程表情独立运行 |
 | `agent_feed` | `true`；向 agent 注入回复末尾 feed 总结约定，关掉后会话列表预览取正文开头 |
 | `document_comments_enabled` | `false`；文档评论起草与审批发布，支持全局和单 agent 配置 |

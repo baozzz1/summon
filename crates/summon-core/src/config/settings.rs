@@ -76,6 +76,12 @@ pub enum SettingKey {
     AgentReactions,
     /// 回复卡角标是否显示思考档位。
     BadgeEffort,
+    /// 回复卡角标是否显示 CLI 类型。
+    BadgeCli,
+    /// 回复卡角标是否显示生效模型。
+    BadgeModel,
+    /// 回复卡角标是否显示上下文用量。**只管渲染**:上下文采集与过重提醒卡不看它。
+    BadgeCtx,
     /// 是否给 agent 注入「回复末尾写 feed 总结标签」那段约定。**只隔离 prompt**:回复里的标签
     /// 无论开关如何都会被摘掉。
     AgentFeed,
@@ -206,6 +212,39 @@ pub const SETTINGS: &[SettingDecl] = &[
         description: "rf1b8002dee",
     },
     SettingDecl {
+        key: "badge.cli",
+        config_key: "badge_cli",
+        id: SettingKey::BadgeCli,
+        label: "rfab621c3bf",
+        get: |m| m.badge_cli,
+        chat_scoped: true,
+        consumer: Consumer::Daemon,
+        config_inverted: false,
+        description: "r9bba1cc5ba",
+    },
+    SettingDecl {
+        key: "badge.model",
+        config_key: "badge_model",
+        id: SettingKey::BadgeModel,
+        label: "r603ecc517a",
+        get: |m| m.badge_model,
+        chat_scoped: true,
+        consumer: Consumer::Daemon,
+        config_inverted: false,
+        description: "rfd71170166",
+    },
+    SettingDecl {
+        key: "badge.ctx",
+        config_key: "badge_ctx",
+        id: SettingKey::BadgeCtx,
+        label: "r82cb51bfa6",
+        get: |m| m.badge_ctx,
+        chat_scoped: true,
+        consumer: Consumer::Daemon,
+        config_inverted: false,
+        description: "r567b784cb1",
+    },
+    SettingDecl {
         key: "agent.reactions",
         config_key: "agent_reactions",
         id: SettingKey::AgentReactions,
@@ -257,7 +296,7 @@ pub struct ChatOverrides {
 }
 
 /// 开关数组容量；每条声明的槽位与可覆盖行为由配置测试验证。
-pub const SETTING_COUNT: usize = 10;
+pub const SETTING_COUNT: usize = 13;
 
 /// [`SettingKey`] 到定长数组下标的映射。新增 key 时编译器会在这里报 non-exhaustive。
 const fn slot(id: SettingKey) -> usize {
@@ -272,6 +311,9 @@ const fn slot(id: SettingKey) -> usize {
         SettingKey::DocumentComments => 7,
         SettingKey::DocumentOwnerMentions => 8,
         SettingKey::DocumentNonOwnerComments => 9,
+        SettingKey::BadgeCli => 10,
+        SettingKey::BadgeModel => 11,
+        SettingKey::BadgeCtx => 12,
     }
 }
 
@@ -448,6 +490,21 @@ impl ResolvedSettings {
         self.get(SettingKey::BadgeEffort)
     }
 
+    /// 回复卡角标是否显示 CLI 类型。
+    pub fn badge_cli(&self) -> bool {
+        self.get(SettingKey::BadgeCli)
+    }
+
+    /// 回复卡角标是否显示生效模型。
+    pub fn badge_model(&self) -> bool {
+        self.get(SettingKey::BadgeModel)
+    }
+
+    /// 回复卡角标是否显示上下文用量。
+    pub fn badge_ctx(&self) -> bool {
+        self.get(SettingKey::BadgeCtx)
+    }
+
     /// 是否给 agent 注入 feed 总结段。
     pub fn agent_feed(&self) -> bool {
         self.get(SettingKey::AgentFeed)
@@ -535,6 +592,28 @@ mod tests {
         assert!(resolved.get(SettingKey::CotVisible), "CoT 整体默认外显");
         assert!(resolved.get(SettingKey::CotThinking), "思考正文默认上卡");
         assert!(!resolved.get(SettingKey::CotToolDetails), "工具详情默认关");
+    }
+
+    /// 角标四项出厂都显示;本会话关掉其中一项不牵连另外几项。
+    #[test]
+    fn badge_items_default_on_and_switch_off_independently() {
+        let m = builtin_messaging();
+        let badge = [
+            SettingKey::BadgeCli,
+            SettingKey::BadgeModel,
+            SettingKey::BadgeEffort,
+            SettingKey::BadgeCtx,
+        ];
+        let resolved = ResolvedSettings::resolve(&m, &ChatOverrides::default());
+        assert!(badge.iter().all(|id| resolved.get(*id)), "角标各项出厂显示");
+        for off in badge {
+            let mut chat = ChatOverrides::default();
+            chat.set(off, false);
+            let resolved = ResolvedSettings::resolve(&m, &chat);
+            for id in badge {
+                assert_eq!(resolved.get(id), id != off, "{off:?} 关掉时 {id:?}");
+            }
+        }
     }
 
     /// `hide_thinking` 是全表唯一语义反转的字段,取反只允许发生在一处。

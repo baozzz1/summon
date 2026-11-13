@@ -762,7 +762,10 @@ export class MockServer {
     const cotVisible = get('messaging.cot_visible') === true;
     const showThinking = get('messaging.hide_thinking') === true;
     const tools = get('messaging.cot_tool_details') === true;
+    const badgeCli = get('messaging.badge_cli') === true;
+    const badgeModel = get('messaging.badge_model') === true;
     const badgeEffort = get('messaging.badge_effort') === true;
+    const badgeCtx = get('messaging.badge_ctx') === true;
     const feed = get('messaging.agent_feed') === true;
     const reactions = get('messaging.agent_reactions') === true;
 
@@ -796,7 +799,15 @@ export class MockServer {
       '已改成返回 `ConfigError::Empty`,本地 `cargo test -p app` 全部通过。排查记录在 `/tmp/report.md`。';
     const plainHead = 'CI 挂在 app 的单测 parse_config_rejects_empty:新加的空字符串分支没有返回错误。 已改成返回 ConfigError::Empty,本地 cargo test -p app 全部通过。排查记录在 /tmp/report.md。';
     const feedText = feed ? 'CI 已修复' : plainHead;
-    const badge = [cli, model, badgeEffort && effort ? effort : '', '上下文 38%', '14:32'].filter(Boolean).join(' · ');
+    const badge = [
+      badgeCli ? cli : '',
+      badgeModel ? model : '',
+      badgeEffort && effort ? effort : '',
+      badgeCtx ? '上下文 38%' : '',
+      '14:32',
+    ]
+      .filter(Boolean)
+      .join(' · ');
     const card = {
       schema: '2.0',
       config: { summary: { content: feedText } },

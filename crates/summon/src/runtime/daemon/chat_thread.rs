@@ -282,7 +282,7 @@ fn chat_session<'a>(
         .with_menu_ledger(menu_ledger.clone())
 }
 
-/// 每轮起跑前以盘上的 per-chat 设置为准:面板开关(如档位角标)由 dispatcher 直接落盘,不经
+/// 每轮起跑前以盘上的 per-chat 设置为准:面板开关(如角标行各开关)由 dispatcher 直接落盘,不经
 /// 本线程。读文件出错就沿用手里这份(见 `read_chat_settings_for_turn`)。
 fn refresh_chat_settings(agent: &Agent, session: &str, chat_settings: &mut ChatOverrides) {
     if let Some(on_disk) =
@@ -7978,9 +7978,14 @@ fn truncate_str(s: &str, max: usize) -> String {
 /// turn 运行时现捕获后填上。
 /// 生效模型走 `cards::panel_model`(cursor RPC 用 rpc_model、否则顶层 model,取不到用配置值),
 /// 与 `/session` 面板显示的模型同源。
-/// `show_effort` 来自**本轮**的分级开关快照(`badge.effort`):角标的档位项跟着一轮走,轮中途
-/// 改了要下一轮才生效 —— 与该开关回执承诺的「从下一轮起生效」一致,故收尾不重读盘。
-fn badge_seed_for(agent: &Agent, tag: &str, show_effort: bool) -> summon_core::feishu::TurnBadge {
+/// 各项显不显示来自**本轮**的分级开关快照(`badge.cli` / `badge.model` / `badge.effort` /
+/// `badge.ctx`):角标跟着一轮走,轮中途改了要下一轮才生效 —— 与这些开关回执承诺的「从下一轮起
+/// 生效」一致,故收尾不重读盘。
+fn badge_seed_for(
+    agent: &Agent,
+    tag: &str,
+    settings: &summon_core::settings::ResolvedSettings,
+) -> summon_core::feishu::TurnBadge {
     let five_hour = super::cards::five_hour_quota_for(agent);
     // 账号额度:进程内跨 chat 存活的最后一次已知值。Codex/Trae 推送、Claude statusLine
     // 与 Cursor 的主动查询都写同一入口；没有可靠观测就为 None。
@@ -8014,7 +8019,11 @@ fn badge_seed_for(agent: &Agent, tag: &str, show_effort: bool) -> summon_core::f
         // 配置里那个**会被真正下发**的档位(本会话覆盖 > agent.yaml;无 effort 轴的 CLI 为 None)。
         // claude 收尾时若读到 statusLine 的实时档位会覆盖它。
         effort: super::cards::badge_effort(agent, tag),
-        hide_effort: !show_effort,
+        hide_effort: !settings.badge_effort(),
+        hide_cli: !settings.badge_cli(),
+        hide_model: !settings.badge_model(),
+        // 只关角标这一项;`ctx` 照常在收尾补上,过重提醒卡读的是它。
+        hide_ctx: !settings.badge_ctx(),
         // 预算在收尾时才补(见 `completion_badge`):种子阶段还没有本轮 usage。
         ctx: Default::default(),
         context_remedy: match summon_core::driver::CliDriver::from_kind(agent.cli_kind())
@@ -11323,7 +11332,7 @@ fn consume_transcript_turn(
         // 零回归;ctx 由 card_stream_consume 从事件流的 usage 现捕获——claude 转录当前不产 usage,故 ctx
         // 恒省(角标各项缺就省),角标退化成 `claude · <模型>`。红线「无角标可省时逐字节等同」仍成立:
         // claude 的 cli 恒非空 → 角标恒可渲染,不触发退化路径。
-        Some(badge_seed_for(agent, &tag, settings.badge_effort())),
+        Some(badge_seed_for(agent, &tag, &settings)),
         event_stamp(agent, &tag),
         &outbox,
         // Transcript(claude tmux)没有 InFlight 完成所有权概念:停机不接管转录轮的收尾。
@@ -13840,7 +13849,7 @@ pub(super) fn stream_turn_headless(
                 live_id,
                 context_hint,
                 // 无头(codex/cursor)恒走这条:带角标种子(CLI+模型),ctx 由它在事件流里现捕获。
-                Some(badge_seed_for(agent, &tag, settings.badge_effort())),
+                Some(badge_seed_for(agent, &tag, &settings)),
                 event_stamp(agent, &tag),
                 &outbox,
             )
@@ -13874,7 +13883,7 @@ pub(super) fn stream_turn_headless(
                 None,
                 true,
                 context_hint,
-                Some(badge_seed_for(agent, &tag, settings.badge_effort())),
+                Some(badge_seed_for(agent, &tag, &settings)),
                 event_stamp(agent, &tag),
                 &outbox,
                 &finish_probe,
@@ -14798,10 +14807,55 @@ mod tests {
             ("cursor", ContextRemedy::Handoff),
         ] {
             let (agent, _tmp) = crate::test_support::agent_dir(cli, "");
+            let settings = summon_core::settings::ResolvedSettings::resolve(
+                &summon_core::config::builtin_messaging(),
+                &Default::default(),
+            );
             assert_eq!(
-                badge_seed_for(&agent, "p2p-seed", true).context_remedy,
+                badge_seed_for(&agent, "p2p-seed", &settings).context_remedy,
                 remedy,
                 "{cli}"
+            );
+        }
+    }
+
+    /// 角标种子的四个隐藏位逐项取本轮分级开关快照的反,互不串位。
+    #[test]
+    fn badge_seed_hides_exactly_the_items_switched_off_for_this_turn() {
+        use summon_core::settings::{ChatOverrides, ResolvedSettings, SettingKey};
+        let (agent, _tmp) = crate::test_support::agent_dir("claude", "");
+        let messaging = summon_core::config::builtin_messaging();
+        let hidden = |seed: &summon_core::feishu::TurnBadge| {
+            [
+                seed.hide_cli,
+                seed.hide_model,
+                seed.hide_effort,
+                seed.hide_ctx,
+            ]
+        };
+        let defaults = ResolvedSettings::resolve(&messaging, &ChatOverrides::default());
+        assert_eq!(
+            hidden(&badge_seed_for(&agent, "p2p-seed", &defaults)),
+            [false; 4]
+        );
+        for (index, key) in [
+            SettingKey::BadgeCli,
+            SettingKey::BadgeModel,
+            SettingKey::BadgeEffort,
+            SettingKey::BadgeCtx,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut chat = ChatOverrides::default();
+            chat.set(key, false);
+            let settings = ResolvedSettings::resolve(&messaging, &chat);
+            let mut want = [false; 4];
+            want[index] = true;
+            assert_eq!(
+                hidden(&badge_seed_for(&agent, "p2p-seed", &settings)),
+                want,
+                "{key:?}"
             );
         }
     }
@@ -17347,6 +17401,24 @@ mod tests {
             Some("claude"),
             "关着时档位不得出现在收尾角标上"
         );
+    }
+
+    /// CLI / 模型 / 上下文用量三项同理跟轮初种子走,收尾不重读盘。
+    #[test]
+    fn completion_badge_keeps_the_item_visibility_decided_at_turn_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let seed = summon_core::feishu::TurnBadge {
+            cli: "claude".into(),
+            model: Some("claude-opus-5".into()),
+            effort: Some("xhigh".into()),
+            hide_cli: true,
+            hide_model: true,
+            hide_ctx: true,
+            ..Default::default()
+        };
+        let badge = super::completion_badge(&seed, "badge-items-agent", tmp.path(), "g-x", None);
+        assert!(badge.hide_cli && badge.hide_model && badge.hide_ctx);
+        assert_eq!(badge.render().as_deref(), Some("xhigh"));
     }
 
     /// 2026-08-07 回归:轮内追加消息(steer / `!` 重跑)当时只取裸文本,引用回文、附件路径、

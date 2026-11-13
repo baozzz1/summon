@@ -2,7 +2,7 @@
 // 按 src/demo/timeline.ts 的时间线逐帧截图,再用 ffmpeg(palettegen + paletteuse)合成循环播放的 GIF。
 // 演示页不在任何构建入口里,dist/ 不受影响。浅色主题、减少动效(转圈与扫光停住,每帧都是确定的画面)。
 //
-// 用法:node scripts/demo-gif.mjs [输出 GIF](默认 ../docs/assets/demo.gif)
+// 用法:node scripts/demo-gif.mjs [输出 GIF](默认 ../assets/demo.gif)
 //   CHROME=路径    Chrome / Chromium(默认是 macOS 上的 Google Chrome)
 //   FFMPEG=路径    ffmpeg(默认 PATH 上的 ffmpeg),要有 gif 编码器与 palettegen / paletteuse 滤镜
 //   FRAMES=目录    帧写到这个目录并保留(默认写进临时目录,合成后删掉)
@@ -15,7 +15,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const output = resolve(process.argv[2] ?? join(root, '..', 'docs', 'assets', 'demo.gif'));
+const output = resolve(process.argv[2] ?? join(root, '..', 'assets', 'demo.gif'));
 const chrome = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const ffmpeg = process.env.FFMPEG ?? 'ffmpeg';
 const framesOnly = process.env.FRAMES_ONLY === '1';

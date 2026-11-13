@@ -2,7 +2,7 @@
   "data": {
     "agent": "starlight",
     "config": {
-      "revision": "0fc6c34489411be2",
+      "revision": "31be161c7f319314",
       "scope": {
         "agent": "starlight",
         "chat_id": "oc_00000000000000000000000000000001",
@@ -35,11 +35,35 @@
         },
         {
           "editable": true,
+          "effective": true,
+          "key": "messaging.badge_cli",
+          "overridden_by": [],
+          "source": "builtin",
+          "value": null
+        },
+        {
+          "editable": true,
+          "effective": true,
+          "key": "messaging.badge_model",
+          "overridden_by": [],
+          "source": "builtin",
+          "value": null
+        },
+        {
+          "editable": true,
           "effective": false,
           "key": "messaging.badge_effort",
           "overridden_by": [],
           "source": "chat",
           "value": false
+        },
+        {
+          "editable": true,
+          "effective": true,
+          "key": "messaging.badge_ctx",
+          "overridden_by": [],
+          "source": "builtin",
+          "value": null
         },
         {
           "editable": true,

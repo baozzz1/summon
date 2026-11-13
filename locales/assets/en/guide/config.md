@@ -52,7 +52,10 @@ preferences or restore inheritance. Groups require @ unless mentionless is enabl
 | cot.thinking | hide_thinking (inverse) | shown; hide_thinking: false |
 | cot.tools | cot_tool_details | false |
 | timer.idle_retire_reset | timer_idle_retire_reset | false |
+| badge.cli | badge_cli | true |
+| badge.model | badge_model | true |
 | badge.effort | badge_effort | true |
+| badge.ctx | badge_ctx | true |
 | agent.reactions | agent_reactions | true |
 | agent.feed | agent_feed | true |
 
@@ -224,7 +227,10 @@ Use exact chat IDs from `summon chat-id --turn-id <current credential>` in that 
 | session_mirror | true; mirror Claude terminal replies to Feishu |
 | mask_email | true; after moderation rejects email, retry once with username initial only (p***@example.com); untouched otherwise. Off sends explanation; hot reload |
 | progress_max_steps | 3; 0 treated as 1 |
+| badge_cli | true; show CLI type badge |
+| badge_model | true; show model badge |
 | badge_effort | true; show effort badge |
+| badge_ctx | true; show context usage badge (display only; context warnings still fire) |
 | agent_reactions | true; inject semantic reaction conventions, independent of system status reactions |
 | agent_feed | true; inject feed summary; off previews start of body |
 | document_comments_enabled | false; global/agent comments draft and approval |

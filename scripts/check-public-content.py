@@ -51,6 +51,8 @@ HEX_RUN = re.compile(r'(?:\b(?:ou|on|oc|om|cli)_)?([0-9a-f]{8,})')
 VENDORED_PREFIXES = ('crates/summon-core/assets/vendor/', 'crates/summon/assets/web_terminal/xterm.')
 # 二进制文件要先审过内容与元数据才能公开；这里登记的摘要就是审过的记录。
 REVIEWED_BINARIES = {
+    'assets/demo.gif':
+        '7eb2cb26c3207e5b5f57ecdd766dc23799c3e5837e17d92d62d448313898635e',
     'crates/summon/assets/livecard/breathe.gif':
         '66403fc5b1d0ceae65134ad78c69b466a6ca9cf435ffe6e83080b0e1afa97345',
     'crates/summon/assets/livecard/shimmer.gif':

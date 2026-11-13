@@ -50,7 +50,7 @@ DM commands retain text receipts.
   user to open /model candidates; do not invent a model name to type.
 - /quota on|off: reply badge quota. Claude/Codex show 5h and 7d remaining/reset times;
   others quota N%. Bare /quota toggles.
-- /set badge.effort on|off: effort badge (on by default). Bare /set lists all switches.
+- /set badge.cli|badge.model|badge.effort|badge.ctx on|off: show the CLI type, effective model, effort or context usage in the reply badge (all on by default; badge.ctx only affects display, context warnings still fire). The /session panel has the same toggles in its badge row. Bare /set lists all switches.
 - /fast on|off: explicit Codex/Cursor chat Fast switch, affecting quota use. Claude
   uses native /fast, which writes user ~/.claude/settings.json and affects other
   Claude sessions sharing it, may change unsupported models, and has a higher rate.

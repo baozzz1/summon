@@ -1,6 +1,6 @@
 [package]
 name = "summon"
-version = "0.6.50"
+version = "0.6.51"
 edition = "2021"
 description = "本地常驻 CLI:把 agent 自我认知接到飞书 app + tmux(多 CLI 飞书往返 / 定时器 / 记忆分层 / Bridge)"
 repository = "https://github.com/baozzz1/summon"

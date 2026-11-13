@@ -24,6 +24,8 @@ describe('示例环境的预览随草稿变化', () => {
     const s = srv();
     expect(card(s.preview(g, []))).toContain('xhigh');
     expect(card(s.preview(g, [{ key: 'messaging.badge_effort', value: false }]))).not.toContain('xhigh');
+    expect(card(s.preview(g, [{ key: 'messaging.badge_ctx', value: false }]))).not.toContain('上下文 38%');
+    expect(card(s.preview(g, [{ key: 'messaging.badge_model', value: false }]))).toContain('xhigh');
     const feed = (v: PreviewView) => (v.messages.find((m) => m.kind === 'feed') as { text: string }).text;
     expect(feed(s.preview(g, []))).toContain('CI 已修复');
     expect(feed(s.preview(g, [{ key: 'messaging.agent_feed', value: false }]))).toContain('parse_config_rejects_empty');
@@ -37,7 +39,9 @@ describe('示例环境的预览随草稿变化', () => {
     expect(v.regions['messaging.cot_visible']).toEqual(['cot']);
     expect(v.regions['messaging.hide_thinking']).toEqual(['cot_t1', 'cot_t2']);
     expect(v.regions['messaging.cot_tool_details']).toEqual(['cot']);
-    expect(v.regions['messaging.badge_effort']).toEqual(['badge']);
+    for (const key of ['messaging.badge_cli', 'messaging.badge_model', 'messaging.badge_effort', 'messaging.badge_ctx']) {
+      expect(v.regions[key]).toEqual(['badge']);
+    }
     expect(v.regions['messaging.agent_feed']).toEqual(['feed']);
     expect(v.regions['messaging.agent_reactions']).toEqual(['user']);
     expect(v.regions['messaging.mask_email']).toBeUndefined();

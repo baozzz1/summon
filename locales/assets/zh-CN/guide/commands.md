@@ -45,7 +45,7 @@
   候选按钮;不要给需要手打、猜出来的模型名。
 - `/quota on` / `/quota off` —— 回复卡角标的剩余额度显示开关(claude/codex 显示「5h N% ↻重置时刻 7d N% ↻重置日期时刻」,其余显示
   「quota N%」);裸 `/quota` = 翻转当前态
-- `/set badge.effort on|off` —— 回复卡角标的「思考档位」显示开关(默认开);裸 `/set` 列出本会话全部开关
+- `/set badge.cli|badge.model|badge.effort|badge.ctx on|off` —— 回复卡角标里 CLI 类型 / 生效模型 / 思考档位 / 上下文用量各自的显示开关(都默认开;`badge.ctx` 只管显示，上下文过重提醒照常);`/session` 面板角标那一行也能点;裸 `/set` 列出本会话全部开关
 - `/fast on|off` —— Codex / Cursor 的本群 Fast 开关(改变额度消耗,只接受显式 on/off)。Claude agent 上交给
   Claude Code 原生 `/fast`:它写进用户级 `~/.claude/settings.json`,本机共用这份配置的 Claude 会话都会
   切到 Fast(更高费率),当前模型不支持时会顺带切模型;裸 `/fast` 弹选择面板

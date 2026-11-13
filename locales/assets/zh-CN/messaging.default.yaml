@@ -622,6 +622,12 @@ cot_tool_details: false
 # 一个能关的位置;开关只管渲染,关掉期间档位照常采集,重新打开当轮即有值可显。
 badge_effort: true
 
+# 角标里另外三项(CLI 类型、生效模型、上下文用量)各自的显示开关,出厂都开。同样只管渲染:
+# 关掉 badge_ctx 后上下文照常采集,上下文过重提醒卡(60% / 80%)照常发。
+badge_cli: true
+badge_model: true
+badge_ctx: true
+
 # 扁平模型回退表:**只**给没有 models_by_cli 桶的 CLI 用(未知 CLI)。各 CLI 模型命名空间
 # 互不通用(同一 Opus 5,claude 里叫 claude-opus-5、cursor 里叫 claude-opus-5-high),
 # 混在一张扁平表里点了也起不来——所以默认空,候选一律走下面的 models_by_cli 分桶。

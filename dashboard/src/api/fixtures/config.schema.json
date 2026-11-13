@@ -79,12 +79,60 @@
         "write": "form"
       },
       {
+        "description": "回复卡片角标是否显示 CLI 类型",
+        "effect": "next_turn",
+        "group": "cot",
+        "key": "messaging.badge_cli",
+        "kind": "bool",
+        "label": "角标显示 CLI",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "回复卡片角标是否显示生效模型",
+        "effect": "next_turn",
+        "group": "cot",
+        "key": "messaging.badge_model",
+        "kind": "bool",
+        "label": "角标显示模型",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
         "description": "回复卡片角标是否显示推理强度（effort；Cursor 的推理强度包含在模型名中，始终不显示）",
         "effect": "next_turn",
         "group": "cot",
         "key": "messaging.badge_effort",
         "kind": "bool",
         "label": "角标显示推理强度",
+        "layers": [
+          "global",
+          "agent",
+          "chat"
+        ],
+        "preview": true,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "回复卡片角标是否显示上下文用量（只管显示，上下文过重提醒照常）",
+        "effect": "next_turn",
+        "group": "cot",
+        "key": "messaging.badge_ctx",
+        "kind": "bool",
+        "label": "角标显示上下文用量",
         "layers": [
           "global",
           "agent",

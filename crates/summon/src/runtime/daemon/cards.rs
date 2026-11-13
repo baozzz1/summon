@@ -3036,6 +3036,9 @@ pub(super) fn session_panel_controls(
     summon_core::feishu::SessionPanelControls {
         quota_badge: quota_badge_enabled(agent, tag),
         badge_effort: settings.badge_effort(),
+        badge_cli: settings.badge_cli(),
+        badge_model: settings.badge_model(),
+        badge_ctx: settings.badge_ctx(),
         quota_left_pct,
         quota_5h_left_pct: five_hour_quota_for(agent).map(|(left_pct, _)| left_pct),
         context: current_session_context_budget(agent, tag, session),
@@ -4199,16 +4202,19 @@ pub(super) fn handle_card_quota_badge(
     refresh_config_panel(chats, agent, fc, &chat_type, card);
 }
 
-/// 面板「档位角标」开关 → 写 per-chat 分级开关 `badge.effort`,控制回复卡角标是否渲染思考档位。
+/// 面板角标那一行的开关(CLI / 模型 / 档位 / 上下文用量)→ 写 per-chat 分级开关
+/// `badge.cli` / `badge.model` / `badge.effort` / `badge.ctx`,控制回复卡角标是否渲染那一项。
 ///
-/// 鉴权在 dispatcher 集中查表完成(badge_effort → operate 档)。走分级开关的一轮一快照契约:
+/// 鉴权在 dispatcher 集中查表完成(badge_* → operate 档)。走分级开关的一轮一快照契约:
 /// 写完只刷新面板,**不通知在跑的那一轮** —— 轮中途改了下一轮才生效,当前这一轮的角标已经定了。
-pub(super) fn handle_card_badge_effort(
+pub(super) fn handle_card_badge_item(
     chats: &mut HashMap<String, ChatHandle>,
     agent: &Agent,
     fc: &FeishuClient,
     card: &CardActionMsg,
+    item: summon_core::settings::SettingKey,
 ) {
+    let setting = summon_core::settings::decl_by_id(item).key;
     let chat_id = &card.chat_id;
     let chat_type = card_chat_type(chats, chat_id);
     let session = chats
@@ -4218,24 +4224,19 @@ pub(super) fn handle_card_badge_effort(
     let Some(on) = card.value.get("on").and_then(|value| value.as_bool()) else {
         return;
     };
-    if let Err(error) = super::chat_meta::set_chat_setting(
-        agent,
-        &session,
-        summon_core::settings::SettingKey::BadgeEffort,
-        Some(on),
-    ) {
-        log(&summon_i18n::format!("r616c0dc080", agent.name));
+    if let Err(error) = super::chat_meta::set_chat_setting(agent, &session, item, Some(on)) {
+        log(&summon_i18n::format!("r0756d70c7d", agent.name));
         let _ = send_markdown_archived(
             fc,
             &agent.state_dir(),
             &chat_type,
             chat_id,
-            summon_i18n::text!("r115f5e697f"),
+            summon_i18n::text!("race443cfe7"),
         );
         return;
     }
     log(&summon_i18n::format!(
-        "r97bbde850c",
+        "r230183d157",
         agent.name,
         if on {
             summon_i18n::text!("r39eae64cfc")
@@ -6171,7 +6172,7 @@ mod tests {
         );
     }
 
-    /// 面板上的「档位角标」态是四层合并后的**生效值**:出厂开、agent.yaml 能关、per-chat 再翻回来。
+    /// 面板角标行的档位开关态是四层合并后的**生效值**:出厂开、agent.yaml 能关、per-chat 再翻回来。
     /// 面板画错等于用户按着一个与实际相反的按钮。
     #[test]
     fn session_panel_badge_effort_shows_the_effective_value() {
@@ -6200,6 +6201,43 @@ mod tests {
         .unwrap();
         let controls = session_panel_controls(&agent, "p2p-badge", session, &model);
         assert!(controls.badge_effort, "per-chat 覆盖优先于 agent 默认");
+    }
+
+    /// 角标另外三项同理:出厂开、agent.yaml 关掉哪项面板就显示哪项关、per-chat 再翻回来,
+    /// 互不牵连。
+    #[test]
+    fn session_panel_badge_items_show_the_effective_values() {
+        use summon_core::settings::SettingKey;
+        let yaml =
+            "name: badge-items-panel\nruntime:\n  cli: claude\nmessaging:\n  badge_model: false\n";
+        let tmp = tempfile::tempdir().unwrap();
+        let mut agent: Agent = serde_yaml::from_str(yaml).unwrap();
+        agent.dir = tmp.path().join("agents").join(&agent.name);
+        std::fs::create_dir_all(&agent.dir).unwrap();
+        std::fs::create_dir_all(agent.state_dir()).unwrap();
+        std::fs::write(agent.dir.join("agent.yaml"), yaml).unwrap();
+        let session = "soul-badge-items-panel";
+        let model = summon_core::model_effort::ResolvedModel {
+            value: None,
+            source: summon_core::model_effort::ModelSource::CliDefault,
+        };
+        let state = |c: &summon_core::feishu::SessionPanelControls| {
+            [c.badge_cli, c.badge_model, c.badge_effort, c.badge_ctx]
+        };
+
+        let controls = session_panel_controls(&agent, "p2p-badge", session, &model);
+        assert_eq!(state(&controls), [true, false, true, true]);
+
+        for (key, value) in [
+            (SettingKey::BadgeModel, true),
+            (SettingKey::BadgeCli, false),
+            (SettingKey::BadgeCtx, false),
+        ] {
+            crate::runtime::daemon::chat_meta::set_chat_setting(&agent, session, key, Some(value))
+                .unwrap();
+        }
+        let controls = session_panel_controls(&agent, "p2p-badge", session, &model);
+        assert_eq!(state(&controls), [false, true, true, false]);
     }
 
     #[test]
@@ -6358,10 +6396,11 @@ mod tests {
         );
     }
 
-    /// 面板「档位角标」按钮:落 per-chat 分级开关,并且**不给在跑的那一轮发任何指令**
-    /// —— 它下一轮才生效,当轮的角标在轮初就定了(见 `badge_seed_for`)。
+    /// 面板角标行各开关(CLI / 模型 / 档位 / 上下文用量):各落各的 per-chat 分级开关,并且
+    /// **不给在跑的那一轮发任何指令** —— 它们下一轮才生效,当轮的角标在轮初就定了
+    /// (见 `badge_seed_for`)。
     #[test]
-    fn badge_effort_card_handler_persists_per_chat_without_touching_the_live_turn() {
+    fn badge_card_handler_persists_per_chat_without_touching_the_live_turn() {
         let tmp = tempfile::tempdir().unwrap();
         let mut agent: Agent =
             serde_yaml::from_str("name: badge-effort-handler\nruntime:\n  cli: claude\n").unwrap();
@@ -6401,7 +6440,13 @@ mod tests {
             wal_replayed: false,
         };
 
-        handle_card_badge_effort(&mut chats, &agent, &fc, &card);
+        handle_card_badge_item(
+            &mut chats,
+            &agent,
+            &fc,
+            &card,
+            summon_core::settings::SettingKey::BadgeEffort,
+        );
         let persisted = crate::runtime::daemon::chat_meta::read_chat_settings(
             &agent,
             "soul-badge-effort-handler",
@@ -6416,7 +6461,42 @@ mod tests {
             rx.recv().unwrap(),
             ThreadMsg::RenderSubagentPanelSnapshot { .. }
         ));
-        assert!(rx.try_recv().is_err(), "档位角标开关不得通知在跑的那一轮");
+        assert!(
+            rx.try_recv().is_err(),
+            "角标行的档位开关不得通知在跑的那一轮"
+        );
+
+        // 同一个处理函数接另外三项:各写各的键,不碰别的项,也不通知在跑的那一轮。
+        for (action, key) in [
+            ("badge_cli", summon_core::settings::SettingKey::BadgeCli),
+            ("badge_model", summon_core::settings::SettingKey::BadgeModel),
+            ("badge_ctx", summon_core::settings::SettingKey::BadgeCtx),
+        ] {
+            let card = CardActionMsg {
+                value: serde_json::json!({"action": action, "on": false}),
+                ..card.clone()
+            };
+            handle_card_badge_item(&mut chats, &agent, &fc, &card, key);
+            let persisted = crate::runtime::daemon::chat_meta::read_chat_settings(
+                &agent,
+                "soul-badge-effort-handler",
+            );
+            assert_eq!(persisted.get(key), Some(false), "{action}");
+            assert!(matches!(
+                rx.recv().unwrap(),
+                ThreadMsg::RenderSubagentPanelSnapshot { .. }
+            ));
+            assert!(rx.try_recv().is_err(), "{action} 不得通知在跑的那一轮");
+        }
+        let persisted = crate::runtime::daemon::chat_meta::read_chat_settings(
+            &agent,
+            "soul-badge-effort-handler",
+        );
+        assert_eq!(
+            persisted.get(summon_core::settings::SettingKey::BadgeEffort),
+            Some(false),
+            "别的项保持原样"
+        );
     }
 
     #[test]

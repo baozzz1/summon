@@ -470,6 +470,9 @@ progress_max_steps: 3
 cot_visible: true
 cot_tool_details: false
 badge_effort: true
+badge_cli: true
+badge_model: true
+badge_ctx: true
 models: []
 models_by_cli:
   claude:

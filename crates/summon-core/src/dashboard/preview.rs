@@ -540,7 +540,8 @@ fn reply_text(settings: &ResolvedSettings) -> String {
     }
 }
 
-/// 回复卡与会话列表预览行。角标的档位项跟本会话的 `badge.effort` 走(与轮初角标种子同一取反);
+/// 回复卡与会话列表预览行。角标的 CLI / 模型 / 档位 / 上下文用量各项跟本会话的 `badge.*` 走
+/// (与轮初角标种子同一取反);
 /// 文件按钮按飞书前端的做法从正文认路径,链接用占位。
 fn reply_card(settings: &ResolvedSettings) -> (Value, String) {
     let raw = reply_text(settings);
@@ -563,6 +564,9 @@ fn reply_card(settings: &ResolvedSettings) -> (Value, String) {
         model: Some(scenario().model.to_string()),
         effort: Some(scenario().effort.to_string()),
         hide_effort: !settings.badge_effort(),
+        hide_cli: !settings.badge_cli(),
+        hide_model: !settings.badge_model(),
+        hide_ctx: !settings.badge_ctx(),
         ctx: ContextBudget::from_tokens(
             scenario().context_used_tokens,
             Some(scenario().context_window_tokens),
@@ -1040,6 +1044,24 @@ mod tests {
     }
 
     #[test]
+    fn badge_item_switches_remove_only_their_item() {
+        let on = footer(&view(&[]));
+        assert!(on.contains("claude · Opus 5 · high ·"), "{on}");
+        let cases = [
+            (SettingKey::BadgeCli, "claude"),
+            (SettingKey::BadgeModel, "Opus 5"),
+            (SettingKey::BadgeCtx, "░"),
+        ];
+        for (key, item) in cases {
+            assert!(on.contains(item), "{on}");
+            let off = footer(&view(&[(key, false)]));
+            assert!(!off.contains(item), "{key:?}: {off}");
+            assert!(off.contains("high"), "{key:?} 不牵连档位: {off}");
+            assert!(off.contains(scenario().timestamp), "{off}");
+        }
+    }
+
+    #[test]
     fn feed_off_uses_body_head() {
         assert_eq!(feed_of(&view(&[])), scenario().feed);
         let off = view(&[(SettingKey::AgentFeed, false)]);
@@ -1111,6 +1133,20 @@ mod tests {
         let regions = base_regions(&[probe("messaging.badge_effort")]);
         assert_eq!(regions["messaging.badge_effort"], ["reply.2".to_string()]);
         assert!(footer(&view(&[])).contains(scenario().effort));
+    }
+
+    #[test]
+    fn regions_of_badge_items_are_badge_element() {
+        let keys = [
+            "messaging.badge_cli",
+            "messaging.badge_model",
+            "messaging.badge_ctx",
+        ];
+        let probes: Vec<_> = keys.iter().map(|key| probe(key)).collect();
+        let regions = base_regions(&probes);
+        for key in keys {
+            assert_eq!(regions[key], ["reply.2".to_string()], "{key}");
+        }
     }
 
     #[test]
