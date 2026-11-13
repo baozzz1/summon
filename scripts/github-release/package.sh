@@ -134,7 +134,8 @@ SIDECAR_BIN="$TARGET_DIR/release/summon-sidecar"
 
 # 包是公开分发的:rustc 与 swiftc 默认把源码、依赖源码和构建目录的绝对路径编进二进制(panic 信息、
 # #file),会带出构建机的用户目录。这几处前缀各映射成固定的占位路径;RUSTFLAGS 按空白切分参数,
-# 路径里不能有空格。
+# 路径里不能有空格。macOS 链接器另把各目标文件的绝对路径记进调试符号表(给 dsymutil 用),前缀映射
+# 管不到,Menu Bar 链接时用 -S 不写这张表(包里本来就不带调试符号)。
 CARGO_HOME_DIR="${CARGO_HOME:-$HOME/.cargo}"
 case "$CARGO_HOME_DIR$ROOT" in
   *[[:space:]]*) die "CARGO_HOME 或源码路径含空白,无法传给 --remap-path-prefix:$CARGO_HOME_DIR / $ROOT" ;;
@@ -148,7 +149,8 @@ if [ "$SKIP_BUILD" = 0 ]; then
   if [ "$IS_MAC" = 1 ]; then
     swift build -c release --package-path menubar --scratch-path "$SWIFT_SCRATCH" \
       -Xswiftc -file-prefix-map -Xswiftc "$ROOT=/summon" \
-      -Xswiftc -file-prefix-map -Xswiftc "$SWIFT_SCRATCH=/build"
+      -Xswiftc -file-prefix-map -Xswiftc "$SWIFT_SCRATCH=/build" \
+      -Xlinker -S
   fi
 fi
 

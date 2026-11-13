@@ -1,5 +1,12 @@
 # summon
 
+简体中文 | [English](README.en.md)
+
+[![checks](https://github.com/baozzz1/summon/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/baozzz1/summon/actions/workflows/checks.yml)
+[![release](https://github.com/baozzz1/summon/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/baozzz1/summon/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/baozzz1/summon)](https://github.com/baozzz1/summon/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **让你的 coding agent 住进飞书。** 在群里 @ 一个机器人，它在你自己的机器上运行
 Claude Code、Codex、Cursor 或 Trae，完成后把结果发回群里。
 
@@ -128,6 +135,11 @@ python3 scripts/check-public-content.py
 `verify.sh` 执行本地机器检查。需要真实服务登录态的测试由开发者单独选择测试环境运行。
 提交内容使用合成数据；凭证通过本机配置注入。`check-public-content.py` 检查凭据、
 像真实的平台标识、本机路径与邮箱等不该出现在源码里的内容。
+
+## 相关项目
+
+- [larksuite/cli](https://github.com/larksuite/cli)（`lark-cli`）：飞书官方 CLI。`summon onboard` 会安装它，
+  需要飞书工具的功能依赖它；agent 在会话里也可以直接用它读写飞书的消息、文档、表格和日历。
 
 ## 许可证
 
