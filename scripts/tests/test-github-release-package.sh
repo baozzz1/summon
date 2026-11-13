@@ -102,10 +102,10 @@ rc=0
 bash scripts/github-release/package.sh --out /nonexistent/x --bogus > /dev/null 2>&1 || rc=$?
 assert_eq 2 "$rc" '不认识的参数'
 rc=0
-bash scripts/github-release/package.sh --out /nonexistent/x --build-only --skip-build > /dev/null 2>&1 || rc=$?
-assert_eq 2 "$rc" '--build-only 与 --skip-build 互斥'
+bash scripts/github-release/package.sh --out /nonexistent/x --unsigned --adhoc-sign > /dev/null 2>&1 || rc=$?
+assert_eq 2 "$rc" '--unsigned 与 --adhoc-sign 互斥'
 help="$(bash scripts/github-release/package.sh --help)"
-for flag in --build-only --skip-build --adhoc-sign SUMMON_ALLOW_DIRTY; do
+for flag in --unsigned --skip-build --adhoc-sign SUMMON_ALLOW_DIRTY; do
   case "$help" in *"$flag"*) ;; *) fail "--help 要列出 $flag" ;; esac
 done
 

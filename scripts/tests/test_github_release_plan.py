@@ -94,16 +94,14 @@ class DraftTests(unittest.TestCase):
 
 
 class LatestTests(unittest.TestCase):
-    def test_take_latest_unless_a_higher_version_is_latest(self):
-        self.assertTrue(plan.take_latest(None, 'v1.2.3'))
-        self.assertTrue(plan.take_latest('v1.2.2', 'v1.2.3'))
-        self.assertTrue(plan.take_latest('v1.2.3', 'v1.2.3'))
-        self.assertFalse(plan.take_latest('v1.10.0', 'v1.9.9'))
-        self.assertFalse(plan.take_latest('v2.0.0', 'v1.9.9'))
+    def test_highest_release_compares_numerically(self):
+        self.assertEqual(plan.highest_release(['v1.9.9', 'v1.10.0', 'v1.2.3']), 'v1.10.0')
+        self.assertEqual(plan.highest_release(['v2.0.0', 'v1.99.99']), 'v2.0.0')
 
-    def test_unrecognized_version_fails(self):
-        with self.assertRaises(plan.PlanError):
-            plan.take_latest('nightly', 'v1.2.3')
+    def test_highest_release_ignores_other_tags(self):
+        self.assertEqual(plan.highest_release(['nightly', 'test-0123456', 'v1.0.0']), 'v1.0.0')
+        self.assertIsNone(plan.highest_release([]))
+        self.assertIsNone(plan.highest_release(['1.0.0']))
 
 
 if __name__ == '__main__':

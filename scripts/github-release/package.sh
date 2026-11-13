@@ -2,7 +2,7 @@
 # 把当前源码树构建成 GitHub Release 的一个平台包。发布工作流(.github/workflows/release.yml)的
 # Linux 与 macOS job 共用这一份。
 #
-#   bash scripts/github-release/package.sh --out <目录> [--build-only | --skip-build] [--adhoc-sign]
+#   bash scripts/github-release/package.sh --out <目录> [--skip-build] [--unsigned | --adhoc-sign]
 #
 # 产物(都落在 --out):
 #   summon-<平台>.tar.gz     summon、summon-sidecar(macOS 另有 summon-menubar),平铺、0755
@@ -10,8 +10,9 @@
 # 平台名:linux-x64、linux-arm64、darwin-arm64。三个平台的 .build.json 交给 manifest.py 汇总成
 # manifest.json。
 #
-# --build-only  只构建,不签名、不打包(macOS job 先在没有签名证书的环境里构建,再导入证书打包)
 # --skip-build  不构建,直接用已有的构建产物打包;产物自报的提交必须仍是当前 HEAD
+# --unsigned    macOS 上不签名、不打包:把核对过的二进制与构建戳放进 <out>/summon-darwin-arm64.unsigned/,
+#               交给发布工作流的签名 job(sign-macos.sh)签名打包
 # --adhoc-sign  macOS 上用 ad-hoc 签名(只给测试用);默认要求 Developer ID 签名并带安全时间戳
 #
 # 环境变量:
@@ -34,11 +35,11 @@ fi
 set -euo pipefail
 
 usage() {
-  sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 OUT=""
-BUILD_ONLY=0
+UNSIGNED=0
 SKIP_BUILD=0
 ADHOC_SIGN=0
 while [ $# -gt 0 ]; do
@@ -47,8 +48,8 @@ while [ $# -gt 0 ]; do
       OUT="${2:?--out 要跟一个目录}"
       shift 2
       ;;
-    --build-only)
-      BUILD_ONLY=1
+    --unsigned)
+      UNSIGNED=1
       shift
       ;;
     --skip-build)
@@ -73,8 +74,8 @@ done
   echo "缺 --out <目录>" >&2
   exit 2
 }
-[ "$BUILD_ONLY$SKIP_BUILD" != 11 ] || {
-  echo "--build-only 与 --skip-build 不能同时用" >&2
+[ "$UNSIGNED$ADHOC_SIGN" != 11 ] || {
+  echo "--unsigned 与 --adhoc-sign 不能同时用" >&2
   exit 2
 }
 mkdir -p "$OUT"
@@ -98,13 +99,14 @@ FILES=()
 while IFS= read -r name; do FILES+=("$name"); done < <(summon_release_files "$PLATFORM")
 IS_MAC=0
 [ "$(uname -s)" = Darwin ] && IS_MAC=1
+[ "$UNSIGNED" = 0 ] || [ "$IS_MAC" = 1 ] || die "--unsigned 只用于 macOS 包"
 
 for tool in git python3 cargo go; do
   command -v "$tool" > /dev/null 2>&1 || die "缺 $tool"
 done
 
-# 对外的包默认要求 Developer ID 签名并带安全时间戳,不静默降级成 ad-hoc。只构建时不签名。
-if [ "$IS_MAC" = 1 ] && [ "$BUILD_ONLY" = 0 ]; then
+# 对外的包默认要求 Developer ID 签名并带安全时间戳,不静默降级成 ad-hoc。
+if [ "$IS_MAC" = 1 ] && [ "$UNSIGNED" = 0 ]; then
   command -v codesign > /dev/null 2>&1 || die "缺 codesign,macOS 包必须签名"
   if [ "$ADHOC_SIGN" = 1 ]; then
     SUMMON_CODESIGN_MODE=adhoc
@@ -163,10 +165,6 @@ if [ "$SKIP_BUILD" = 0 ]; then
       -Xlinker -S
   fi
 fi
-if [ "$BUILD_ONLY" = 1 ]; then
-  say "只构建:产物留在 $TARGET_DIR/release 与 $SWIFT_SCRATCH/release,用 --skip-build 打包"
-  exit 0
-fi
 
 source_of() {
   case "$1" in
@@ -197,15 +195,9 @@ for name in "${FILES[@]}"; do
   done
 done
 
-if [ "$IS_MAC" = 1 ]; then
-  say "签名($SUMMON_CODESIGN_KIND)"
-  summon_sign_path "$STAGE/summon" com.summon.cli || die "summon 签名失败"
-  summon_sign_path "$STAGE/summon-sidecar" com.summon.sidecar || die "summon-sidecar 签名失败"
-  summon_sign_path "$STAGE/summon-menubar" com.summon.menubar || die "summon-menubar 签名失败"
-fi
-
 # 构建戳取包里那份二进制自报的,与它运行期比新旧用的是同一份编译期常量。缺提交或提交时间的包
 # 发出去,同号的两份就永远判不出新旧,所以缺一项就拒绝打包;提交对不上 HEAD 说明用了旧产物。
+# 签名不改构建戳,所以在签名之前读:签名一方不必执行二进制。
 STAMP="$("$STAGE/summon" install-stamp print)" || die "summon install-stamp print 失败"
 REPORTED_VERSION="$("$STAGE/summon" --version 2> /dev/null | awk '{print $2}')"
 [ "$REPORTED_VERSION" = "$VERSION" ] \
@@ -241,55 +233,31 @@ if [ "$IS_MAC" = 0 ]; then
   for name in "${FILES[@]}"; do STAGED+=("$STAGE/$name"); done
   summon_check_glibc "$SUMMON_RELEASE_GLIBC_MAX" "${STAGED[@]}" || die "glibc 检查没过"
 fi
+printf '%s\n' "$STAMP" > "$STAGE/stamp.json"
+
+if [ "$UNSIGNED" = 1 ]; then
+  UNSIGNED_DIR="$OUT/summon-$PLATFORM.unsigned"
+  rm -rf "$UNSIGNED_DIR"
+  python3 scripts/github-release/pack.py check --stage "$STAGE" --platform "$PLATFORM" \
+    --stamp "$STAGE/stamp.json" --sha "$HEAD_SHA" || die "未签名产物核对失败"
+  mv "$STAGE" "$UNSIGNED_DIR"
+  say "完成(未签名):$UNSIGNED_DIR"
+  exit 0
+fi
+
+if [ "$IS_MAC" = 1 ]; then
+  say "签名($SUMMON_CODESIGN_KIND)"
+  summon_sign_path "$STAGE/summon" com.summon.cli || die "summon 签名失败"
+  summon_sign_path "$STAGE/summon-sidecar" com.summon.sidecar || die "summon-sidecar 签名失败"
+  summon_sign_path "$STAGE/summon-menubar" com.summon.menubar || die "summon-menubar 签名失败"
+fi
 
 TARBALL="summon-$PLATFORM.tar.gz"
 BUILD_JSON="summon-$PLATFORM.build.json"
 rm -f "$OUT/$TARBALL" "$OUT/$BUILD_JSON"
 say "打包 $TARBALL"
-# 用 Python 打包:GNU 与 BSD tar 的参数不同,macOS 的 tar 还会夹带 ._* 扩展属性文件。
-# 属主、时间统一,同一批二进制打出的包逐字节相同。
-python3 - "$STAGE" "$OUT/$TARBALL" "$OUT/$BUILD_JSON" "$PLATFORM" "$STAMP" "${FILES[@]}" << 'PY'
-import gzip, hashlib, io, json, os, sys, tarfile
-stage, tarball, build_json, platform, raw_stamp, *files = sys.argv[1:]
-stamp = json.loads(raw_stamp)
-buf = io.BytesIO()
-with tarfile.open(fileobj=buf, mode='w', format=tarfile.PAX_FORMAT) as tar:
-    for name in files:
-        path = os.path.join(stage, name)
-        info = tarfile.TarInfo(name)
-        info.size = os.path.getsize(path)
-        info.mode = 0o755
-        info.mtime = stamp['commit_time']
-        info.uid = info.gid = 0
-        info.uname = info.gname = ''
-        with open(path, 'rb') as f:
-            tar.addfile(info, f)
-with open(tarball, 'wb') as raw:
-    with gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=0) as gz:
-        gz.write(buf.getvalue())
-# 读回核对:文件集合与权限。
-with tarfile.open(tarball, 'r:gz') as tar:
-    members = tar.getmembers()
-    names = [m.name for m in members]
-    if sorted(names) != sorted(files):
-        sys.exit(f'包里的文件不对:{names}')
-    for m in members:
-        if not m.isfile() or m.mode != 0o755:
-            sys.exit(f'{m.name} 不是 0755 的普通文件')
-data = open(tarball, 'rb').read()
-record = {
-    'platform': platform,
-    'version': stamp['version'],
-    'commit': stamp['commit'],
-    'commit_time': stamp['commit_time'],
-    'name': os.path.basename(tarball),
-    'size': len(data),
-    'sha256': hashlib.sha256(data).hexdigest(),
-}
-with open(build_json, 'w', encoding='utf-8') as f:
-    json.dump(record, f, indent=2)
-    f.write('\n')
-PY
+python3 scripts/github-release/pack.py pack --stage "$STAGE" --platform "$PLATFORM" \
+  --stamp "$STAGE/stamp.json" --sha "$HEAD_SHA" --out "$OUT" > /dev/null || die "打包失败"
 
 say "完成:$OUT/$TARBALL"
 say "      $OUT/$BUILD_JSON"

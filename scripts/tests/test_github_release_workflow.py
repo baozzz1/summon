@@ -18,7 +18,10 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / '.github/workflows'
 PINNED = re.compile(r'^[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+@[0-9a-f]{40}$')
 WRITERS = {'prepare', 'publish'}
-JOBS = {'prepare', 'build-linux', 'build-macos', 'publish'}
+JOBS = {'prepare', 'build-linux', 'build-macos', 'sign-macos', 'verify-macos', 'publish'}
+# 签名 job 不构建、不执行被签名的二进制。
+SIGNING_FORBIDDEN = ('cargo', 'rustup', 'go ', 'go build', 'swift', 'package.sh', 'smoke.sh',
+                     'install-stamp', '--version', '/summon ')
 
 
 def load(path):
@@ -80,6 +83,8 @@ class WorkflowTests(unittest.TestCase):
         prepare = run_text(self.jobs['prepare'])
         self.assertIn('release_info.py check-tag --tag "$TAG" --sha "$SHA"', prepare)
         self.assertIn('git merge-base --is-ancestor "$SHA" origin/main', prepare)
+        # 演练 tag 同样要求在 main 上:main 上的检查不能只在发版 tag 的分支里。
+        self.assertNotIn('if [ "$KIND" = release ]', prepare)
         self.assertIn('publish.py prepare', prepare)
         checkout = steps(self.jobs['prepare'])[0]
         self.assertEqual(checkout['with'].get('fetch-depth'), 0)
@@ -94,37 +99,53 @@ class WorkflowTests(unittest.TestCase):
             else:
                 self.assertFalse(grants_write(permissions), name)
 
-    def test_signing_secrets_only_reach_the_import_step_of_the_macos_job(self):
+    def test_signing_secrets_only_reach_the_import_step_of_the_signing_job(self):
         for name, job in self.jobs.items():
-            if name != 'build-macos':
+            if name != 'sign-macos':
                 self.assertNotIn('secrets.', str(job), name)
                 self.assertNotIn('environment', job, name)
-        macos = self.jobs['build-macos']
-        self.assertEqual(macos['environment'], 'release')
-        self.assertNotIn('secrets.', str(macos.get('env', {})))
-        with_secrets = [s for s in steps(macos) if 'secrets.' in str(s)]
+        sign = self.jobs['sign-macos']
+        self.assertEqual(sign['environment'], 'release')
+        self.assertNotIn('secrets.', str(sign.get('env', {})))
+        with_secrets = [s for s in steps(sign) if 'secrets.' in str(s)]
         self.assertEqual(len(with_secrets), 1)
         self.assertIn('macos-keychain.sh setup', with_secrets[0]['run'])
         self.assertEqual(set(with_secrets[0]['env']),
                          {'SUMMON_MACOS_CERT_P12', 'SUMMON_MACOS_CERT_PASSWORD'})
         self.assertNotIn('set -x', self.release_text)
 
-    def test_macos_job_builds_before_import_and_always_removes_keychain(self):
-        names = [s.get('name', s.get('uses', '')) for s in steps(self.jobs['build-macos'])]
-        runs = [s.get('run', '') for s in steps(self.jobs['build-macos'])]
-        build = next(i for i, r in enumerate(runs) if '--build-only' in r)
+    def test_signing_job_neither_builds_nor_runs_the_built_binaries(self):
+        sign = self.jobs['sign-macos']
+        text = run_text(sign)
+        for word in SIGNING_FORBIDDEN:
+            self.assertNotIn(word, text)
+        used = {step['uses'].split('@')[0] for step in steps(sign) if 'uses' in step}
+        self.assertEqual(used, {'actions/checkout', 'actions/download-artifact',
+                                'actions/upload-artifact'})
+        # 签名与打包脚本取自 main,而不是被打 tag 的提交。
+        checkouts = [s for s in steps(sign) if s.get('uses', '').startswith('actions/checkout@')]
+        self.assertEqual(len(checkouts), 1)
+        self.assertEqual(checkouts[0]['with']['ref'], 'main')
+        self.assertIn('git merge-base --is-ancestor "$SHA" HEAD', text)
+        self.assertEqual(sign['needs'], ['prepare', 'build-macos'])
+
+    def test_macos_build_sign_verify_order(self):
+        self.assertIn('package.sh --out "$RUNNER_TEMP/release" --unsigned',
+                      run_text(self.jobs['build-macos']))
+        runs = [s.get('run', '') for s in steps(self.jobs['sign-macos'])]
         setup = next(i for i, r in enumerate(runs) if 'macos-keychain.sh setup' in r)
-        sign = next(i for i, r in enumerate(runs) if '--skip-build' in r)
+        sign = next(i for i, r in enumerate(runs) if 'sign-macos.sh' in r)
         cleanup = next(i for i, r in enumerate(runs) if 'macos-keychain.sh cleanup' in r)
-        self.assertLess(build, setup, names)
-        self.assertLess(setup, sign, names)
-        self.assertLess(sign, cleanup, names)
-        self.assertEqual(steps(self.jobs['build-macos'])[cleanup].get('if'), 'always()')
+        self.assertLess(setup, sign)
+        self.assertLess(sign, cleanup)
+        self.assertEqual(steps(self.jobs['sign-macos'])[cleanup].get('if'), 'always()')
+        self.assertIn('smoke.sh', run_text(self.jobs['verify-macos']))
+        self.assertEqual(self.jobs['verify-macos']['needs'], ['prepare', 'sign-macos'])
         self.assertNotIn('--adhoc-sign', self.release_text)
 
     def test_publish_waits_for_every_build_and_uses_publish_py(self):
         publish = self.jobs['publish']
-        self.assertEqual(sorted(publish['needs']), ['build-linux', 'build-macos', 'prepare'])
+        self.assertEqual(sorted(publish['needs']), ['build-linux', 'prepare', 'verify-macos'])
         self.assertIn('publish.py finalize', run_text(publish))
         used = {step['uses'].split('@')[0] for step in steps(publish) if 'uses' in step}
         self.assertEqual(used, {'actions/checkout', 'actions/download-artifact'})
@@ -133,7 +154,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('release edit', self.release_text)
 
     def test_every_build_checks_out_the_prepared_commit(self):
-        for name in ('build-linux', 'build-macos', 'publish'):
+        for name in ('build-linux', 'build-macos', 'verify-macos', 'publish'):
             checkout = steps(self.jobs[name])[0]
             self.assertTrue(checkout['uses'].startswith('actions/checkout@'), name)
             self.assertEqual(checkout['with']['ref'], '${{ needs.prepare.outputs.sha }}', name)
@@ -158,7 +179,8 @@ class WorkflowTests(unittest.TestCase):
         include = self.jobs['build-linux']['strategy']['matrix']['include']
         self.assertEqual({(i['runner'], i['platform']) for i in include},
                          {('ubuntu-22.04', 'linux-x64'), ('ubuntu-22.04-arm', 'linux-arm64')})
-        self.assertEqual(self.jobs['build-macos']['runs-on'], 'macos-15')
+        for name in ('build-macos', 'sign-macos', 'verify-macos'):
+            self.assertEqual(self.jobs[name]['runs-on'], 'macos-15', name)
 
     def test_names_no_repository(self):
         self.assertNotRegex(self.release_text, r'github\.com[:/]')

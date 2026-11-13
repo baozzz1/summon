@@ -10,6 +10,7 @@ bash scripts/test-deploy-daemon-restore.sh
 python3 scripts/tests/test_check_public_content.py
 bash scripts/tests/test-github-release-package.sh
 python3 scripts/tests/test_github_release_manifest.py
+python3 scripts/tests/test_github_release_pack.py
 python3 scripts/tests/test_github_release_info.py
 python3 scripts/tests/test_github_release_plan.py
 python3 scripts/tests/test_github_release_publish.py

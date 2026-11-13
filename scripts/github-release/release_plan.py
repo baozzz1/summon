@@ -121,8 +121,12 @@ def version_key(text):
     return tuple(int(part) for part in match.groups())
 
 
-def take_latest(current_latest_tag, tag):
-    """转为发布时要不要标 latest:仓库当前 latest 的版本更高就不抢。"""
-    if current_latest_tag is None:
-        return True
-    return not version_key(current_latest_tag) > version_key(tag)
+def highest_release(tags):
+    """已发布(非草稿、非预发布)的 tag 里版本最高的那个;认不出版本号的 tag 不参与。没有就是 None。"""
+    best = None
+    for tag in tags:
+        if not RELEASE_VERSION.fullmatch(tag or '') or not tag.startswith('v'):
+            continue
+        if best is None or version_key(tag) > version_key(best):
+            best = tag
+    return best

@@ -11,8 +11,10 @@
 # $GITHUB_ENV 的 SUMMON_CODESIGN_IDENTITY(scripts/codesign.sh 按它签名)。
 # cleanup:恢复搜索列表、删除钥匙串与状态目录;什么都没建过也成功,可重复执行。
 #
-# 证书、私钥与两个密码都不进输出:不开 set -x,security 的输出一律丢弃,p12 只在导入那一刻落盘
-# (0600,导入后立即删除)。
+# 证书、私钥与两个密码都不进输出:不开 set -x,security 的输出一律丢弃。p12 在 0700 的状态目录里以
+# 0600 落盘、导入后立即删除:security import 只认文件。p12 密码与钥匙串密码经 argv 交给 security
+# (它没有从标准输入或文件读密码的选项,不给就弹图形界面),同一台机器上的其它进程能从进程表看到。
+# 所以发布工作流只在不跑构建、也不执行被签名二进制的签名 job 里用它,那里没有别的不可信进程。
 #
 # 环境变量:
 #   SUMMON_MACOS_CERT_P12、SUMMON_MACOS_CERT_PASSWORD  setup 必需

@@ -84,9 +84,16 @@ class FakeGh:
         self.calls.append(('delete', name))
         del self.assets(tag)[name]
 
-    def publish(self, tag, latest):
-        self.calls.append(('publish', tag, latest))
+    def publish(self, tag):
+        self.calls.append(('publish', tag))
         self.releases[tag]['isDraft'] = False
+
+    def published_tags(self):
+        return [t for t, r in self.releases.items() if not r['isDraft'] and not r['prerelease']]
+
+    def set_latest(self, tag):
+        self.calls.append(('latest', tag))
+        self.latest = tag
 
     def mutations(self):
         return [c for c in self.calls if c[0] != 'download']
@@ -166,7 +173,8 @@ class FinalizeTests(unittest.TestCase):
         self.assertEqual(len(uploads), 7)
         self.assertEqual(sorted(c[1] for c in gh.calls if c[0] == 'delete'),
                          sorted(plan.pair(p)[1] for p in plan.PLATFORMS))
-        self.assertEqual(gh.calls[-1], ('publish', TAG, True))
+        self.assertEqual(gh.calls[-2:], [('publish', TAG), ('latest', TAG)])
+        self.assertEqual(gh.latest, TAG)
         manifest = self.manifest(gh)
         self.assertEqual(manifest['version'], VERSION)
         self.assertEqual(manifest['published_at'], '2026-01-02T03:04:05Z')
@@ -302,15 +310,35 @@ class FinalizeTests(unittest.TestCase):
         self.assertTrue(gh.releases[TAG]['isDraft'])
         self.assertNotIn('publish', [c[0] for c in gh.calls])
 
-    def test_higher_latest_is_not_taken_over(self):
+    def test_higher_published_version_keeps_latest(self):
         gh = self.gh(latest='v999.0.0')
+        gh.add_release('v999.0.0', draft=False)
         self.finalize(gh)
-        self.assertEqual(gh.calls[-1], ('publish', TAG, False))
+        self.assertEqual(gh.calls[-1], ('publish', TAG))
+        self.assertEqual(gh.latest, 'v999.0.0')
 
     def test_lower_latest_is_taken_over(self):
         gh = self.gh(latest='v0.0.1')
+        gh.add_release('v0.0.1', draft=False)
         self.finalize(gh)
-        self.assertEqual(gh.calls[-1], ('publish', TAG, True))
+        self.assertEqual(gh.latest, TAG)
+
+    def test_concurrent_lower_publish_does_not_leave_latest_behind(self):
+        # 更高的版本先发布并标了 latest,随后较低的版本在并发收尾里抢走了 latest:
+        # 后完成的一方把 latest 收敛回最高版本。
+        gh = self.gh(latest='v0.0.1')
+        gh.add_release('v999.0.0', draft=False)
+        gh.add_release('v0.0.1', draft=False)
+        self.finalize(gh)
+        self.assertEqual(gh.latest, 'v999.0.0')
+        self.assertIn(('latest', 'v999.0.0'), gh.calls)
+
+    def test_prerelease_rehearsals_never_become_latest(self):
+        gh = self.gh(latest=None)
+        gh.add_release(TEST_TAG, draft=False)
+        gh.releases[TEST_TAG]['prerelease'] = True
+        self.finalize(gh)
+        self.assertEqual(gh.latest, TAG)
 
     def test_unrecognized_tag_fails_before_any_call(self):
         gh = self.gh(tag='nightly')
@@ -412,7 +440,7 @@ class GhTests(unittest.TestCase):
         gh = publish.Gh('o/r')
         calls, patch = self.fake_run([(['gh', 'release'], (0, '', ''))])
         with patch:
-            gh.publish(TAG, latest=False)
+            gh.publish(TAG)
             gh.create_draft(TEST_TAG, SHA, 't', '/n.md', prerelease=True)
         self.assertEqual(calls[0], ['gh', 'release', 'edit', TAG, '--repo', 'o/r',
                                     '--draft=false', '--latest=false'])
@@ -445,6 +473,15 @@ class CommandLineTests(unittest.TestCase):
             rc = publish.main(['prepare', '--repo', 'o/r', '--tag', TAG, '--sha', SHA,
                                '--work', '/w'])
         self.assertEqual((rc, out.getvalue()), (0, 'create\n'))
+
+    def test_published_tags_excludes_drafts_and_prereleases(self):
+        gh = publish.Gh('o/r')
+        calls, patch = GhTests().fake_run(
+            [(['gh', 'release', 'list'], (0, '[{"tagName": "v1.0.0"}]', ''))])
+        with patch:
+            self.assertEqual(gh.published_tags(), ['v1.0.0'])
+        for flag in ('--exclude-drafts', '--exclude-pre-releases'):
+            self.assertIn(flag, calls[0])
 
     def test_members_match_lib_sh(self):
         for platform, members in publish.MEMBERS.items():

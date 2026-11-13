@@ -8,7 +8,7 @@
 check-tag 输出 tag 的种类:
     release    `v<版本>`:版本必须是纯数字的 x.y.z,且等于 crates/summon/Cargo.toml 的版本
     rehearsal  `test-<提交号前缀>`(7 到 40 位):前缀必须是这个提交的,只走演练、停在草稿
-其它形态失败。tag 是否在 main 上由工作流用 git 查。
+其它形态失败。两种 tag 都必须在 main 上,由工作流用 git 查。
 正文取 RELEASE_NOTES.md 里该版本那一节(`## <版本> · <日期>` 到下一个 `## `),没有这一节就写一句
 通用说明。
 """

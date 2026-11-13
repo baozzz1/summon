@@ -17,8 +17,10 @@ finalize 在三个平台都构建完之后跑。--built 里是本次构建的 `s
        那几个文件、普通文件、0755
     ④ manifest.py 汇总出 manifest.json(构建戳不一致即失败);发版 tag 要求版本正是 tag 去掉 v;上传
     ⑤ 删掉草稿里的 .build.json 中间文件,附件只剩三个包与 manifest.json
-    ⑥ 演练 tag 到此为止,停在草稿;发版 tag 确认 tag 仍指向这个提交,转为发布(仓库已有更高版本的
-       发布时不抢 latest),再确认 tag 指向这个提交
+    ⑥ 演练 tag 到此为止,停在草稿;发版 tag 确认 tag 仍指向这个提交,转为发布(不在这一步标 latest),
+       再确认 tag 指向这个提交
+    ⑦ 把 latest 收敛到已发布版本里最高的那个:两个版本同时收尾时,后完成的一方会看到双方都已发布,
+       latest 不会停在较低的版本上
 草稿里已有 manifest.json 时它是权威:只核对它与三个包,接着 ⑤ ⑥。任何一步失败都停在草稿;已发布的
 Release 不改写。
 """
@@ -48,13 +50,7 @@ def _load(name):
 plan = _load('release_plan')
 info = _load('release_info')
 manifest_lib = _load('manifest')
-
-# 每个平台的包里恰有这些文件;与 lib.sh 的 summon_release_files 一致(测试钉住)。
-MEMBERS = {
-    'linux-x64': ('summon', 'summon-sidecar'),
-    'linux-arm64': ('summon', 'summon-sidecar'),
-    'darwin-arm64': ('summon', 'summon-sidecar', 'summon-menubar'),
-}
+MEMBERS = _load('pack').MEMBERS
 
 
 class PublishError(Exception):
@@ -148,9 +144,16 @@ class Gh:
     def delete_asset(self, tag, name):
         self._run('release', 'delete-asset', tag, name, '--repo', self.repo, '--yes')
 
-    def publish(self, tag, latest):
-        self._run('release', 'edit', tag, '--repo', self.repo, '--draft=false',
-                  '--latest' if latest else '--latest=false')
+    def publish(self, tag):
+        self._run('release', 'edit', tag, '--repo', self.repo, '--draft=false', '--latest=false')
+
+    def published_tags(self):
+        proc = self._run('release', 'list', '--repo', self.repo, '--exclude-drafts',
+                         '--exclude-pre-releases', '--limit', '1000', '--json', 'tagName')
+        return [r['tagName'] for r in json.loads(proc.stdout)]
+
+    def set_latest(self, tag):
+        self._run('release', 'edit', tag, '--repo', self.repo, '--latest')
 
 
 # ── 核对 ──
@@ -388,12 +391,9 @@ def finalize(gh, tag, sha, built, work, published_at=None, recheck_retries=5, re
     # ⑥ 转为发布。tag 被挪走后 GitHub 发布会沿用新的位置,附件却来自这个提交 —— 不能发。
     try:
         plan.check_tag_commit(gh.tag_commit(tag), sha)
-        latest = plan.take_latest(gh.latest_tag(), tag)
     except plan.PlanError as err:
         raise PublishError(str(err)) from None
-    if not latest:
-        say(f'仓库当前 latest 的版本更高,{tag} 发布但不标 latest')
-    gh.publish(tag, latest)
+    gh.publish(tag)
     release = refetch(gh, tag)
     if release.get('isDraft') is not False:
         raise PublishError('转为发布后它仍是草稿')
@@ -410,8 +410,24 @@ def finalize(gh, tag, sha, built, work, published_at=None, recheck_retries=5, re
     if tag_commit != sha:
         raise PublishError(f'{tag} 已发布,但 tag 指向 {tag_commit or "(查不到)"} 而不是 {sha};'
                            '需要人工处理这个 Release 与 tag')
-    say(f'已发布 {tag}(latest={"是" if latest else "否"})')
+    latest = ensure_latest(gh)
+    say(f'已发布 {tag};latest 是 {latest}')
     return 'published'
+
+
+def ensure_latest(gh):
+    """latest 指向已发布版本里最高的那个;返回它。"""
+    try:
+        highest = plan.highest_release(gh.published_tags())
+    except plan.PlanError as err:
+        raise PublishError(str(err)) from None
+    if highest is None:
+        raise PublishError('没有找到已发布的版本,latest 无从设置')
+    if gh.latest_tag() != highest:
+        gh.set_latest(highest)
+        if gh.latest_tag() != highest:
+            raise PublishError(f'已发布,但 latest 没能指向最高版本 {highest};需要人工处理')
+    return highest
 
 
 def main(argv=None):
