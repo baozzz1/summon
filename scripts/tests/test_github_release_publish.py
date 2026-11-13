@@ -331,6 +331,17 @@ class PrepareTests(unittest.TestCase):
         self.assertTrue(gh.releases[TAG]['isDraft'])
         self.assertTrue(gh.releases[TAG]['notes'].strip())
 
+    def test_draft_whose_recorded_target_differs_fails_before_builds(self):
+        gh = FakeGh(tag_commits={TAG: SHA})
+        create = gh.create_draft
+
+        def create_with_branch_target(*args, **kwargs):
+            create(*args, **kwargs)
+            gh.releases[TAG]['targetCommitish'] = 'main'
+        gh.create_draft = create_with_branch_target
+        with self.assertRaisesRegex(publish.PublishError, '新建的草稿不对.*main'):
+            self.run_prepare(gh)
+
     def test_rehearsal_draft_is_prerelease(self):
         gh = FakeGh(tag_commits={TEST_TAG: SHA})
         self.assertEqual(self.run_prepare(gh, TEST_TAG), 'create')

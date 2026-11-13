@@ -278,6 +278,11 @@ def prepare(gh, tag, sha, work):
         rehearsal = kind == 'rehearsal'
         title = f'summon {version}' + (f'(演练 {sha[:7]})' if rehearsal else '')
         gh.create_draft(tag, sha, title, notes, prerelease=rehearsal)
+        # 收尾按草稿的目标提交认草稿;在构建之前就确认 GitHub 记下的正是这个提交。
+        try:
+            plan.check_draft(refetch(gh, tag), sha)
+        except plan.PlanError as err:
+            raise PublishError(f'新建的草稿不对:{err}') from None
         say(f'已建草稿 {tag}' + (',标为 prerelease(演练)' if rehearsal else ''))
     return decision
 
