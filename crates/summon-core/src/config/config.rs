@@ -465,16 +465,17 @@ impl Default for Dashboard {
     }
 }
 
-/// 自动升级。只在能自己装新版的安装方式上生效(daemon 定期问发布源,有合适的新版就装上,
-/// 等整机空闲后换代);源码安装不读它。
+/// 自动升级(daemon 定期问发布源,有合适的新版就取到本机,等整机空闲后换代)。
 ///
 /// ```yaml
 /// upgrade:
-///   auto: false               # 默认关;打开之前先看设计文档的「已知残留」
+///   auto: false               # 默认关
 ///   check_interval_hours: 6   # 至少 1
 ///   min_age_hours: 2          # 新版发布满这么久才采用
 ///   idle_minutes: 10          # 整机连续空闲这么久才重启
 ///   range: minor              # minor:跟到同一主版本内的次版本;patch:只跟同一 x.y 的补丁版本
+///   channel: github           # 新版从哪个渠道取;不写用本构建的默认渠道
+///   from: /path/to/release    # 演练用的 Release 来源;不写即 GitHub 上的 Release
 /// ```
 ///
 /// 主版本号变化一律不自动跟。
@@ -486,6 +487,14 @@ pub struct Upgrade {
     pub min_age_hours: u64,
     pub idle_minutes: u64,
     pub range: UpgradeRange,
+    /// 新版从哪个渠道取:`github` 是 GitHub Releases,其余取值看本构建带了哪些渠道。取值在用时
+    /// 校验(写错只让自动升级不生效、doctor 说明,不影响别的配置)。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    /// 演练用的 Release 来源(只用于 github 渠道):绝对路径的本地目录,或本机回环地址上的明文
+    /// `http://`;其下直接有 `manifest.json` 与各平台的包。别的写法不认、不自动升级。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 impl Default for Upgrade {
@@ -496,6 +505,8 @@ impl Default for Upgrade {
             min_age_hours: 2,
             idle_minutes: 10,
             range: UpgradeRange::Minor,
+            channel: None,
+            from: None,
         }
     }
 }
@@ -661,6 +672,12 @@ pub struct Messaging {
     /// 是否处理文档评论并起草回复；全局配置可由单个 agent 覆盖。
     #[serde(default)]
     pub document_comments_enabled: bool,
+    /// 是否处理非 owner 发出的文档评论；默认关闭，支持单 agent 覆盖。
+    #[serde(default)]
+    pub document_comments_non_owner_enabled: bool,
+    /// Owner 主动提及可使用用户权限读取其它文档；默认关闭。
+    #[serde(default)]
+    pub document_comments_owner_mentions_enabled: bool,
     /// 单次文档评论起草的总时限，单位秒；全局配置可由单 agent 覆盖。
     #[serde(default = "default_document_comment_timeout_secs")]
     pub document_comment_timeout_secs: NonZeroU64,
@@ -1245,6 +1262,12 @@ impl Messaging {
         if let Some(v) = o.document_comments_enabled {
             self.document_comments_enabled = v;
         }
+        if let Some(v) = o.document_comments_non_owner_enabled {
+            self.document_comments_non_owner_enabled = v;
+        }
+        if let Some(v) = o.document_comments_owner_mentions_enabled {
+            self.document_comments_owner_mentions_enabled = v;
+        }
         if let Some(v) = o.document_comment_timeout_secs {
             self.document_comment_timeout_secs = v;
         }
@@ -1396,6 +1419,8 @@ pub struct MessagingOverride {
     /// feed 总结段注入开关。`None` = 没写,跟上一层。
     pub agent_feed: Option<bool>,
     pub document_comments_enabled: Option<bool>,
+    pub document_comments_non_owner_enabled: Option<bool>,
+    pub document_comments_owner_mentions_enabled: Option<bool>,
     pub document_comment_timeout_secs: Option<NonZeroU64>,
     pub models: Option<Vec<String>>,
     pub models_by_cli: Option<HashMap<String, Vec<String>>>,
@@ -1637,6 +1662,18 @@ pub const CONFIG_FIELD_META: &[ConfigFieldMeta] = &[
         deprecated_since: None,
     },
     ConfigFieldMeta {
+        path: "messaging.document_comments_non_owner_enabled",
+        since: "2026-11-13",
+        description: "r1e5e19fd0a",
+        deprecated_since: None,
+    },
+    ConfigFieldMeta {
+        path: "messaging.document_comments_owner_mentions_enabled",
+        since: "2026-11-12",
+        description: "rd9493bfc14",
+        deprecated_since: None,
+    },
+    ConfigFieldMeta {
         path: "messaging.document_comments_enabled",
         since: "2026-10-22",
         description: "r7a38b29bb8",
@@ -1759,7 +1796,7 @@ pub const CONFIG_FIELD_META: &[ConfigFieldMeta] = &[
     ConfigFieldMeta {
         path: "upgrade",
         since: "2026-10-29",
-        description: "r215a0417b3",
+        description: "rd4b103881a",
         deprecated_since: None,
     },
     ConfigFieldMeta {
@@ -1792,6 +1829,39 @@ pub fn path_exists_in_value(value: &serde_yaml::Value, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_non_owner_comments_default_off_and_agent_override_wins() {
+        let mut messaging = builtin_messaging();
+        assert!(!messaging.document_comments_non_owner_enabled);
+        messaging
+            .apply(&serde_yaml::from_str("document_comments_non_owner_enabled: true").unwrap());
+        assert!(messaging.document_comments_non_owner_enabled);
+        messaging
+            .apply(&serde_yaml::from_str("document_comments_non_owner_enabled: false").unwrap());
+        assert!(!messaging.document_comments_non_owner_enabled);
+        messaging
+            .apply(&serde_yaml::from_str("document_comments_non_owner_enabled: null").unwrap());
+        assert!(!messaging.document_comments_non_owner_enabled);
+    }
+
+    #[test]
+    fn document_owner_mentions_default_off_and_agent_override_wins() {
+        let mut messaging = builtin_messaging();
+        assert!(!messaging.document_comments_owner_mentions_enabled);
+        messaging.apply(
+            &serde_yaml::from_str("document_comments_owner_mentions_enabled: true").unwrap(),
+        );
+        assert!(messaging.document_comments_owner_mentions_enabled);
+        messaging.apply(
+            &serde_yaml::from_str("document_comments_owner_mentions_enabled: false").unwrap(),
+        );
+        assert!(!messaging.document_comments_owner_mentions_enabled);
+        messaging.apply(
+            &serde_yaml::from_str("document_comments_owner_mentions_enabled: null").unwrap(),
+        );
+        assert!(!messaging.document_comments_owner_mentions_enabled);
+    }
 
     #[test]
     fn builtin_reactions_include_raise_hand_with_searchable_meaning() {

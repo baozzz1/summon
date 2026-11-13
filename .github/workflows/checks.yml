@@ -14,7 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macOS runner 暂不启用;macOS 上的检查(含 Menu Bar)在每次同步前于本机跑过。
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -27,13 +28,15 @@ jobs:
           python3 scripts/tests/test_check_public_content.py
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      # 会话测试要起真的 tmux,Go 协议测试从 Rust 测试里调 `go test`。
+      # 会话测试要起真的 tmux,Go 协议测试从 Rust 测试里调 `go test`;工作流文件的检查要 PyYAML。
       - name: Test dependencies
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
             brew install tmux
+            # runner 上的 python3 来自 Homebrew,受 PEP 668 保护,装进用户目录要显式放行。
+            python3 -m pip install --user --break-system-packages pyyaml
           else
-            sudo apt-get update && sudo apt-get install -y tmux
+            sudo apt-get update && sudo apt-get install -y tmux python3-yaml
           fi
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -60,6 +63,12 @@ jobs:
         run: |
           bash scripts/test-codesign.sh
           bash scripts/test-deploy-daemon-restore.sh
+          bash scripts/tests/test-github-release-package.sh
+          python3 scripts/tests/test_github_release_manifest.py
+          python3 scripts/tests/test_github_release_info.py
+          python3 scripts/tests/test_github_release_plan.py
+          python3 scripts/tests/test_github_release_workflow.py
+          python3 scripts/tests/test_install_script.py
       - name: macOS Menu Bar
         if: runner.os == 'macOS'
         run: |

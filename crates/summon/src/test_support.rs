@@ -756,6 +756,7 @@ mod tests {
             ("summon/src/runtime/dashboard/agent_archive.rs", 1), // 收紧清理隔离目录，内含凭据
             ("summon/src/setup/init.rs", 1),     // 收紧 ~/.summon
             ("summon/src/setup/self_install.rs", 1), // 发布到落点的暂存文件
+            ("summon-core/src/release.rs", 2),   // 解出的平台包文件(创建时与落盘后各一处)
             // ── 测试:不执行文件,或改的是目录 ──
             ("summon-core/src/tools.rs", 1),           // 只做路径解析
             ("summon/src/bridge/handoff.rs", 1),       // PATH 扫描只读文件头

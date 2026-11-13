@@ -8,6 +8,8 @@ import { store } from '../app/store';
 import { CommentsPage } from './comments';
 
 const TIMEOUT = 'messaging.document_comment_timeout_secs';
+const OWNER_MENTIONS = 'messaging.document_comments_owner_mentions_enabled';
+const NON_OWNER = 'messaging.document_comments_non_owner_enabled';
 const ENABLED = 'messaging.document_comments_enabled';
 
 async function mount(agent?: string, denied = false) {
@@ -64,6 +66,45 @@ describe('独立文档评论页面', () => {
     const inherited = await store.call('config.get', { scope: { level: 'agent', agent: 'starlight' } });
     expect(inherited.values.find((v) => v.key === TIMEOUT)?.source).toBe('global');
     expect(inherited.values.find((v) => v.key === TIMEOUT)?.effective).toBe(120);
+  });
+
+  test('non_owner_comments_can_be_enabled_globally_and_overridden_per_agent', async () => {
+    const { page, srv } = await mount();
+    const toggle = () => page.querySelector<HTMLButtonElement>(`[data-key="${NON_OWNER}"] [role="switch"]`)!;
+    expect(toggle().getAttribute('aria-checked')).toBe('false');
+    toggle().click(); await page.save();
+    expect(srv.global[NON_OWNER]).toBe(true);
+    expect(srv.global[ENABLED]).toBeUndefined();
+    page.route = { page: 'comments', agent: 'starlight' };
+    await page.updateComplete; await page.refresh(); await page.updateComplete;
+    expect(toggle().getAttribute('aria-checked')).toBe('true');
+    toggle().click(); await page.save();
+    const view = await store.call('config.get', { scope: { level: 'agent', agent: 'starlight' } });
+    expect(view.values.find((v) => v.key === NON_OWNER)?.value).toBe(false);
+    expect(srv.global[NON_OWNER]).toBe(true);
+    const other = await store.call('config.get', { scope: { level: 'agent', agent: 'arcadia' } });
+    expect(other.values.find((v) => v.key === NON_OWNER)?.effective).toBe(true);
+    const reset = [...page.querySelectorAll<HTMLButtonElement>(`[data-key="${NON_OWNER}"] button`)].find((b) => b.textContent?.includes('继承'))!;
+    reset.click(); await page.save();
+    const inherited = await store.call('config.get', { scope: { level: 'agent', agent: 'starlight' } });
+    expect(inherited.values.find((v) => v.key === NON_OWNER)?.source).toBe('global');
+    expect(inherited.values.find((v) => v.key === NON_OWNER)?.effective).toBe(true);
+  });
+
+  test('owner_mentions_can_be_enabled_globally_and_overridden_per_agent', async () => {
+    const { page, srv } = await mount();
+    const toggle = () => page.querySelector<HTMLButtonElement>(`[data-key="${OWNER_MENTIONS}"] [role="switch"]`)!;
+    expect(toggle().getAttribute('aria-checked')).toBe('false');
+    toggle().click(); await page.save();
+    expect(srv.global[OWNER_MENTIONS]).toBe(true);
+    expect(srv.global[ENABLED]).toBeUndefined();
+    page.route = { page: 'comments', agent: 'starlight' };
+    await page.updateComplete; await page.refresh(); await page.updateComplete;
+    expect(toggle().getAttribute('aria-checked')).toBe('true');
+    toggle().click(); await page.save();
+    const view = await store.call('config.get', { scope: { level: 'agent', agent: 'starlight' } });
+    expect(view.values.find((v) => v.key === OWNER_MENTIONS)?.value).toBe(false);
+    expect(srv.global[OWNER_MENTIONS]).toBe(true);
   });
 
   test('inherited_global_changes_refresh_without_overwriting_unsaved_edits', async () => {

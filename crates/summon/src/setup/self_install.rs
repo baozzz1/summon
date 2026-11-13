@@ -145,9 +145,8 @@ pub(crate) fn publish_over(
     let target = companion::install_target(home);
     let src_dir = complete_source(exe, home)?;
     // 换代后退回过的版本不发布进落点;落点为空时不挡 —— 没有别的可起,挡住只会让机器没有 daemon。
-    #[cfg(npm_dist)]
     if let Some(notice) = (installed != Installed::Absent)
-        .then(|| crate::setup::npm_dist::auto_upgrade::refuses_publish(home, &build.version))
+        .then(|| crate::setup::auto_upgrade::refuses_publish(home, &build.version))
         .flatten()
     {
         return Ok(Outcome::untouched(target, Some(notice)));

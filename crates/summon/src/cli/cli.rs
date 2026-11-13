@@ -445,6 +445,14 @@ pub enum Cmd {
     #[cfg(npm_dist)]
     #[command(flatten)]
     NpmDist(crate::setup::npm_dist::Command),
+    #[cfg(not(npm_dist))]
+    #[command(about = summon_i18n::text!("rb8fcf9182a"))]
+    /// 从 GitHub Releases 升级 summon,并用新版重启 daemon(装过 Menu Bar 的一并重启)
+    Upgrade(crate::setup::github_upgrade::UpgradeArgs),
+    #[command(about = summon_i18n::text!("r105af306ec"))]
+    /// 自动升级换代时由 daemon 拉起:重启 daemon、观察新版,必要时退回旧版
+    #[command(hide = true)]
+    AutoUpgradeWatch(crate::setup::auto_upgrade::watch::WatchArgs),
     #[command(about = summon_i18n::text!("rd70d395e72"))]
     /// 【高级场景】外部 Claude 会话桥接:安装、检查或卸载 Claude Hooks。
     /// 默认路径(onboard / agents add)用不到它;仅在要把已有的外部 Claude 会话接管进飞书时使用。
@@ -1225,6 +1233,9 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Daemon { action } => daemon_cmd(&cfg, action),
         #[cfg(npm_dist)]
         Cmd::NpmDist(command) => crate::setup::npm_dist::run(command),
+        #[cfg(not(npm_dist))]
+        Cmd::Upgrade(args) => crate::setup::github_upgrade::run(&args),
+        Cmd::AutoUpgradeWatch(args) => crate::setup::auto_upgrade::watch::run(&args),
         Cmd::Bridge { action } => bridge_cmd(action),
         Cmd::Autostart { action } => autostart_cmd(action),
         Cmd::Schedules { action } => schedules_cmd(&cfg, action),
@@ -6688,26 +6699,6 @@ fn sidecar_missing_fix() -> String {
     )
 }
 
-/// 自动升级的体检由带它的分发渠道给出。
-#[cfg(npm_dist)]
-fn auto_upgrade_doctor_lines(cfg: &Config) -> Vec<String> {
-    crate::setup::npm_dist::auto_upgrade::doctor_lines(cfg)
-}
-
-/// 不带自动升级的构建:config.yaml 里写了 `upgrade:` 段才说一声它不起作用。
-#[cfg(not(npm_dist))]
-fn auto_upgrade_doctor_lines(_cfg: &Config) -> Vec<String> {
-    let written = std::fs::read_to_string(summon_core::config::config_path())
-        .ok()
-        .and_then(|text| serde_yaml::from_str::<serde_yaml::Value>(&text).ok())
-        .is_some_and(|value| summon_core::config::path_exists_in_value(&value, "upgrade"));
-    if written {
-        vec![summon_i18n::text!("rd1ff56324b").to_string()]
-    } else {
-        Vec::new()
-    }
-}
-
 fn doctor(cfg: &Config) -> anyhow::Result<()> {
     fn ok(b: bool) -> &'static str {
         if b {
@@ -6813,7 +6804,7 @@ fn doctor(cfg: &Config) -> anyhow::Result<()> {
     for line in crate::runtime::dashboard::doctor_lines(cfg) {
         println!("{line}");
     }
-    for line in auto_upgrade_doctor_lines(cfg) {
+    for line in crate::setup::auto_upgrade::doctor_lines(cfg) {
         println!("{line}");
     }
     // outbox 死信:重试耗尽的消息永久躺在 dead/,无主动通知,只能靠体检暴露。

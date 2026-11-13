@@ -1,5 +1,5 @@
 use super::endpoints;
-mod document_comments;
+pub(crate) mod document_comments;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};

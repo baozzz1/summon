@@ -129,7 +129,7 @@ fn semver(version: &str) -> Option<(u64, u64, u64)> {
 
 /// 同一个提交。短 sha 的长度随仓库对象数与 `core.abbrev` 变(CI 与本机可以一个 7 位一个 8 位),
 /// 所以按前缀认;`unknown` 不是 sha,两个 `unknown` 不算同一个提交。
-fn same_commit(a: &str, b: &str) -> bool {
+pub fn same_commit(a: &str, b: &str) -> bool {
     let sha = |s: &str| s.len() >= 7 && s.bytes().all(|c| c.is_ascii_hexdigit());
     sha(a) && sha(b) && (a.starts_with(b) || b.starts_with(a))
 }

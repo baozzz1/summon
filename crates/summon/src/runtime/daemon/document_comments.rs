@@ -17,6 +17,151 @@ pub(super) fn enabled(agent: &Agent) -> bool {
     })
 }
 
+pub(super) fn enabled_for_record(agent: &Agent, record: &Record) -> bool {
+    enabled(agent)
+        && !record.owner_open_id.is_empty()
+        && !record.notice.sender_open_id.is_empty()
+        && (record.notice.sender_open_id == record.owner_open_id
+            || agent.reread().is_some_and(|current| {
+                super::resolve_messaging(&current).document_comments_non_owner_enabled
+            }))
+        && (!record.context.as_ref().is_some_and(|c| c.owner_mention)
+            || agent.reread().is_some_and(|current| {
+                super::resolve_messaging(&current).document_comments_owner_mentions_enabled
+                    && agent_owner(&current).as_deref() == Some(record.owner_entry.as_str())
+            }))
+}
+
+fn ensure_owner_access(agent: &Agent, record: &Record) -> Result<()> {
+    let current = agent.reread().context(summon_i18n::text!("r50c89c40c6"))?;
+    anyhow::ensure!(
+        enabled(&current)
+            && super::resolve_messaging(&current).document_comments_owner_mentions_enabled
+            && agent_owner(&current).as_deref() == Some(record.owner_entry.as_str())
+            && super::FeishuEpochIdentity::capture(&current).fingerprint() == record.epoch
+            && resolve_creds(&current).0.as_deref() == Some(record.notice.app_id.as_str())
+            && record.notice.sender_open_id == record.owner_open_id
+            && record.notice.recipient_open_id == record.bot_open_id,
+        summon_i18n::format!("r933860a135")
+    );
+    Ok(())
+}
+
+fn owner_read(
+    agent: &Agent,
+    record: &Record,
+    reader: &super::sentinel::lark::document_comments::OwnerCommentReader,
+    operation: crate::frontend::client::document_comments::CommentRead,
+) -> Result<Value> {
+    ensure_owner_access(agent, record)?;
+    let data = reader.read(&record.notice, operation)?;
+    ensure_owner_access(agent, record)?;
+    Ok(data)
+}
+
+fn owner_reader(
+    record: &Record,
+) -> Result<super::sentinel::lark::document_comments::OwnerCommentReader> {
+    let executable =
+        super::agent_env::which_lark_cli().context(summon_i18n::text!("r1f30085bfc"))?;
+    Ok(
+        super::sentinel::lark::document_comments::OwnerCommentReader::new(
+            executable,
+            record.notice.app_id.clone(),
+            record.owner_open_id.clone(),
+        ),
+    )
+}
+
+pub(super) fn read_context(
+    agent: &Agent,
+    record: &Record,
+    fc: &FeishuClient,
+) -> Result<crate::runtime::document_comments::CommentContext> {
+    anyhow::ensure!(
+        enabled_for_record(agent, record),
+        summon_i18n::format!("r933860a135")
+    );
+    if record.context.as_ref().is_some_and(|c| c.owner_mention) {
+        let reader = owner_reader(record)?;
+        let context = fc.owner_mentioned_comment_context(
+            &record.notice,
+            &record.bot_open_id,
+            &record.owner_open_id,
+            &|op| owner_read(agent, record, &reader, op),
+        )?;
+        anyhow::ensure!(
+            enabled_for_record(agent, record),
+            summon_i18n::format!("r933860a135")
+        );
+        Ok(context)
+    } else {
+        fc.owned_comment_context(&record.notice, &record.bot_open_id, &record.owner_open_id)
+    }
+}
+
+pub(super) fn read_document_text(
+    agent: &Agent,
+    record: &Record,
+    fc: &FeishuClient,
+) -> Result<String> {
+    anyhow::ensure!(
+        enabled_for_record(agent, record),
+        summon_i18n::format!("r933860a135")
+    );
+    if record.context.as_ref().is_some_and(|c| c.owner_mention) {
+        let reader = owner_reader(record)?;
+        let data = owner_read(
+            agent,
+            record,
+            &reader,
+            crate::frontend::client::document_comments::CommentRead::Text,
+        )?;
+        anyhow::ensure!(
+            enabled_for_record(agent, record),
+            summon_i18n::format!("r933860a135")
+        );
+        Ok(data["content"]
+            .as_str()
+            .context(summon_i18n::text!("ra374c378ee"))?
+            .to_string())
+    } else {
+        fc.comment_document_text(&record.notice)
+    }
+}
+
+fn prepare_context(
+    agent: &Agent,
+    record: &Record,
+    fc: &FeishuClient,
+) -> Result<crate::runtime::document_comments::CommentContext> {
+    match fc.owned_comment_context(&record.notice, &record.bot_open_id, &record.owner_open_id) {
+        Ok(context) => Ok(context),
+        Err(error) => {
+            let current = agent.reread().context(summon_i18n::text!("r50c89c40c6"))?;
+            if !super::resolve_messaging(&current).document_comments_owner_mentions_enabled
+                || record.notice.sender_open_id != record.owner_open_id
+            {
+                return Err(error);
+            }
+            let reader = owner_reader(record)?;
+            let context = fc.owner_mentioned_comment_context(
+                &record.notice,
+                &record.bot_open_id,
+                &record.owner_open_id,
+                &|op| owner_read(agent, record, &reader, op),
+            )?;
+            let mut checked = record.clone();
+            checked.context = Some(context.clone());
+            anyhow::ensure!(
+                enabled_for_record(agent, &checked),
+                summon_i18n::format!("r933860a135")
+            );
+            Ok(context)
+        }
+    }
+}
+
 pub(super) fn receive_notice(
     store: &Store,
     core: &crate::runtime::core::Core,
@@ -151,8 +296,12 @@ fn advance_once(
         // 失败要告诉 owner,无论草稿出没出来。不在处理范围内的文档(元数据里查不到、不归本 bot)
         // 仍记作处理失败、原因可见,但不通知;功能已关或身份已变时也不发,关闭期间的失败不在
         // 重新开启后补报。
+        let latest = store.get(&record.id)?;
         let notify = !crate::runtime::document_comments::is_out_of_scope(&error)
-            && current_agent(delivery, record).is_ok_and(|agent| enabled(&agent));
+            && current_agent(delivery, &latest).is_ok_and(|agent| {
+                enabled_for_record(&agent, &latest)
+                    && agent_owner(&agent).as_deref() == Some(latest.owner_entry.as_str())
+            });
         store.update(&record.id, |r| {
             if r.stage != Stage::Closed {
                 r.last_error = Some(format!("{error:#}").chars().take(2000).collect());
@@ -182,7 +331,8 @@ fn advance(
         record.stage == Stage::Closed || record.failures == 0,
         summon_i18n::format!("r8a387d2cb1")
     );
-    if !enabled(&agent) {
+    if !enabled(&agent) || (record.stage != Stage::Received && !enabled_for_record(&agent, record))
+    {
         if record.stage == Stage::Received {
             store.update(&record.id, |r| {
                 if r.stage == Stage::Received {
@@ -220,11 +370,24 @@ fn advance(
                 r.bot_open_id = bot.clone();
                 Ok(())
             })?;
-            let context = fc.owned_comment_context(&record.notice, &bot, &open)?;
+            let bound = store.get(&record.id)?;
+            if !enabled_for_record(&agent, &bound) {
+                return store.update(&record.id, |r| {
+                    r.close(summon_i18n::text!("r60156d448e"));
+                    Ok(())
+                });
+            }
+            let context = prepare_context(&agent, &bound, fc)?;
             if stop.load(Ordering::Relaxed) {
                 return Ok(());
             }
             current_agent(delivery, record)?;
+            if !enabled_for_record(&agent, &bound) {
+                return store.update(&record.id, |r| {
+                    r.close(summon_i18n::text!("r60156d448e"));
+                    Ok(())
+                });
+            }
             store.update(&record.id, |r| {
                 if r.stage == Stage::Received {
                     r.agent_name = agent.name.clone();
@@ -380,6 +543,22 @@ fn handle_card_with_store(
     epoch: &super::FeishuEpochIdentity,
     card: &CardActionMsg,
 ) -> Result<()> {
+    handle_card_with_context(store, agent, fc, scope, epoch, card, &read_context)
+}
+
+fn handle_card_with_context(
+    store: &Store,
+    agent: &Agent,
+    fc: &FeishuClient,
+    scope: &str,
+    epoch: &super::FeishuEpochIdentity,
+    card: &CardActionMsg,
+    read: &dyn Fn(
+        &Agent,
+        &Record,
+        &FeishuClient,
+    ) -> Result<crate::runtime::document_comments::CommentContext>,
+) -> Result<()> {
     let action = card.value["action"]
         .as_str()
         .context(summon_i18n::text!("rcfb3275606"))?;
@@ -471,10 +650,15 @@ fn handle_card_with_store(
         summon_i18n::format!("r8d7fd7336f")
     );
     let context = match (|| -> Result<_> {
-        anyhow::ensure!(enabled(&current), summon_i18n::format!("ra116fc6e49"));
-        let context =
-            fc.owned_comment_context(&record.notice, &record.bot_open_id, &record.owner_open_id)?;
-        anyhow::ensure!(enabled(&current), summon_i18n::format!("ra116fc6e49"));
+        anyhow::ensure!(
+            enabled_for_record(&current, &record),
+            summon_i18n::format!("ra116fc6e49")
+        );
+        let context = read(&current, &record, fc)?;
+        anyhow::ensure!(
+            enabled_for_record(&current, &record),
+            summon_i18n::format!("ra116fc6e49")
+        );
         Ok(context)
     })() {
         Ok(context) => context,
@@ -542,7 +726,10 @@ fn handle_card_with_store(
         return Ok(());
     }
     anyhow::ensure!(context.reply_allowed, summon_i18n::format!("r0a80e3ceab"));
-    anyhow::ensure!(enabled(&current), summon_i18n::format!("ra116fc6e49"));
+    anyhow::ensure!(
+        enabled_for_record(&current, &record),
+        summon_i18n::format!("ra116fc6e49")
+    );
     let draft = store.claim_reply(
         id,
         crate::runtime::document_comments::Approval {
@@ -750,7 +937,7 @@ mod tests {
         CommentServer,
         String,
     ) {
-        let (agent, dir) = crate::test_support::agent_dir("claude", "messaging:\n  document_comments_enabled: true\nfeishu:\n  app_id_env: COMMENT_TEST_APP\n  app_secret_env: COMMENT_TEST_SECRET\n  allowed_users: [ou_owner]\n");
+        let (agent, dir) = crate::test_support::agent_dir("claude", "messaging:\n  document_comments_enabled: true\n  document_comments_non_owner_enabled: true\nfeishu:\n  app_id_env: COMMENT_TEST_APP\n  app_secret_env: COMMENT_TEST_SECRET\n  allowed_users: [ou_owner]\n");
         std::fs::write(
             agent.dir.join(".env"),
             "COMMENT_TEST_APP=cli_test\nCOMMENT_TEST_SECRET=test_secret\n",
@@ -1064,6 +1251,13 @@ mod tests {
         store
             .update(id, |r| {
                 r.stage = Stage::Received;
+                r.agent_name.clear();
+                r.delivery_scope.clear();
+                r.epoch.clear();
+                r.owner_entry.clear();
+                r.owner_open_id.clear();
+                r.owner_union_id.clear();
+                r.bot_open_id.clear();
                 r.context = None;
                 r.draft = None;
                 r.drafted_ms = None;
@@ -1077,25 +1271,224 @@ mod tests {
 
     #[test]
     fn metadata_permission_error_notifies_the_owner_without_comment_text() {
+        for sender in ["ou_owner", "ou_reader"] {
+            let (agent, _dir, store, client, mock, id) = fixture(false);
+            configure_non_owner_comments(&agent, sender != "ou_owner");
+            let delivery = OutboxDrainAgent {
+                epoch: super::super::FeishuEpochIdentity::capture(&agent),
+                agent,
+                client: Arc::new(client),
+            };
+            // 元数据接口报权限错误:故障,要通知
+            mock.ownership.store(4, Ordering::Relaxed);
+            received_record(&store, &id);
+            store
+                .update(&id, |r| {
+                    r.notice.sender_open_id = sender.into();
+                    Ok(())
+                })
+                .unwrap();
+            let record = store.get(&id).unwrap();
+            assert!(advance_once(&store, &record, &delivery, &AtomicBool::new(false)).is_err());
+            let failed = store.get(&id).unwrap();
+            assert!(failed.context.is_none());
+            assert!(failed.needs_failure_notice());
+            advance_once(&store, &failed, &delivery, &AtomicBool::new(false)).unwrap();
+            let notices = mock.notices.lock().unwrap().clone();
+            assert_eq!(notices.len(), 1);
+            let card = notices[0]["content"].as_str().unwrap();
+            assert!(card.contains("文档评论任务处理失败"), "{card}");
+            assert!(!card.contains("Quote"), "未核验归属不带评论内容:{card}");
+        }
+    }
+
+    #[test]
+    fn owner_user_context_approval_publishes_once_as_bot() {
         let (agent, _dir, store, client, mock, id) = fixture(false);
+        let (_user_dir, reader) = super::super::sentinel::lark::document_comments::tests::fixture();
+        let mut config: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(agent.manifest_path()).unwrap()).unwrap();
+        config["messaging"]["document_comments_owner_mentions_enabled"] =
+            serde_yaml::Value::Bool(true);
+        std::fs::write(
+            agent.manifest_path(),
+            serde_yaml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        let read = |agent: &Agent, record: &Record, fc: &FeishuClient| {
+            fc.owner_mentioned_comment_context(
+                &record.notice,
+                &record.bot_open_id,
+                &record.owner_open_id,
+                &|op| owner_read(agent, record, &reader, op),
+            )
+        };
+        store
+            .update(&id, |r| {
+                r.notice.sender_open_id = r.owner_open_id.clone();
+                r.context = Some(read(&agent, r, &client)?);
+                Ok(())
+            })
+            .unwrap();
+        // bot 看不到文档归属；审批复验通过只读用户通道完成，发布仍由 bot HTTP 客户端执行。
+        mock.ownership.store(2, Ordering::Relaxed);
+        let epoch = super::super::FeishuEpochIdentity::capture(&agent);
+        for _ in 0..2 {
+            handle_card_with_context(
+                &store,
+                &agent,
+                &client,
+                &epoch.storage_scope().key,
+                &epoch,
+                &callback(&id),
+                &read,
+            )
+            .unwrap();
+        }
+        assert_eq!(mock.posts.lock().unwrap().len(), 1);
+        let record = store.get(&id).unwrap();
+        assert_eq!(record.stage, Stage::Replied);
+        assert_eq!(record.reply_id.as_deref(), Some("300"));
+        client
+            .verify_comment_reply(
+                &record.notice,
+                "300",
+                "ou_bot",
+                record.draft.as_deref().unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn configure_non_owner_comments(agent: &Agent, enabled: bool) {
+        let mut config: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(agent.manifest_path()).unwrap()).unwrap();
+        config["messaging"]["document_comments_non_owner_enabled"] =
+            serde_yaml::Value::Bool(enabled);
+        std::fs::write(
+            agent.manifest_path(),
+            serde_yaml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn non_owner_switch_blocks_reads_and_approval_but_keeps_owner_enabled() {
+        let (agent, _dir, store, client, mock, id) = fixture(false);
+        configure_non_owner_comments(&agent, false);
+        let record = store.get(&id).unwrap();
+        assert!(!enabled_for_record(&agent, &record));
+        assert!(read_context(&agent, &record, &client).is_err());
+        assert!(read_document_text(&agent, &record, &client).is_err());
+        assert!(
+            super::super::document_comment_draft::validate_document_read(&agent, &record, &client)
+                .is_err()
+        );
+        let epoch = super::super::FeishuEpochIdentity::capture(&agent);
+        assert!(handle_card_with_store(
+            &store,
+            &agent,
+            &client,
+            &epoch.storage_scope().key,
+            &epoch,
+            &callback(&id)
+        )
+        .is_err());
+        assert!(mock.posts.lock().unwrap().is_empty());
+        let mut owner_record = record.clone();
+        owner_record.notice.sender_open_id = owner_record.owner_open_id.clone();
+        assert!(enabled_for_record(&agent, &owner_record));
+        configure_non_owner_comments(&agent, true);
+        assert!(enabled_for_record(&agent, &record));
+        read_context(&agent, &record, &client).unwrap();
+        configure_comments(&agent, false);
+        assert!(!enabled_for_record(&agent, &record));
+        assert!(!enabled_for_record(&agent, &owner_record));
+    }
+
+    #[test]
+    fn non_owner_switch_closes_unbound_notice_before_document_access() {
+        let (agent, _dir, store, client, mock, id) = fixture(false);
+        configure_non_owner_comments(&agent, false);
         let delivery = OutboxDrainAgent {
             epoch: super::super::FeishuEpochIdentity::capture(&agent),
             agent,
             client: Arc::new(client),
         };
-        // 元数据接口报权限错误:故障,要通知
+        received_record(&store, &id);
+        store
+            .update(&id, |r| {
+                r.owner_open_id.clear();
+                Ok(())
+            })
+            .unwrap();
         mock.ownership.store(4, Ordering::Relaxed);
-        let record = received_record(&store, &id);
-        assert!(advance_once(&store, &record, &delivery, &AtomicBool::new(false)).is_err());
-        let failed = store.get(&id).unwrap();
-        assert!(failed.context.is_none());
-        assert!(failed.needs_failure_notice());
-        advance_once(&store, &failed, &delivery, &AtomicBool::new(false)).unwrap();
-        let notices = mock.notices.lock().unwrap().clone();
-        assert_eq!(notices.len(), 1);
-        let card = notices[0]["content"].as_str().unwrap();
-        assert!(card.contains("文档评论任务处理失败"), "{card}");
-        assert!(!card.contains("Quote"), "未核验归属不带评论内容:{card}");
+        advance_once(
+            &store,
+            &store.get(&id).unwrap(),
+            &delivery,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let closed = store.get(&id).unwrap();
+        assert_eq!(closed.stage, Stage::Closed);
+        assert!(closed.context.is_none());
+        assert_eq!(closed.failures, 0);
+        assert!(!closed.needs_failure_notice());
+        assert!(mock.notices.lock().unwrap().is_empty());
+        configure_non_owner_comments(&delivery.agent, true);
+        advance_once(&store, &closed, &delivery, &AtomicBool::new(false)).unwrap();
+        assert_eq!(store.get(&id).unwrap().stage, Stage::Closed);
+    }
+
+    #[test]
+    fn owner_mention_revocation_blocks_reader_and_approval() {
+        let (agent, _dir, store, client, mock, id) = fixture(false);
+        store
+            .update(&id, |r| {
+                r.context.as_mut().unwrap().owner_mention = true;
+                r.notice.sender_open_id = r.owner_open_id.clone();
+                Ok(())
+            })
+            .unwrap();
+        let record = store.get(&id).unwrap();
+        assert!(!enabled_for_record(&agent, &record));
+        assert!(ensure_owner_access(&agent, &record).is_err());
+        assert!(
+            super::super::document_comment_draft::validate_document_read(&agent, &record, &client)
+                .is_err()
+        );
+        assert!(read_document_text(&agent, &record, &client).is_err());
+        let epoch = super::super::FeishuEpochIdentity::capture(&agent);
+        assert!(handle_card_with_store(
+            &store,
+            &agent,
+            &client,
+            &epoch.storage_scope().key,
+            &epoch,
+            &callback(&id)
+        )
+        .is_err());
+        assert!(mock.posts.lock().unwrap().is_empty());
+        let mut config: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(agent.manifest_path()).unwrap()).unwrap();
+        config["messaging"]["document_comments_owner_mentions_enabled"] =
+            serde_yaml::Value::Bool(true);
+        std::fs::write(
+            agent.manifest_path(),
+            serde_yaml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        assert!(enabled_for_record(&agent, &record));
+        assert!(ensure_owner_access(&agent, &record).is_ok());
+        let mut wrong = record.clone();
+        wrong.notice.sender_open_id = "ou_other".into();
+        assert!(ensure_owner_access(&agent, &wrong).is_err());
+        wrong = record.clone();
+        wrong.notice.recipient_open_id = "ou_other_bot".into();
+        assert!(ensure_owner_access(&agent, &wrong).is_err());
+        wrong = record.clone();
+        wrong.owner_entry = "ou_other".into();
+        assert!(ensure_owner_access(&agent, &wrong).is_err());
     }
 
     #[test]
@@ -1464,6 +1857,15 @@ mod tests {
 
     #[test]
     fn disabled_comments_pause_jobs_and_resume_on_enable() {
+        disabled_comment_setting_pauses_jobs(configure_comments);
+    }
+
+    #[test]
+    fn disabled_non_owner_comments_pause_jobs_and_resume_on_enable() {
+        disabled_comment_setting_pauses_jobs(configure_non_owner_comments);
+    }
+
+    fn disabled_comment_setting_pauses_jobs(configure: fn(&Agent, bool)) {
         let (agent, dir, store, client, mock, id) = fixture(false);
         let script = dir.path().join("backend");
         crate::test_support::write_test_executable(&script, "#!/bin/sh\nprintf called > \"$(dirname \"$0\")/called\"\nprintf '%s' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"draft\"}'\n");
@@ -1481,7 +1883,7 @@ mod tests {
             agent: agent.clone(),
             client: Arc::new(client),
         };
-        configure_comments(&agent, false);
+        configure(&agent, false);
         for stage in [Stage::Prepared, Stage::Drafting] {
             store
                 .update(&id, |r| {
@@ -1504,7 +1906,7 @@ mod tests {
         assert!(!dir.path().join("called").exists());
         assert!(mock.notices.lock().unwrap().is_empty());
         assert!(mock.posts.lock().unwrap().is_empty());
-        configure_comments(&agent, true);
+        configure(&agent, true);
         advance(
             &store,
             &store.get(&id).unwrap(),

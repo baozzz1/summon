@@ -59,7 +59,6 @@ impl Gate {
     }
 
     /// 关闸。封着的闸不会被打开。
-    #[cfg_attr(not(npm_dist), allow(dead_code))] // 只有自动升级在换代前关闸,不带它的构建里没有调用方
     pub(crate) fn freeze(&self) -> Freeze<'_> {
         let _ = self
             .state
@@ -110,7 +109,6 @@ impl Gate {
 
 impl Freeze<'_> {
     /// 停机已经开始:保持关闭直到进程退出。
-    #[cfg_attr(not(npm_dist), allow(dead_code))] // 只有自动升级在停机时封闸,不带它的构建里没有调用方
     pub(crate) fn seal(self) {
         self.gate.state.store(SEALED, Ordering::SeqCst);
         std::mem::forget(self);

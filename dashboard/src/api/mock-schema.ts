@@ -9,6 +9,8 @@ export const BUILTIN: Record<string, unknown> = {
   "language": "auto",
   "primary_agent": null,
   "messaging.document_comments_enabled": false,
+  "messaging.document_comments_non_owner_enabled": false,
+  "messaging.document_comments_owner_mentions_enabled": false,
   "messaging.document_comment_timeout_secs": 300,
   "messaging.cot_visible": true,
   "messaging.hide_thinking": true,

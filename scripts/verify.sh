@@ -8,6 +8,12 @@ echo "[1/8] script tests"
 bash scripts/test-codesign.sh
 bash scripts/test-deploy-daemon-restore.sh
 python3 scripts/tests/test_check_public_content.py
+bash scripts/tests/test-github-release-package.sh
+python3 scripts/tests/test_github_release_manifest.py
+python3 scripts/tests/test_github_release_info.py
+python3 scripts/tests/test_github_release_plan.py
+python3 scripts/tests/test_github_release_workflow.py
+python3 scripts/tests/test_install_script.py
 # 安装渠道自带的检查:scripts/verify.d/*.sh 按文件名顺序跑,源码安装没有。
 for check in scripts/verify.d/*.sh; do
   [ -f "$check" ] || continue

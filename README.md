@@ -12,10 +12,30 @@ CLI、daemon 和 Go sidecar 支持 macOS、Linux；Menu Bar 应用支持 macOS�
 - 飞书开放平台应用及相应权限。
 - `lark-cli` 用于需要飞书工具的功能，可从其官方渠道安装。
 
-## 文档评论
+## 安装预编译包
 
-bot 可将自己拥有的文档的新评论通知 owner，并通过 Claude Code 或 Codex 起草回复。
-owner 审阅并明确批准后，由同一 bot 回复原评论。Cursor 不支持文档评论自动草稿。
+Linux（x86_64、arm64，Ubuntu 22.04 / Debian 12 及更新的发行版）与 Apple Silicon 的 macOS
+有预编译包，发布在 GitHub Releases。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/baozzz1/summon/main/scripts/install.sh | sh
+```
+
+安装脚本下载本平台的包，核对字节数、SHA-256 与包内文件（macOS 上先核代码签名），再运行解出的程序
+核对构建戳，把 `summon`、
+`summon-sidecar`（macOS 另有 `summon-menubar`）装进 `~/.summon/bin/`，并提示把这个目录加进 PATH。
+`SUMMON_INSTALL_VERSION=x.y.z` 安装指定版本。已安装过的不覆盖。
+
+升级到新版并用它重启 daemon：
+
+```sh
+summon upgrade
+summon upgrade --check   # 只看有没有新版
+```
+
+`summon upgrade` 不降级；daemon 没在运行时只替换文件、不启动它。其他平台从源码构建。
+
+自动升级默认关。在 `~/.summon/config.yaml` 里写 `upgrade:` 下的 `auto: true` 后，daemon 定期查 Release，新版发布满两小时、整机空闲十分钟才换代，不打断在跑的对话；新版起不来就放回换代前的程序，不再自动采用这一版。字段见 `summon guide config`，状态看 `summon doctor`。
 
 ## 从源码构建
 

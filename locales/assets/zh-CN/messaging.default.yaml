@@ -119,6 +119,8 @@ system_prompt_feed: |
 # 取正文开头;回复里若仍带着标签,摘除照常进行。
 agent_feed: true
 document_comments_enabled: false
+document_comments_owner_mentions_enabled: false
+document_comments_non_owner_enabled: false
 document_comment_timeout_secs: 300
 
 # 表情候选:daemon 按此集合校验 agent 选用的表情键。键区分大小写，使用飞书官方 emoji_type。

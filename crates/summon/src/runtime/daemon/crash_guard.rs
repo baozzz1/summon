@@ -217,7 +217,6 @@ fn clear_boot_record_at(path: &std::path::Path, daemon_pid: u32) {
 
 /// 这一代 daemon 没走完停机就没了:它的启动记录还在。优雅停机在删 pidfile 之前就删掉了自己的记录,
 /// 所以进程不在了、记录还在,就是崩溃或被杀。
-#[cfg_attr(not(npm_dist), allow(dead_code))] // 只有自动升级在观察期里读它,不带它的构建里没有调用方
 pub(crate) fn left_unfinished(daemon_pid: u32) -> bool {
     read_record(&boot_record_file()).is_some_and(|record| record.pid == daemon_pid)
 }
@@ -258,7 +257,6 @@ fn write_stop_request_at(
 }
 
 /// 这一代 daemon 是人经 CLI 停下的:停机请求点名它,且在有效期内。
-#[cfg_attr(not(npm_dist), allow(dead_code))] // 只有自动升级在观察期里读它,不带它的构建里没有调用方
 pub(crate) fn stop_requested(daemon_pid: u32) -> bool {
     stop_requested_at(&stop_request_file(), daemon_pid, unix_now_secs())
 }

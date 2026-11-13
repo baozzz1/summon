@@ -343,6 +343,36 @@
         "write": "form"
       },
       {
+        "description": "允许处理 bot 所属或由 bot 创建后转给 owner 的文档中的非 owner 评论；回复仍须 owner 审批。",
+        "effect": "next_turn",
+        "group": "document_comments",
+        "key": "messaging.document_comments_non_owner_enabled",
+        "kind": "bool",
+        "label": "响应非 owner 的文档评论",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
+        "description": "owner 在评论中明确 @当前机器人时，以 owner 权限读取，审批后由机器人回复；需要同应用的 owner 登录。",
+        "effect": "next_turn",
+        "group": "document_comments",
+        "key": "messaging.document_comments_owner_mentions_enabled",
+        "kind": "bool",
+        "label": "允许 owner 在其他文档中 @机器人",
+        "layers": [
+          "global",
+          "agent"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
         "description": "每次起草的总时限，包含启动、模型推理和读取原文。超时后结束本次任务，不自动重试。默认5分钟。",
         "effect": "next_turn",
         "group": "document_comments",

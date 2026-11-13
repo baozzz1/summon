@@ -7,6 +7,8 @@
 //! 所有 JSON 解析拆成纯函数吃 canned fixture 单测;进程/网络失败一律 anyhow 上抛,
 //! poller 收到错误就放弃本 tick(fail-closed:拿不到事实就不动作)。
 
+pub(crate) mod document_comments;
+
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::process::Command;

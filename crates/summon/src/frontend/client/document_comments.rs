@@ -8,6 +8,61 @@ use std::time::Duration;
 const MAX_PAGES: usize = 20;
 const MAX_BODY: u64 = 2 * 1024 * 1024;
 
+#[derive(Clone, Debug)]
+pub(crate) enum CommentRead {
+    Metadata,
+    Comments,
+    Replies(String),
+    Text,
+}
+
+impl CommentRead {
+    pub(crate) fn request(
+        &self,
+        base: &str,
+        notice: &CommentNotice,
+    ) -> Result<(reqwest::Method, String, Option<Value>)> {
+        notice.validate()?;
+        Ok(match self {
+            Self::Metadata => (
+                reqwest::Method::POST,
+                endpoints::document_metadata(base),
+                Some(json!({
+                    "request_docs": [{"doc_token": notice.file_token, "doc_type": notice.file_type}], "with_url": true
+                })),
+            ),
+            Self::Comments => (
+                reqwest::Method::POST,
+                endpoints::document_comments(base, &notice.file_token, &notice.file_type),
+                Some(json!({"comment_ids": [notice.comment_id]})),
+            ),
+            Self::Replies(page) => {
+                let mut url = reqwest::Url::parse(&endpoints::document_replies(
+                    base,
+                    &notice.file_token,
+                    &notice.file_type,
+                    &notice.comment_id,
+                ))?;
+                if !page.is_empty() {
+                    url.query_pairs_mut().append_pair("page_token", page);
+                }
+                (reqwest::Method::GET, url.into(), None)
+            }
+            Self::Text => {
+                anyhow::ensure!(
+                    notice.file_type == "docx",
+                    summon_i18n::format!("rcb1a12df60")
+                );
+                (
+                    reqwest::Method::GET,
+                    endpoints::document_text(base, &notice.file_token),
+                    None,
+                )
+            }
+        })
+    }
+}
+
 impl FeishuClient {
     pub(crate) fn comment_document_text(&self, notice: &CommentNotice) -> Result<String> {
         notice.validate()?;
@@ -131,9 +186,39 @@ impl FeishuClient {
             notice.sender_open_id != bot_id && notice.recipient_open_id == bot_id,
             summon_i18n::format!("r6fe7e88520")
         );
-        let data = self.document_request(reqwest::Method::POST, &endpoints::document_metadata(&self.base), Some(&json!({
-            "request_docs": [{"doc_token": notice.file_token, "doc_type": notice.file_type}], "with_url": true
-        })))?;
+        self.comment_context(notice, bot_id, owner_id, false, &|op| {
+            let (method, url, body) = op.request(&self.base, notice)?;
+            self.document_request(method, &url, body.as_ref())
+        })
+    }
+
+    pub(crate) fn owner_mentioned_comment_context(
+        &self,
+        notice: &CommentNotice,
+        bot_id: &str,
+        owner_id: &str,
+        read: &dyn Fn(CommentRead) -> Result<Value>,
+    ) -> Result<CommentContext> {
+        notice.validate()?;
+        anyhow::ensure!(
+            !owner_id.is_empty()
+                && notice.sender_open_id == owner_id
+                && notice.sender_open_id != bot_id
+                && notice.recipient_open_id == bot_id,
+            summon_i18n::format!("r741f9c4973")
+        );
+        self.comment_context(notice, bot_id, owner_id, true, read)
+    }
+
+    fn comment_context(
+        &self,
+        notice: &CommentNotice,
+        bot_id: &str,
+        owner_id: &str,
+        owner_mention: bool,
+        read: &dyn Fn(CommentRead) -> Result<Value>,
+    ) -> Result<CommentContext> {
+        let data = read(CommentRead::Metadata)?;
         let metas = data["metas"]
             .as_array()
             .context(summon_i18n::text!("rf45fb64810"))?;
@@ -143,9 +228,14 @@ impl FeishuClient {
                 meta["doc_token"] == notice.file_token && meta["doc_type"] == notice.file_type
             })
             .ok_or_else(|| {
-                anyhow::anyhow!(summon_i18n::format!("r45bac859c2")).context(OutOfScope)
+                let error = anyhow::anyhow!(summon_i18n::format!("r45bac859c2"));
+                if owner_mention {
+                    error
+                } else {
+                    error.context(OutOfScope)
+                }
             })?;
-        if meta["owner_id"].as_str() != Some(bot_id) {
+        if !owner_mention && meta["owner_id"].as_str() != Some(bot_id) {
             anyhow::ensure!(!owner_id.is_empty(), summon_i18n::format!("r35179afbf2"));
             if meta["owner_id"].as_str() != Some(owner_id) {
                 return Err(
@@ -171,11 +261,7 @@ impl FeishuClient {
             .as_str()
             .context(summon_i18n::text!("r996573f218"))?
             .to_string();
-        let data = self.document_request(
-            reqwest::Method::POST,
-            &endpoints::document_comments(&self.base, &notice.file_token, &notice.file_type),
-            Some(&json!({"comment_ids": [notice.comment_id]})),
-        )?;
+        let data = read(CommentRead::Comments)?;
         let comment = data["items"]
             .as_array()
             .context(summon_i18n::text!("r4725d3f2b4"))?
@@ -194,16 +280,7 @@ impl FeishuClient {
         let mut tokens = std::collections::HashSet::new();
         let mut complete = false;
         for _ in 0..MAX_PAGES {
-            let mut url = reqwest::Url::parse(&endpoints::document_replies(
-                &self.base,
-                &notice.file_token,
-                &notice.file_type,
-                &notice.comment_id,
-            ))?;
-            if !page.is_empty() {
-                url.query_pairs_mut().append_pair("page_token", &page);
-            }
-            let data = self.document_request(reqwest::Method::GET, url.as_str(), None)?;
+            let data = read(CommentRead::Replies(page.clone()))?;
             let items = data["items"]
                 .as_array()
                 .context(summon_i18n::text!("r5553683cc6"))?;
@@ -234,6 +311,19 @@ impl FeishuClient {
             triggering["user_id"].as_str() == Some(notice.sender_open_id.as_str()),
             summon_i18n::format!("ree73bdcef5")
         );
+        if owner_mention {
+            anyhow::ensure!(
+                triggering["content"]["elements"]
+                    .as_array()
+                    .is_some_and(|elements| {
+                        elements.iter().any(|element| {
+                            element["type"] == "person"
+                                && element["person"]["user_id"].as_str() == Some(bot_id)
+                        })
+                    }),
+                summon_i18n::format!("r741f9c4973")
+            );
+        }
         let mut thread = Vec::new();
         for reply in &replies {
             let text = comment_plaintext(&reply["content"])?;
@@ -251,6 +341,7 @@ impl FeishuClient {
             "solved": solved, "whole": whole, "quote": quote, "replies": replies
         }))?);
         Ok(CommentContext {
+            owner_mention,
             title,
             url,
             quote,
@@ -458,6 +549,62 @@ mod tests {
             assert!(fc
                 .owned_comment_context(&event, "ou_bot", "ou_owner")
                 .is_err());
+        }
+    }
+
+    #[test]
+    fn inaccessible_owner_document_reports_a_read_failure() {
+        let fc = FeishuClient::new("feishu.cn", "app".into(), "secret".into(), true);
+        let mut event = notice();
+        event.sender_open_id = "ou_owner".into();
+        let error = fc
+            .owner_mentioned_comment_context(&event, "ou_bot", "ou_owner", &|_| {
+                Ok(json!({"metas":[]}))
+            })
+            .unwrap_err();
+        assert!(!crate::runtime::document_comments::is_out_of_scope(&error));
+    }
+
+    #[test]
+    fn owner_mentions_require_exact_author_and_structured_self_mention() {
+        for (sender, author, mention, allowed) in [
+            ("ou_owner", "ou_owner", "ou_bot", true),
+            ("ou_reader", "ou_reader", "ou_bot", false),
+            ("ou_owner", "ou_reader", "ou_bot", false),
+            ("ou_owner", "ou_owner", "ou_other", false),
+            ("ou_owner", "ou_owner", "", false),
+        ] {
+            let fc = FeishuClient::new("feishu.cn", "app".into(), "secret".into(), true);
+            fc.names
+                .lock()
+                .unwrap()
+                .insert("ou_owner".into(), "Owner".into());
+            let mut event = notice();
+            event.sender_open_id = sender.into();
+            let read = |op: CommentRead| {
+                Ok(match op {
+                    CommentRead::Metadata => metadata("ou_third_party"),
+                    CommentRead::Comments => {
+                        json!({"items":[{"comment_id":"100","is_whole":false,"is_solved":false,"quote":"Quote"}]})
+                    }
+                    CommentRead::Replies(_) => {
+                        let mut r = reply("200", author, "@ou_bot please help");
+                        if !mention.is_empty() {
+                            r["content"]["elements"]
+                                .as_array_mut()
+                                .unwrap()
+                                .push(json!({"type":"person","person":{"user_id":mention}}));
+                        }
+                        json!({"items":[r],"has_more":false})
+                    }
+                    CommentRead::Text => panic!("context must not load full document"),
+                })
+            };
+            let result = fc.owner_mentioned_comment_context(&event, "ou_bot", "ou_owner", &read);
+            assert_eq!(result.is_ok(), allowed, "{sender}/{author}/{mention}");
+            if let Ok(context) = result {
+                assert!(context.owner_mention);
+            }
         }
     }
 

@@ -1497,7 +1497,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "summon"
-version = "0.6.49"
+version = "0.6.50"
 dependencies = [
  "anyhow",
  "base64",
@@ -1536,12 +1536,15 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "dirs",
+ "flate2",
  "pulldown-cmark",
+ "ring",
  "serde",
  "serde_json",
  "serde_yaml",
  "strip-ansi-escapes",
  "summon-i18n",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "unicode-width",

@@ -80,6 +80,8 @@ system_prompt_feed: |
   - Include it once, only at the end of the final reply. Omit it for silent reset (only __SUMMON_SILENT_EXIT__) or when no reply should be sent.
 agent_feed: true
 document_comments_enabled: false
+document_comments_owner_mentions_enabled: false
+document_comments_non_owner_enabled: false
 document_comment_timeout_secs: 300
 reactions:
 - OK

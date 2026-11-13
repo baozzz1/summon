@@ -890,6 +890,22 @@
       },
       {
         "editable": true,
+        "effective": false,
+        "key": "messaging.document_comments_non_owner_enabled",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
+        "effective": false,
+        "key": "messaging.document_comments_owner_mentions_enabled",
+        "overridden_by": [],
+        "source": "builtin",
+        "value": null
+      },
+      {
+        "editable": true,
         "effective": 300,
         "key": "messaging.document_comment_timeout_secs",
         "overridden_by": [],

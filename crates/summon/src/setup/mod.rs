@@ -1,10 +1,12 @@
 pub mod agents_add;
+pub(crate) mod auto_upgrade;
 pub mod autostart;
 pub mod bind;
 pub mod claude_quota;
 pub(crate) mod config_edit;
 pub(crate) mod config_findings;
 pub mod env;
+pub mod github_upgrade;
 pub mod init;
 pub(crate) mod lark_cli;
 pub(crate) mod launchd;
@@ -19,3 +21,4 @@ pub mod npm_dist;
 pub mod onboard;
 pub mod self_install;
 pub mod sentinel_config;
+pub(crate) mod upgrade_restart;

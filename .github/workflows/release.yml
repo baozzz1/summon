@@ -1,0 +1,213 @@
+name: release
+
+# 每个版本一个 Release:这里在 Linux runner 上构建两个 Linux 包,建草稿 Release 并上传。
+# macOS 包、manifest.json 与「草稿转为发布」在发版的 Mac 上完成(macOS runner 暂不启用),
+# 所以这个工作流从不把草稿转为发布。整轮重跑能接着做:已发布的 Release 整个跳过;同一提交的草稿
+# 沿用它,已传齐的平台跳过;目标提交不同的草稿、只传了一半的平台、已有 manifest.json 的草稿都失败,
+# 不覆盖已有附件。同名 git tag 已存在却不指向本次提交时也失败(GitHub 发布会沿用已有 tag)。
+# 判定在 scripts/github-release/release_plan.py。
+#
+# tag:main 上是 v<版本>;其它分支(release-test/**)是 test-<提交前 7 位>,草稿标成 prerelease,只用于演练。
+
+on:
+  push:
+    branches: [main, 'release-test/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      skip: ${{ steps.plan.outputs.skip }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create draft release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 scripts/github-release/release_info.py version)"
+          TAG="$(python3 scripts/github-release/release_info.py tag --ref-name "$REF_NAME" --sha "$SHA")"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "版本 $VERSION,tag $TAG,提交 $SHA"
+          # 同名 tag 已存在时 GitHub 发布会沿用它、忽略草稿的目标提交:先查它指向哪个提交,
+          # 附注 tag 经 git/tags 一层层解到提交;不存在是 404。
+          TAG_STATE=(--tag-absent)
+          rc=0
+          gh api "repos/$REPO/git/ref/tags/$TAG" > "$RUNNER_TEMP/ref.json" 2> "$RUNNER_TEMP/ref.err" || rc=$?
+          if [ "$rc" = 0 ]; then
+            OBJECT="$(python3 scripts/github-release/release_plan.py git-object --json "$RUNNER_TEMP/ref.json")"
+            read -r OBJ_TYPE OBJ_SHA <<< "$OBJECT"
+            for _ in 1 2 3 4 5; do
+              [ "$OBJ_TYPE" = tag ] || break
+              gh api "repos/$REPO/git/tags/$OBJ_SHA" > "$RUNNER_TEMP/ref.json"
+              OBJECT="$(python3 scripts/github-release/release_plan.py git-object --json "$RUNNER_TEMP/ref.json")"
+              read -r OBJ_TYPE OBJ_SHA <<< "$OBJECT"
+            done
+            [ "$OBJ_TYPE" = commit ] || { echo "::error::tag $TAG 解不到提交(最后是 $OBJ_TYPE $OBJ_SHA)"; exit 1; }
+            echo "tag $TAG 已存在,指向 $OBJ_SHA"
+            TAG_STATE=(--tag-commit "$OBJ_SHA")
+          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/ref.err"; then
+            cat "$RUNNER_TEMP/ref.err" >&2
+            echo "::error::查不出 tag $TAG 是否存在"
+            exit 1
+          fi
+          rc=0
+          gh release view "$TAG" --repo "$REPO" --json isDraft,targetCommitish,assets \
+            > "$RUNNER_TEMP/view.json" 2> "$RUNNER_TEMP/view.err" || rc=$?
+          if [ "$rc" = 0 ]; then
+            DECISION="$(python3 scripts/github-release/release_plan.py prepare --sha "$SHA" "${TAG_STATE[@]}" --release-json "$RUNNER_TEMP/view.json")"
+          elif grep -q 'release not found' "$RUNNER_TEMP/view.err"; then
+            DECISION="$(python3 scripts/github-release/release_plan.py prepare --sha "$SHA" "${TAG_STATE[@]}")"
+          else
+            cat "$RUNNER_TEMP/view.err" >&2
+            echo "::error::查不出 Release $TAG 是否存在"
+            exit 1
+          fi
+          case "$DECISION" in
+            skip)
+              echo "::notice::Release $TAG 已发布,本次不构建、不上传"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            continue)
+              echo "::notice::沿用已有的草稿 $TAG(目标提交相同),接着构建上传"
+              ;;
+            create)
+              python3 scripts/github-release/release_info.py notes --version "$VERSION" > "$RUNNER_TEMP/notes.md"
+              args=(--draft --target "$SHA" --notes-file "$RUNNER_TEMP/notes.md")
+              case "$TAG" in
+                v*) args+=(--title "summon $VERSION") ;;
+                *) args+=(--prerelease --title "summon $VERSION(演练 ${SHA:0:7})") ;;
+              esac
+              gh release create "$TAG" --repo "$REPO" "${args[@]}"
+              ;;
+            *)
+              echo "::error::release_plan.py 给出不认识的决定:$DECISION"
+              exit 1
+              ;;
+          esac
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.skip == 'false'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 在 Ubuntu 22.04 上构建,glibc 2.35 + OpenSSL 3 就是最低支持的系统;package.sh 会拒绝
+          # 引用了更新 glibc 符号的二进制。
+          - runner: ubuntu-22.04
+            platform: linux-x64
+          - runner: ubuntu-22.04-arm
+            platform: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: sidecar/feishu-connector/go.mod
+          cache: false
+      - name: Package
+        run: bash scripts/github-release/package.sh --out "$RUNNER_TEMP/release"
+      # 解包后能跑、自报的构建戳与 .build.json 一致,才交给上传。
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/smoke"
+          tar -xzf "$RUNNER_TEMP/release/summon-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/smoke"
+          ls -l "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/summon" --version
+          "$RUNNER_TEMP/smoke/summon" install-stamp print > "$RUNNER_TEMP/stamp.json"
+          python3 - "$RUNNER_TEMP/stamp.json" "$RUNNER_TEMP/release/summon-$PLATFORM.build.json" << 'PY'
+          import json, sys
+          stamp = json.load(open(sys.argv[1]))
+          build = json.load(open(sys.argv[2]))
+          for field in ('version', 'commit', 'commit_time'):
+              if stamp[field] != build[field]:
+                  sys.exit(f'{field}: 二进制自报 {stamp[field]!r},.build.json 记的是 {build[field]!r}')
+          print('构建戳一致:', stamp)
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: summon-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/release/summon-${{ matrix.platform }}.tar.gz
+            ${{ runner.temp }}/release/summon-${{ matrix.platform }}.build.json
+          if-no-files-found: error
+          retention-days: 7
+
+  upload:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # 只取判定脚本;这个 job 有写权限,不跑仓库里的构建。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: summon-linux-*
+          path: ${{ runner.temp }}/assets
+          merge-multiple: true
+      # 按平台成对上传:已传齐的平台跳过,只传了一半或已有 manifest.json 就失败,不覆盖。
+      - name: Upload to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json isDraft,targetCommitish,assets > "$RUNNER_TEMP/release.json"
+          python3 scripts/github-release/release_plan.py upload --sha "$SHA" \
+            --release-json "$RUNNER_TEMP/release.json" \
+            --platform linux-x64 --platform linux-arm64 > "$RUNNER_TEMP/uploads.txt"
+          files=()
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            [ -f "$RUNNER_TEMP/assets/$name" ] || { echo "::error::缺构建产物 $name"; exit 1; }
+            files+=("$RUNNER_TEMP/assets/$name")
+          done < "$RUNNER_TEMP/uploads.txt"
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::notice::两个 Linux 平台都已在草稿 $TAG 里,没有要上传的"
+            exit 0
+          fi
+          gh release upload "$TAG" --repo "$REPO" "${files[@]}"

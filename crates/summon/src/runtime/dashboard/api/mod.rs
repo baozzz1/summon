@@ -265,6 +265,7 @@ impl ApiEnv {
             operations: std::sync::RwLock::new(()),
             analysis: crate::runtime::insights_analysis::Service::new(
                 home.join("run").join("insights-analysis"),
+                crate::runtime::turn_ledger::outside_dir_in(&home.join("run")),
                 Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ),
             home,

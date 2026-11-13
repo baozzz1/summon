@@ -530,7 +530,7 @@ pub const KEY_NOTES: &[KeyNote] = &[
         NoteKind::RawOnly,
         "rfc86c51b11",
     ),
-    note(RawKind::Config, "upgrade", NoteKind::RawOnly, "r57dd131753"),
+    note(RawKind::Config, "upgrade", NoteKind::RawOnly, "rc65e64aa17"),
     note(
         RawKind::Agent,
         "runtime.execution",
@@ -902,6 +902,26 @@ pub const FIELDS: &[FieldDecl] = &[
         "",
     )
     .setting(SettingKey::DocumentComments),
+    FieldDecl::new(
+        "messaging.document_comments_non_owner_enabled",
+        "rce45d2cbd8",
+        "document_comments",
+        Bool,
+        GA,
+        NextTurn,
+        "r1e5e19fd0a",
+    )
+    .setting(SettingKey::DocumentNonOwnerComments),
+    FieldDecl::new(
+        "messaging.document_comments_owner_mentions_enabled",
+        "rba458e5eec",
+        "document_comments",
+        Bool,
+        GA,
+        NextTurn,
+        "rd9493bfc14",
+    )
+    .setting(SettingKey::DocumentOwnerMentions),
     FieldDecl::new(
         "messaging.document_comment_timeout_secs",
         "r8d1ff99074",

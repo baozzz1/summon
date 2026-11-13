@@ -136,7 +136,6 @@ fn mark_handling_change() {
 }
 
 /// 最近一次有会话开始或结束处理消息的时刻。两次采样之间跑完的短轮,靠它也看得见。
-#[cfg_attr(not(npm_dist), allow(dead_code))] // 只有自动升级判整机空闲时读它,不带它的构建里没有调用方
 pub fn last_handling_change() -> Option<SystemTime> {
     match LAST_HANDLING_CHANGE_MS.load(Ordering::SeqCst) {
         0 => None,
@@ -145,7 +144,6 @@ pub fn last_handling_change() -> Option<SystemTime> {
 }
 
 /// 此刻正在处理消息的会话(按 agent/tag 稳定排序、去重)。
-#[cfg_attr(not(npm_dist), allow(dead_code))] // 只有自动升级判整机空闲时读它,不带它的构建里没有调用方
 pub fn handling_chats() -> Vec<BusyTurn> {
     let mut chats: Vec<BusyTurn> = lock_handling()
         .values()

@@ -81,6 +81,8 @@ pub enum SettingKey {
     AgentFeed,
     /// 文档评论自动起草与审批发布。
     DocumentComments,
+    DocumentOwnerMentions,
+    DocumentNonOwnerComments,
 }
 
 /// 一条开关声明。`get` 把 key 绑到 [`Messaging`] 的对应字段上 —— 默认值的真相源因此仍是
@@ -113,6 +115,28 @@ pub struct SettingDecl {
 
 /// 全部分级开关。加开关在这里加一行。
 pub const SETTINGS: &[SettingDecl] = &[
+    SettingDecl {
+        key: "document_comments.non_owner",
+        config_key: "document_comments_non_owner_enabled",
+        id: SettingKey::DocumentNonOwnerComments,
+        label: "rce45d2cbd8",
+        get: |m| m.document_comments_non_owner_enabled,
+        chat_scoped: false,
+        consumer: Consumer::Daemon,
+        config_inverted: false,
+        description: "r1e5e19fd0a",
+    },
+    SettingDecl {
+        key: "document_comments.owner_mentions",
+        config_key: "document_comments_owner_mentions_enabled",
+        id: SettingKey::DocumentOwnerMentions,
+        label: "rba458e5eec",
+        get: |m| m.document_comments_owner_mentions_enabled,
+        chat_scoped: false,
+        consumer: Consumer::Daemon,
+        config_inverted: false,
+        description: "rd9493bfc14",
+    },
     SettingDecl {
         key: "document_comments.enabled",
         config_key: "document_comments_enabled",
@@ -233,7 +257,7 @@ pub struct ChatOverrides {
 }
 
 /// 开关数组容量；每条声明的槽位与可覆盖行为由配置测试验证。
-pub const SETTING_COUNT: usize = 8;
+pub const SETTING_COUNT: usize = 10;
 
 /// [`SettingKey`] 到定长数组下标的映射。新增 key 时编译器会在这里报 non-exhaustive。
 const fn slot(id: SettingKey) -> usize {
@@ -246,6 +270,8 @@ const fn slot(id: SettingKey) -> usize {
         SettingKey::BadgeEffort => 5,
         SettingKey::AgentFeed => 6,
         SettingKey::DocumentComments => 7,
+        SettingKey::DocumentOwnerMentions => 8,
+        SettingKey::DocumentNonOwnerComments => 9,
     }
 }
 

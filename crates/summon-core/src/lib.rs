@@ -19,6 +19,7 @@ pub mod parse;
 pub mod peers;
 pub mod port;
 pub mod recall;
+pub mod release;
 pub mod remote;
 pub mod remote_tools;
 pub mod schedule;

@@ -1451,9 +1451,8 @@ pub fn run() -> anyhow::Result<()> {
     );
     // 控制台的费用按这份价格表算:后台拉取,失败只记日志,不影响启动。
     crate::runtime::prices::spawn_refresher(run_dir());
-    // npm 安装的自动升级:后台检查、装包、等整机空闲后换代;不往飞书发任何东西。
-    #[cfg(npm_dist)]
-    crate::setup::npm_dist::auto_upgrade::spawn(Arc::clone(&shutdown));
+    // 自动升级:后台检查、取新版、等整机空闲后换代;不往飞书发任何东西。默认关。
+    crate::setup::auto_upgrade::spawn(Arc::clone(&shutdown));
     // PF2:启动期清扫各 agent 的 inbound 附件/长引用 spill(30 天 TTL)——它们是「为某条
     // 消息落的临时上下文」,此前无任何轮转/清理,重度使用下无界增长。失败 log-ignore。
     for a in reg.routable() {

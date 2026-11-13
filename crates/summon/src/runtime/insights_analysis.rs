@@ -11,7 +11,10 @@
 //! - 进程自成进程组;超时或 daemon 停机时先 SIGINT 整组,宽限之后才 SIGKILL 兜底,不发 SIGTERM。
 //! - 结果落 `run/insights-analysis/<槽>.json`,一个槽一份,保留最近 [`KEEP`] 个槽。
 //!
-//! 这次调用的 token 记在结果里,不进 `run/usage/`:文档评论起草这条同类通路也不记。
+//! 这次调用的 token 记在结果里,同时记一行轮外用量(`run/usage/`),归到跑它的主 agent,用量页与
+//! `summon usage` 照常合计、计价。CLI 报了用量就记,成败不论(模型回了话、结果被判不合格也花了钱);
+//! 没报(超时被杀、进程没起来)不记。每次运行至多一行;写不进只记日志,不影响结果。一次性进程不落会话、
+//! 临时 thread 不进会话池,转录与 RPC 两条既有的用量采集都读不到它,不会重复计。
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -31,6 +34,7 @@ use summon_core::insights_analysis::{
     self as core, AnalysisUsage, CacheKey, Candidate, PrimarySource, Unsupported,
 };
 use summon_core::registry::{Agent, AgentRole};
+use summon_core::turn_ledger::{self as ledger, ModelUsage, OutsideUsage};
 
 use crate::observe::log::log;
 use crate::runtime::executor::ChildKiller;
@@ -44,8 +48,9 @@ const MAX_OUTPUT: u64 = 256 * 1024;
 /// SIGINT 之后等它自己退出的宽限,与 daemon 停机打断无头轮的宽限相同。
 const GRACE: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(100);
-/// 过准入闸时登记的会话名:让 daemon 换代方看得见它在忙。
-const ADMISSION_TAG: &str = "insights-analysis";
+/// 分析的会话名:过准入闸时登记它,让 daemon 换代方看得见它在忙;记轮外用量时它是那一行的 `tag`,
+/// 用量页凭它认出这一行来自洞察分析。
+pub(crate) const SESSION_TAG: &str = "insights-analysis";
 
 /// 此刻活着的分析工作线程数。daemon 停机时等它归零(有上限)。
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
@@ -252,16 +257,18 @@ struct Running {
 /// 分析服务:一个 daemon 一份(挂在控制台的接口环境上)。
 pub(crate) struct Service {
     dir: PathBuf,
+    usage_dir: PathBuf,
     stop: Arc<AtomicBool>,
     timeout_ms: AtomicU64,
     running: Arc<Mutex<Option<Running>>>,
 }
 
 impl Service {
-    /// `dir` 是结果目录;`stop` 置位即中止在跑的分析(daemon 停机)。
-    pub(crate) fn new(dir: PathBuf, stop: Arc<AtomicBool>) -> Self {
+    /// `dir` 是结果目录,`usage_dir` 是轮外用量目录;`stop` 置位即中止在跑的分析(daemon 停机)。
+    pub(crate) fn new(dir: PathBuf, usage_dir: PathBuf, stop: Arc<AtomicBool>) -> Self {
         Self {
             dir,
+            usage_dir,
             stop,
             timeout_ms: AtomicU64::new(TIMEOUT.as_millis() as u64),
             running: Arc::new(Mutex::new(None)),
@@ -323,6 +330,7 @@ impl Service {
         ACTIVE.fetch_add(1, Ordering::SeqCst);
         Worker {
             dir: self.dir.clone(),
+            usage_dir: self.usage_dir.clone(),
             stop: Arc::clone(&self.stop),
             timeout: self.timeout(),
             claim: Claim {
@@ -393,6 +401,7 @@ impl Drop for Claim {
 
 struct Worker {
     dir: PathBuf,
+    usage_dir: PathBuf,
     stop: Arc<AtomicBool>,
     timeout: Duration,
     claim: Claim,
@@ -403,10 +412,13 @@ impl Worker {
         let agent = &job.agent.name;
         let cli = job.agent.cli_kind().to_string();
         log(&summon_i18n::format!("r32aa0076d7"));
+        let started_ms = now_ms();
         let started = Instant::now();
-        let outcome = execute(job, &self.stop, started + self.timeout);
+        let mut spent = Vec::new();
+        let outcome = execute(job, &self.stop, started + self.timeout, &mut spent);
         let elapsed_ms = started.elapsed().as_millis() as u64;
         let now = now_ms();
+        self.bill(agent, &cli, spent, started_ms, now);
         let ran = match outcome {
             Ok(output) => {
                 let (text, truncated) = core::clip(&output.text);
@@ -469,6 +481,41 @@ impl Worker {
         // 先落盘再释放位置:读的一方不会在两者之间看到「没有结果」。
         drop(self.claim);
         ran
+    }
+
+    /// 这次运行 CLI 报出的 token 记成一行轮外用量。不属于任何群,`chat_id` 留空,`tag` 记成分析
+    /// 的会话名。
+    fn bill(&self, agent: &str, cli: &str, usage: Vec<ModelUsage>, started_ms: i64, ended_ms: i64) {
+        if usage.is_empty() {
+            return;
+        }
+        let (from_ms, to_ms) = one_day(started_ms, ended_ms);
+        let row = OutsideUsage {
+            agent: agent.to_string(),
+            chat_id: String::new(),
+            tag: SESSION_TAG.to_string(),
+            cli: cli.to_string(),
+            from_ms,
+            to_ms,
+            usage,
+        };
+        if let Err(error) = crate::runtime::turn_ledger::append_outside(&self.usage_dir, &row) {
+            // 记账是旁路:写不进只是用量页少计这一次,分析结果照常落盘、照常返回。
+            log(&format!("insights-analysis: usage: {error:#}"));
+        }
+    }
+}
+
+/// 一行轮外用量不跨本机的自然日(按天统计时整行落在 `from_ms` 那天):跑过零点的那次整行记在结束那一刻。
+fn one_day(started_ms: i64, ended_ms: i64) -> (i64, i64) {
+    let day = |ms: i64| {
+        chrono::DateTime::from_timestamp_millis(ms)
+            .map(|t| t.with_timezone(&chrono::Local).date_naive())
+    };
+    if day(started_ms) == day(ended_ms) {
+        (started_ms, ended_ms)
+    } else {
+        (ended_ms, ended_ms)
     }
 }
 
@@ -579,11 +626,17 @@ impl Control<'_> {
     }
 }
 
-fn execute(job: &Job, stop: &AtomicBool, deadline: Instant) -> Result<Output, Failure> {
+/// `spent` 收 CLI 报出的 token(按模型合并):失败的运行报了也留着,由调用方记账。
+fn execute(
+    job: &Job,
+    stop: &AtomicBool,
+    deadline: Instant,
+    spent: &mut Vec<ModelUsage>,
+) -> Result<Output, Failure> {
     // 与一轮一样过准入闸:换代前关闸时在这里等,停机开始后不再开跑。
     let Some(_handling) = crate::runtime::admission::GATE.admit(
         &job.agent.name,
-        ADMISSION_TAG,
+        SESSION_TAG,
         crate::runtime::admission::Kind::Task,
     ) else {
         return Err(Failure::Stopped);
@@ -594,9 +647,9 @@ fn execute(job: &Job, stop: &AtomicBool, deadline: Instant) -> Result<Output, Fa
     let env = crate::runtime::daemon::document_comment_draft::backend_env(&job.agent, driver);
     let temp = tempfile::tempdir().map_err(|e| Failure::Spawn(e.to_string()))?;
     match driver {
-        CliDriver::Claude => run_claude(&job.agent, &job.prompt, env, temp.path(), &control),
+        CliDriver::Claude => run_claude(&job.agent, &job.prompt, env, temp.path(), &control, spent),
         CliDriver::Codex | CliDriver::Traex => {
-            run_codex(&job.agent, &job.prompt, env, temp.path(), &control)
+            run_codex(&job.agent, &job.prompt, env, temp.path(), &control, spent)
         }
         // `plan` 已挡下其余 CLI;这里不起进程。
         _ => Err(Failure::Spawn(job.agent.cli_kind().to_string())),
@@ -637,6 +690,7 @@ fn run_claude(
     env: Vec<(String, String)>,
     cwd: &Path,
     control: &Control<'_>,
+    spent: &mut Vec<ModelUsage>,
 ) -> Result<Output, Failure> {
     let io = |e: std::io::Error| Failure::Spawn(e.to_string());
     let input = cwd.join("prompt.txt");
@@ -659,8 +713,76 @@ fn run_claude(
         .stdout(output)
         .stderr(Stdio::null())
         .process_group(0);
-    let raw = supervise(command, &output_path, control)?;
-    parse_claude(&raw)
+    let exited = supervise(command, &output_path, control)?;
+    if let Ok(raw) = &exited.output {
+        let configured = crate::runtime::chat_model::effective(agent, None);
+        *spent = claude_spent(raw, configured.model());
+    }
+    if !exited.status.success() {
+        return Err(control.explain(Failure::Exit(exited.status.to_string())));
+    }
+    parse_claude(&exited.output?)
+}
+
+/// claude 结果里报的 token,不论成败。`modelUsage` 按实际用的模型分开报(含 claude 自己的辅助
+/// 请求);没有它时退回顶层 `usage`,记在配置的模型名下。只有合计、分不出单次请求的输入量,不分档、
+/// 每个模型记一次请求(同运行记录里只有按轮合计时的处置)。
+fn claude_spent(raw: &str, configured: Option<&str>) -> Vec<ModelUsage> {
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    let n = |u: &Value, k: &str| u[k].as_u64().unwrap_or(0);
+    let groups: Vec<ModelUsage> = match value["modelUsage"].as_object() {
+        Some(models) if !models.is_empty() => models
+            .iter()
+            .map(|(model, u)| {
+                let split = u.get("cacheCreationEphemeral5mInputTokens").is_some()
+                    || u.get("cacheCreationEphemeral1hInputTokens").is_some();
+                let (write_5m, write_1h) = if split {
+                    (
+                        n(u, "cacheCreationEphemeral5mInputTokens"),
+                        n(u, "cacheCreationEphemeral1hInputTokens"),
+                    )
+                } else {
+                    (n(u, "cacheCreationInputTokens"), 0)
+                };
+                ModelUsage {
+                    model: model.clone(),
+                    requests: 1,
+                    input: n(u, "inputTokens"),
+                    output: n(u, "outputTokens"),
+                    cache_read: n(u, "cacheReadInputTokens"),
+                    cache_write_5m: write_5m,
+                    cache_write_1h: write_1h,
+                    ..Default::default()
+                }
+            })
+            .collect(),
+        _ => {
+            let u = &value["usage"];
+            if !u.is_object() {
+                return Vec::new();
+            }
+            let (write_5m, write_1h) = match u.get("cache_creation") {
+                Some(c) => (
+                    n(c, "ephemeral_5m_input_tokens"),
+                    n(c, "ephemeral_1h_input_tokens"),
+                ),
+                None => (n(u, "cache_creation_input_tokens"), 0),
+            };
+            vec![ModelUsage {
+                model: configured.unwrap_or_default().to_string(),
+                requests: 1,
+                input: n(u, "input_tokens"),
+                output: n(u, "output_tokens"),
+                cache_read: n(u, "cache_read_input_tokens"),
+                cache_write_5m: write_5m,
+                cache_write_1h: write_1h,
+                ..Default::default()
+            }]
+        }
+    };
+    groups.into_iter().filter(|g| g.tokens() > 0).collect()
 }
 
 /// 只认完整成功的结果。
@@ -727,11 +849,18 @@ impl Drop for Process {
     }
 }
 
+/// 进程自己退出了:退出状态,与它写下的输出(读不出、超出上限时是对应的失败)。
+struct Exited {
+    status: std::process::ExitStatus,
+    output: Result<String, Failure>,
+}
+
+/// 跑到进程自己退出。退出码非零也读输出:模型回了话却判为失败时,输出里仍报着用量。
 fn supervise(
     mut command: Command,
     output: &Path,
     control: &Control<'_>,
-) -> Result<String, Failure> {
+) -> Result<Exited, Failure> {
     control.check()?;
     let child = command.spawn().map_err(|e| Failure::Spawn(e.to_string()))?;
     let killer = ChildKiller::new(child.id() as i32);
@@ -757,17 +886,15 @@ fn supervise(
     };
     // 组长退了,组里可能还有它起的进程。
     process.stop();
-    if !status.success() {
-        return Err(control.explain(Failure::Exit(status.to_string())));
-    }
     let mut raw = String::new();
-    std::fs::File::open(output)
-        .and_then(|f| f.take(MAX_OUTPUT + 1).read_to_string(&mut raw))
-        .map_err(|e| Failure::Incomplete(e.to_string()))?;
-    if raw.len() as u64 > MAX_OUTPUT {
-        return Err(Failure::TooLarge);
-    }
-    Ok(raw)
+    let read =
+        std::fs::File::open(output).and_then(|f| f.take(MAX_OUTPUT + 1).read_to_string(&mut raw));
+    let output = match read {
+        Err(e) => Err(Failure::Incomplete(e.to_string())),
+        Ok(_) if raw.len() as u64 > MAX_OUTPUT => Err(Failure::TooLarge),
+        Ok(_) => Ok(raw),
+    };
+    Ok(Exited { status, output })
 }
 
 /// codex / traex:app-server 的临时只读 thread,所有 MCP 关掉、不开 shell 工具、不落会话。
@@ -777,6 +904,7 @@ fn run_codex(
     env: Vec<(String, String)>,
     cwd: &Path,
     control: &Control<'_>,
+    spent: &mut Vec<ModelUsage>,
 ) -> Result<Output, Failure> {
     use crate::codex::codex_app_server::{
         CodexAppServerClient, CodexAppServerConfig, CodexAppServerError, TurnOptions,
@@ -842,12 +970,25 @@ fn run_codex(
     let mut text: Option<String> = None;
     let mut final_seen = false;
     let mut usage = None;
+    // 记账的口径与会话轮相同:每次模型请求一笔、按请求分档,模型记 `turn/start` 下发的那个。
+    let model = effective.model().map(str::to_string);
+    let mut tally = crate::capture::rpc::RequestTally::new(&turn.id);
+    let mut requests = Vec::new();
     loop {
         if let Err(failure) = control.check() {
             let _ = client.interrupt(GRACE);
             return Err(failure);
         }
-        match client.recv_notification(Some(POLL)) {
+        let next = client.recv_notification(Some(POLL));
+        if let Ok(notification @ CodexAppServerNotification::TokenUsage { thread_id, .. }) = &next {
+            if *thread_id == thread.id {
+                if let Some(request) = tally.observe(notification, model.clone(), None) {
+                    requests.push(request);
+                    *spent = ledger::merge_requests(&requests, None);
+                }
+            }
+        }
+        match next {
             Ok(CodexAppServerNotification::ItemCompleted {
                 thread_id,
                 turn_id,
@@ -924,7 +1065,10 @@ printf '%s|%s|%s' "${ANTHROPIC_AUTH_TOKEN-}" "${OPENAI_API_KEY-}" "${SUMMON_AGEN
 n=$(cat "$root/count" 2>/dev/null || echo 0); echo $((n+1)) > "$root/count"
 mode=$(cat "$root/mode" 2>/dev/null || echo ok)
 case "$mode" in
-ok) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"  观察:间隔集中在长尾。  ","usage":{"input_tokens":120,"output_tokens":45,"cache_read_input_tokens":300,"cache_creation_input_tokens":7}}' ;;
+ok) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"  观察:间隔集中在长尾。  ","usage":{"input_tokens":120,"output_tokens":45,"cache_read_input_tokens":300,"cache_creation_input_tokens":7},"modelUsage":{"claude-analysis-1":{"inputTokens":120,"outputTokens":45,"cacheReadInputTokens":300,"cacheCreationInputTokens":7,"cacheCreationEphemeral5mInputTokens":3,"cacheCreationEphemeral1hInputTokens":4},"claude-helper-1":{"inputTokens":9,"outputTokens":1}}}' ;;
+refused) printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"result":"refused","usage":{"input_tokens":11,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":5}}'; exit 1 ;;
+empty) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"  ","modelUsage":{"claude-analysis-1":{"inputTokens":6,"outputTokens":1}}}' ;;
+zero) printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"result":"no credit","usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{}}'; exit 1 ;;
 long) awk 'BEGIN{s="{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\""; for(i=0;i<7000;i++) s=s "x"; print s "\"}"}' ;;
 fail) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"partial"}'; exit 1 ;;
 garbage) printf 'not json\n' ;;
@@ -939,6 +1083,8 @@ esac
         agent: Agent,
         _agent_dir: tempfile::TempDir,
         results: tempfile::TempDir,
+        /// 轮外用量写在这下面的 `usage/`:测试不碰真实的 `~/.summon`。
+        run: tempfile::TempDir,
     }
 
     impl Fixture {
@@ -968,7 +1114,19 @@ esac
                 agent: agent.reread().unwrap(),
                 _agent_dir: dir,
                 results: tempfile::tempdir().unwrap(),
+                run: tempfile::tempdir().unwrap(),
             }
+        }
+
+        fn usage_dir(&self) -> PathBuf {
+            crate::runtime::turn_ledger::outside_dir_in(self.run.path())
+        }
+
+        /// 记下的轮外用量。
+        fn spent(&self) -> Vec<OutsideUsage> {
+            let now = now_ms();
+            let day = 24 * 3600 * 1000;
+            crate::runtime::turn_ledger::read_outside(&self.usage_dir(), None, now - day, now + day)
         }
 
         /// 换成别的可执行文件(假 app-server)。
@@ -1000,6 +1158,7 @@ esac
         fn service(&self) -> Service {
             Service::new(
                 self.results.path().to_path_buf(),
+                self.usage_dir(),
                 Arc::new(AtomicBool::new(false)),
             )
         }
@@ -1084,6 +1243,182 @@ esac
         assert_eq!(serde_json::from_str::<Record>(&disk).unwrap(), record);
         assert!(!disk.contains("\"turns\"") && !disk.contains(core::prompt(Language::Chinese)));
         assert!(matches!(service.state(&job.slot), State::Finished(r) if r.ok));
+    }
+
+    /// 一行用量里各模型的数:(模型, 请求数, 输入, 输出, 缓存读, 5 分钟写, 1 小时写),按模型排好。
+    fn groups(row: &OutsideUsage) -> Vec<(String, u32, u64, u64, u64, u64, u64)> {
+        let mut groups: Vec<_> = row
+            .usage
+            .iter()
+            .map(|u| {
+                (
+                    u.model.clone(),
+                    u.requests,
+                    u.input,
+                    u.output,
+                    u.cache_read,
+                    u.cache_write_5m,
+                    u.cache_write_1h,
+                )
+            })
+            .collect();
+        groups.sort();
+        groups
+    }
+
+    #[test]
+    fn a_successful_analysis_is_billed_once_to_its_agent_under_the_models_it_used() {
+        let fx = Fixture::new("claude");
+        let before = now_ms();
+        let ran = fx
+            .service()
+            .run_blocking(fx.job(SUMMARY, Language::Chinese), false)
+            .unwrap();
+        let after = now_ms();
+        assert!(ran.error.is_none() && ran.record.ok, "{:?}", ran.record);
+        let rows = fx.spent();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let row = &rows[0];
+        assert_eq!(
+            (
+                row.agent.as_str(),
+                row.cli.as_str(),
+                row.chat_id.as_str(),
+                row.tag.as_str()
+            ),
+            (fx.agent.name.as_str(), "claude", "", SESSION_TAG)
+        );
+        assert!(before <= row.from_ms && row.from_ms <= row.to_ms && row.to_ms <= after);
+        // 实际用的模型来自 `modelUsage`,不是配置里的名字;缓存写入按两档拆开
+        assert_eq!(
+            groups(row),
+            [
+                ("claude-analysis-1".into(), 1, 120, 45, 300, 3, 4),
+                ("claude-helper-1".into(), 1, 9, 1, 0, 0, 0),
+            ]
+        );
+        // 结果里的用量照旧
+        assert_eq!(
+            ran.record.usage,
+            Some(AnalysisUsage {
+                input: 120,
+                output: 45,
+                cache_read: 300,
+                cache_write: 7
+            })
+        );
+        // 用量页与 `summon usage` 读的就是这一份
+        let (_, outside) =
+            crate::runtime::dashboard::api::usage::load_rows(fx.run.path(), before, after + 1);
+        assert_eq!(outside, rows);
+    }
+
+    #[test]
+    fn failed_runs_are_billed_when_the_cli_reported_usage() {
+        // 退出码非零、结果不合格:模型回过话,输出里报了用量
+        for (mode, fragment, expected) in [
+            (
+                "refused",
+                "异常退出",
+                ("analysis-model".to_string(), 1, 11, 2, 0, 5, 0),
+            ),
+            (
+                "empty",
+                "没有给出完整的结果",
+                ("claude-analysis-1".to_string(), 1, 6, 1, 0, 0, 0),
+            ),
+        ] {
+            let fx = Fixture::new("claude");
+            fx.mode(mode);
+            let ran = fx
+                .service()
+                .run_blocking(fx.job(SUMMARY, Language::Chinese), false)
+                .unwrap();
+            let error = ran.error.unwrap();
+            assert!(error.contains(fragment), "{mode}: {error}");
+            assert!(!ran.record.ok && ran.record.usage.is_none(), "{mode}");
+            let rows = fx.spent();
+            assert_eq!(rows.len(), 1, "{mode}: {rows:?}");
+            assert_eq!(groups(&rows[0]), [expected], "{mode}");
+        }
+        // codex:报过用量之后这一轮没完成
+        let mut fx = Fixture::new("codex");
+        let server = crate::test_support::write_fake_app_server(
+            fx.bin.path(),
+            r#"
+*'config/read'*) printf '%s\n' '{"id":'"$id"',"result":{"config":{}}}' ;;
+*'thread/start'*) printf '%s\n' '{"id":'"$id"',"result":{"thread":{"id":"analysis-thread"}}}' ;;
+*'turn/start'*)
+printf '%s\n' '{"id":'"$id"',"result":{"turn":{"id":"analysis-turn","status":"inProgress"}}}'
+printf '%s\n' '{"method":"thread/tokenUsage/updated","params":{"threadId":"analysis-thread","turnId":"analysis-turn","tokenUsage":{"total":{"totalTokens":90},"last":{"inputTokens":80,"cachedInputTokens":30,"outputTokens":10,"totalTokens":90}}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"analysis-thread","turn":{"id":"analysis-turn","status":"failed"}}}' ;;
+"#,
+        );
+        fx.use_cmd(&server);
+        let ran = fx
+            .service()
+            .run_blocking(fx.job(SUMMARY, Language::Chinese), false)
+            .unwrap();
+        assert!(ran.error.is_some() && !ran.record.ok);
+        let rows = fx.spent();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].cli, "codex");
+        assert_eq!(
+            groups(&rows[0]),
+            [("analysis-model".into(), 1, 50, 10, 30, 0, 0)]
+        );
+    }
+
+    #[test]
+    fn runs_without_reported_usage_are_not_billed() {
+        for mode in ["garbage", "fail", "zero", "sleep"] {
+            let fx = Fixture::new("claude");
+            fx.mode(mode);
+            let service = fx.service();
+            service.set_timeout(Duration::from_secs(1));
+            let ran = service
+                .run_blocking(fx.job(SUMMARY, Language::Chinese), false)
+                .unwrap();
+            assert!(ran.error.is_some() && !ran.record.ok, "{mode}");
+            assert!(fx.spent().is_empty(), "{mode}: {:?}", fx.spent());
+            assert!(!fx.usage_dir().exists(), "{mode}: 没有用量就不建目录");
+        }
+    }
+
+    #[test]
+    fn a_usage_write_failure_keeps_the_result() {
+        let fx = Fixture::new("claude");
+        // 轮外用量目录被一个普通文件占着:写不进
+        std::fs::write(fx.usage_dir(), "").unwrap();
+        let service = fx.service();
+        let job = fx.job(SUMMARY, Language::Chinese);
+        let ran = service.run_blocking(job.clone(), false).unwrap();
+        assert!(ran.error.is_none(), "{:?}", ran.error);
+        assert!(ran.record.ok);
+        assert_eq!(ran.record.text.as_deref(), Some("观察:间隔集中在长尾。"));
+        assert!(ran.record.usage.is_some());
+        assert_eq!(wait_done(&service, &job.slot), ran.record, "结果照常落盘");
+        assert!(fx.usage_dir().is_file());
+    }
+
+    #[test]
+    fn a_row_never_spans_two_local_days() {
+        use chrono::TimeZone;
+        let at = |d, h, m| {
+            chrono::Local
+                .with_ymd_and_hms(2026, 10, d, h, m, 0)
+                .earliest()
+                .unwrap()
+                .timestamp_millis()
+        };
+        assert_eq!(
+            one_day(at(21, 10, 0), at(21, 10, 4)),
+            (at(21, 10, 0), at(21, 10, 4))
+        );
+        assert_eq!(
+            one_day(at(21, 23, 58), at(22, 0, 2)),
+            (at(22, 0, 2), at(22, 0, 2))
+        );
     }
 
     #[test]
@@ -1298,6 +1633,17 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"analysis-thread"
         let record = fx.service().run_blocking(job, false).unwrap().record;
         assert!(record.ok, "{record:?}");
         assert_eq!(record.text.as_deref(), Some("codex analysis"));
+        // 记一行轮外用量,口径同会话轮:未命中缓存的输入、记在下发的模型名下
+        let rows = fx.spent();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(
+            (rows[0].agent.as_str(), rows[0].cli.as_str()),
+            (fx.agent.name.as_str(), "codex")
+        );
+        assert_eq!(
+            groups(&rows[0]),
+            [("analysis-model".into(), 1, 300, 40, 200, 0, 0)]
+        );
         assert_eq!(
             record.usage,
             Some(AnalysisUsage {

@@ -231,7 +231,6 @@ pub(crate) use chat_meta::*;
 use chat_thread::*;
 use command_ack::*;
 pub(crate) use crash_guard::{last_refusal, write_start_request, write_stop_request};
-#[cfg(npm_dist)]
 pub(crate) use crash_guard::{left_unfinished, stop_requested};
 use dispatcher::*;
 // 遥控运行时启动恢复要逐 agent 拿飞书句柄。

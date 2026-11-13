@@ -49,6 +49,15 @@ cursor 时不支持分析(一次性运行无法可靠关闭 hooks)。修改后�
 
 文档评论开关在设置列表中标为 `document_comments.enabled`，支持全局和单 agent 配置：在 `messaging:` 下写 `document_comments_enabled: true|false`，默认 `false`，读取配置后即时生效。它不支持本会话覆盖。关闭时收到的评论通知直接确认，不建任务。
 
+非 owner 评论开关在设置列表中标为 `document_comments.non_owner`，YAML 字段为 `messaging.document_comments_non_owner_enabled`，默认 `false`。支持全局和单 bot 覆盖，控制台“文档评论”页可选择 bot 开启或恢复继承，不支持本会话覆盖。还须开启文档评论总开关；owner 评论遵循原有规则。开启后仅处理 bot 所属或由 bot 创建后转给 owner 的文档中的非 owner 评论，仍由 owner 审批、bot 发布；不会使用 owner 的用户权限读取其他文档。关闭时新评论直接结束处理，已有任务在读取、起草和审批发布时重新检查开关。
+
+额外开关在设置列表中标为 `document_comments.owner_mentions`，YAML 字段 `messaging.document_comments_owner_mentions_enabled` 默认 `false`，支持全局和单 agent 覆盖，不支持本会话覆盖。控制台“文档评论”页显示为“允许 owner 在其他文档中 @机器人”。它受文档评论总开关控制；两项都开启后，owner 本人发出并明确 @当前 bot 的评论可以使用 owner 的文档权限读取上下文。
+
+原有 bot 归属路径优先。需要用户权限时，使用与该 bot 同一应用的 lark-cli profile；该 profile 必须已登录配置 owner，并具有文档及评论读取授权。daemon 在每次读取前后核验应用和用户身份，只读取当前文档与评论串，按需正文仍只支持 docx。缺少登录、授权或权限时记录失败，不自动登录或给 bot 添加权限。
+
+回复仍须 owner 在草稿卡上批准，随后由 bot 身份发布；bot 缺少评论权限时发布失败，不改用用户身份。关闭额外开关会取消使用用户权限的起草并阻止其发布；普通 bot 归属任务仍受总开关控制。已经取得上下文的任务保留冻结的读取通道，不因打开开关而改用用户权限。
+
+
 起草超时使用 `messaging.document_comment_timeout_secs`，默认 `300` 秒，须为正整数。
 本机 `config.yaml` 设置全局默认，单 agent 的 `agent.yaml` 可在 `messaging:` 下覆盖同名字段；下一次起草生效。
 控制台“文档评论”页面可选择全局或单 agent，配置开关、起草超时及恢复继承。
@@ -59,7 +68,7 @@ cursor 时不支持分析(一次性运行无法可靠关闭 hooks)。修改后�
 CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comments stop <id> --agent <别名>`。
 停止会结束本次起草并回收进程，任务状态持久保存。完整草稿通过飞书审批卡由 owner 批准发布。
 
-开启后，每条评论使用一次临时起草进程；完整草稿生成后发 owner 审批卡，批准后才发布回复。起草总时限默认 5 分钟，失败、超时、取消或重启中断后任务终止，不自动重试；失败、超时与重启中断会尽力给 owner 发一次失败通知卡，已核验归属的带文档标题、评论与原文档入口；手动停止、关闭开关取消的、还没确定 owner 的不发，不在处理范围内的文档（不归本 bot，也证不了是本 bot 创建后转给 owner 的）只记入任务状态。关闭开关会取消正在进行的起草，并阻止发布；尚未启动的任务和冻结草稿保留，关闭期间收到的新评论直接结束处理。
+开启后，每条评论使用一次临时起草进程；完整草稿生成后发 owner 审批卡，批准后才发布回复。起草总时限默认 5 分钟，失败、超时、取消或重启中断后任务终止，不自动重试；失败、超时与重启中断会尽力给 owner 发一次失败通知卡，已核验访问授权的带文档标题、评论与原文档入口；手动停止、关闭开关取消的、还没确定 owner 的不发，不满足 bot 归属条件且没有通过 owner 提及授权的文档只记入任务状态。关闭开关会取消正在进行的起草，并阻止发布；尚未启动的任务和冻结草稿保留，关闭期间收到的新评论直接结束处理。
 
 ## 空闲与回收(最常被问)
 
@@ -188,6 +197,8 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 | `agent_reactions` | `true`；向 agent 注入语义表情约定，系统工程表情独立运行 |
 | `agent_feed` | `true`；向 agent 注入回复末尾 feed 总结约定，关掉后会话列表预览取正文开头 |
 | `document_comments_enabled` | `false`；文档评论起草与审批发布，支持全局和单 agent 配置 |
+| `document_comments_non_owner_enabled` | `false`；响应非 owner 文档评论，支持全局和单 bot 配置 |
+| `document_comments_owner_mentions_enabled` | `false`；owner 明确 @当前 bot 时允许使用用户文档权限，支持全局和单 agent 配置 |
 | `document_comment_timeout_secs` | `300`；单次评论起草总时限，正整数秒，支持全局和单 agent 配置 |
 | `codex_platform_tools` | `false`；Codex/Traex 原生注册 preview、react、send_image，需新建会话 |
 | `reactions` / `reaction_meanings` | 表情安全集及含义，按安装版本内置表；查 `summon guide reactions` |
@@ -265,6 +276,13 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 触发词 `join_verbs: [进来回答]`、`create_verbs: [建群]`、`invite_verbs: [/invite]`。
 `blocklist` 排除 chat；`aliases` 设称呼；`owner_open_id` 绑定发起者，`lark_profile` 选择身份配置。
 这份指南只说明配置；身份能力仍受部署环境和用户授权约束。
+
+自动升级 `upgrade`:`auto: false`(默认关)、`check_interval_hours: 6`、`min_age_hours: 2`(新版发布满这么久
+才采用)、`idle_minutes: 10`(整机连续空闲这么久才换代)、`range: minor`(`patch` 只跟同一 x.y 的补丁版本;
+主版本变化一律不自动跟)。`channel` 选新版从哪个渠道取:`github` 是 GitHub Releases,不写用本构建的默认
+渠道。`from` 是演练用的 Release 来源,只收绝对路径的本地目录或本机回环地址上的明文 `http://`,其下直接有
+`manifest.json` 与各平台的包。换代后观察 10 分钟,新版起不来或很快崩了就放回换代前的落点、不再自动采用
+它;过程写 `~/.summon/run/upgrade.log`,状态看 `summon doctor`。
 
 ## 改配置的正确姿势
 

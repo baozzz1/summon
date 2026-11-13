@@ -66,6 +66,15 @@ For example, `/set cot.tools off` hides tools only here; agent-wide uses
 not chat overrides. It applies when configuration is read. Disabled notifications
 are acknowledged without creating tasks.
 
+The `document_comments.non_owner` setting uses the YAML field `messaging.document_comments_non_owner_enabled` and defaults to `false`. It supports global and per-bot overrides on the Document comments page, including restoring inheritance, with no chat override. The document-comments master switch must also be enabled; owner comments follow their existing rules. Non-owner comments are limited to documents owned by the bot or created by it and transferred to the owner. Replies require owner approval and are published as the bot; this switch does not grant owner user access to other documents. When disabled, new comments are closed and existing tasks recheck the switch before reading, drafting, and publishing.
+
+The additional `messaging.document_comments_owner_mentions_enabled` switch, shown as `document_comments.owner_mentions` in setting lists, defaults to `false`, supports global and per-agent overrides, and has no chat override. The Document comments page labels it “Allow owner mentions in other documents”. Both this switch and the document-comments master switch must be enabled. Only comments authored by the configured owner that explicitly mention this bot can use owner document access.
+
+The bot-ownership path takes priority. When user access is needed, the daemon uses a lark-cli profile for the same app, logged in as the configured owner with document and comment read permissions. It verifies the app and user before and after each read and limits reads to the current document and comment thread; on-demand body reading supports docx. Missing login or permission fails the task without logging in or granting the bot access automatically.
+
+The owner still approves the frozen draft in Feishu, and the bot publishes it. Missing bot comment permission fails publication; user identity is never used to publish. Disabling the additional switch cancels drafts using owner access and prevents publication. Bot-owned tasks continue to follow the master switch. Tasks with prepared context keep their frozen read channel when the additional switch is enabled.
+
+
 `messaging.document_comment_timeout_secs` defaults to 300 positive seconds. Agent
 settings override global; changes apply to the next draft. The dashboard Document
 comments page supports scope selection, enabling, timeout, and restoring inheritance.
@@ -82,8 +91,8 @@ Each comment uses a temporary process. Failure, timeout, cancellation, or restar
 interruption terminates the task without automatic retry. Failure/timeout/restart
 attempt one owner failure notice; verified documents include title, comment, and
 original link. Manual stops, disabling cancellations, or undetermined owners produce
-no notice. Out-of-scope documents only record task state: they must belong to the bot
-or be provably bot-created and transferred to owner. Disabling cancels running drafts
+no notice. Documents that meet neither the bot-ownership rules nor the owner-mention
+authorization only record task state. Disabling the master switch cancels running drafts
 and blocks publishing, retaining unstarted tasks/frozen drafts; new notifications
 while disabled end immediately.
 
@@ -219,6 +228,8 @@ Use exact chat IDs from `summon chat-id --turn-id <current credential>` in that 
 | agent_reactions | true; inject semantic reaction conventions, independent of system status reactions |
 | agent_feed | true; inject feed summary; off previews start of body |
 | document_comments_enabled | false; global/agent comments draft and approval |
+| document_comments_non_owner_enabled | false; respond to non-owner document comments, global/agent |
+| document_comments_owner_mentions_enabled | false; allow owner document access for explicit mentions, global/agent |
 | document_comment_timeout_secs | 300 positive seconds; global/agent |
 | codex_platform_tools | false; native preview/react/send_image; new session required |
 | reactions / reaction_meanings | safe set and meanings from installed version; reactions guide |
@@ -299,6 +310,16 @@ top_k 50, max_age_secs 300, per_hour 6. Default join/create triggers are the exi
 Chinese phrases; invite_verbs is /invite. Configure trigger strings in join_verbs /
 create_verbs. blocklist excludes chats; aliases adds names; owner_open_id binds requester;
 lark_profile selects login identity. Deployment/user authorization still bounds capabilities.
+
+Automatic upgrades `upgrade`: `auto: false` (off by default), `check_interval_hours: 6`, `min_age_hours: 2`
+(a release must be this old before it is adopted), `idle_minutes: 10` (the machine must be idle this long before
+the swap), `range: minor` (`patch` follows only patch releases of the same x.y; major versions are never
+followed automatically). `channel` selects where new versions come from: `github` is GitHub Releases; unset
+means this build's default channel. `from` is a rehearsal Release source and only accepts an absolute local
+directory or plain `http://` on a loopback address, holding `manifest.json` and the platform packages directly.
+After a swap the new version is watched for 10 minutes; if it fails to start or quickly crashes, the previous
+install is restored and that version is no longer adopted automatically. Progress goes to
+`~/.summon/run/upgrade.log`; check status with `summon doctor`.
 
 ## Edit safely
 

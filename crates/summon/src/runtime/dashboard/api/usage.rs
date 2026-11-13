@@ -121,6 +121,20 @@ pub(crate) fn range_window(
     })
 }
 
+/// 不属于任何群的用量(`chat_id` 为空)叫什么:全是洞察分析记下的就叫「洞察分析」,其余来历不明。
+/// `chat_id` 照旧为空,页面凭它不出会话链接。
+fn unattached_label(g: &turn_usage::Group<'_, (String, String)>) -> String {
+    let analysis = g.records.is_empty()
+        && g.outside
+            .iter()
+            .all(|o| o.tag == crate::runtime::insights_analysis::SESSION_TAG);
+    if analysis {
+        summon_i18n::text!("usage.chat.insights_analysis").into()
+    } else {
+        summon_i18n::text!("usage.chat.unattached").into()
+    }
+}
+
 /// 没有轮末角标的轮(如换代续跑完的那一轮)不知道用的哪个 CLI,归在这一栏。
 const UNKNOWN_CLI: &str = "r4d8c1c5b42";
 
@@ -219,10 +233,14 @@ impl Report<'_> {
             |o| (o.agent.clone(), o.chat_id.clone()),
             |g| {
                 let (alias, chat_id) = &g.key;
-                let label = names
-                    .get(alias.as_str())
-                    .and_then(|n| n.get(chat_id).cloned())
-                    .unwrap_or_else(|| chat_id.clone());
+                let label = if chat_id.is_empty() {
+                    unattached_label(g)
+                } else {
+                    names
+                        .get(alias.as_str())
+                        .and_then(|n| n.get(chat_id).cloned())
+                        .unwrap_or_else(|| chat_id.clone())
+                };
                 let tag = g
                     .records
                     .first()
@@ -402,6 +420,8 @@ pub(crate) fn summary(ctx: &ApiCtx, p: Value) -> Result<Value, ApiError> {
     }
     .by_chat()
     .into_iter()
+    // 群筛选只列真实的群:不属于任何群的那几行没有可筛的 chat id。
+    .filter(|row| row.chat_id.as_deref().is_some_and(|c| !c.is_empty()))
     .map(|row| {
         let agent = row.agent.unwrap_or_default();
         let agent_label = agents
@@ -1021,6 +1041,86 @@ mod tests {
             to_ms: from_ms + 5_000,
             usage: usage(output),
         }
+    }
+
+    #[test]
+    fn usage_outside_any_chat_gets_a_label_and_stays_out_of_the_chat_filter() {
+        let kit = Kit::new();
+        let agent = kit.add_agent("starlight", &agent_yaml("starlight", "星光", "claude", ""));
+        kit.add_chat(&agent, "group", GROUP, "示例群");
+        let mut ctx = kit.owner();
+        ctx.now =
+            chrono::TimeZone::with_ymd_and_hms(&chrono::Local, 2026, 10, 20, 14, 32, 0).unwrap();
+        let now = ctx.now.timestamp_millis();
+        let unattached = |agent: &str, tag: &str, output: u64| OutsideUsage {
+            agent: agent.into(),
+            chat_id: String::new(),
+            tag: tag.into(),
+            ..outside_row(GROUP, now - 10_000, output)
+        };
+        let analysis = crate::runtime::insights_analysis::SESSION_TAG;
+        write_outside(
+            &kit,
+            &[
+                outside_row(GROUP, now - 30_000, 40),
+                unattached("starlight", analysis, 5),
+                // 另一个 agent 下混着来历不明的一行:不能当成洞察分析
+                unattached("moonlight", analysis, 2),
+                unattached("moonlight", "elsewhere", 1),
+            ],
+        );
+        let out = kit.call(&ctx, summary, json!({"range": "7d"})).unwrap();
+        // 不属于任何群的照样算进合计
+        assert_eq!(out["totals"]["spend"]["tokens"]["output"], 48);
+        assert_eq!(out["totals"]["outside"]["tokens"]["output"], 48);
+        let mut chats: Vec<(String, String, String, u64)> = out["by_chat"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["agent"].as_str().unwrap().to_string(),
+                    r["chat_id"].as_str().unwrap().to_string(),
+                    r["label"].as_str().unwrap().to_string(),
+                    r["spend"]["tokens"]["output"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        chats.sort();
+        assert_eq!(
+            chats,
+            [
+                (
+                    "moonlight".into(),
+                    String::new(),
+                    "不属于任何会话".into(),
+                    3
+                ),
+                ("starlight".into(), String::new(), "洞察分析".into(), 5),
+                ("starlight".into(), GROUP.into(), "示例群".into(), 40),
+            ]
+        );
+        let scopes: Vec<&str> = out["scopes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["chat_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(scopes, [GROUP]);
+        // 英文界面
+        let english =
+            summon_core::i18n::with_language(summon_core::i18n::Language::English, || {
+                kit.call(&ctx, summary, json!({"range": "7d"})).unwrap()
+            });
+        let labels: Vec<&str> = english["by_chat"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["chat_id"] == "")
+            .map(|r| r["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.contains(&"Insights analysis") && labels.contains(&"Not tied to a session"));
     }
 
     #[test]

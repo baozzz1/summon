@@ -23,9 +23,7 @@ pub(crate) fn is_rejected(error: &anyhow::Error) -> bool {
     error.downcast_ref::<NoticeRejected>().is_some()
 }
 
-/// 文档不在评论处理范围内:既不归本 bot,也证不了是本 bot 创建后转给配置 owner 的。这是拒收不是
-/// 故障 —— 租户里任何人都能在自己的文档上评论 @bot,为它给 owner 发失败通知就成了谁都能触发的
-/// 私聊。
+/// 文档归属及 owner 提及都未取得处理授权。这类通知静默拒收，避免任意评论者触发 owner 私聊。
 #[derive(Debug, thiserror::Error)]
 #[error("{}", summon_i18n::text!("r0b58318263"))]
 pub(crate) struct OutOfScope;
@@ -114,6 +112,8 @@ pub(crate) enum Stage {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CommentContext {
+    #[serde(default)]
+    pub owner_mention: bool,
     pub title: String,
     pub url: String,
     pub quote: String,
@@ -733,6 +733,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn old_contexts_keep_bot_owned_access() {
+        let context: CommentContext = serde_json::from_value(serde_json::json!({
+            "title":"Title", "url":"https://example.feishu.cn/docx/test", "quote":"", "thread":"",
+            "fingerprint":"abc", "document_modified_time":"100", "reply_allowed":true
+        }))
+        .unwrap();
+        assert!(!context.owner_mention);
+    }
+
+    #[test]
     fn stopping_is_bound_durable_and_cannot_replace_a_frozen_draft() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
@@ -791,6 +801,7 @@ mod tests {
     fn initial_prompt_discloses_document_link_without_document_body() {
         let mut record = Record::received(notice(), 1);
         record.context = Some(CommentContext {
+            owner_mention: false,
             title: "Title".into(),
             url: "https://example.com/docx/doc_test".into(),
             quote: "Quoted selection".into(),
@@ -1103,6 +1114,7 @@ mod tests {
                 r.drafted_ms = Some(100);
                 r.draft = Some("frozen draft".into());
                 r.context = Some(CommentContext {
+                    owner_mention: false,
                     title: "Title".into(),
                     url: "https://example.com".into(),
                     quote: String::new(),

@@ -12,7 +12,7 @@
 #[cfg(npm_dist)]
 use crate::setup::npm_dist::{GUIDE_UPGRADE as UPGRADE, GUIDE_UPGRADE_FIX as UPGRADE_FIX};
 #[cfg(not(npm_dist))]
-const UPGRADE: &str = "r5e468d6d7e";
+const UPGRADE: &str = "r948e9b5246";
 #[cfg(not(npm_dist))]
 const UPGRADE_FIX: &str = "re506263175";
 

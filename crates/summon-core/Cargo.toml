@@ -16,6 +16,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = "0.10"
 pulldown-cmark = "0.13"  # 预览页 markdown → HTML(服务端渲染,离线无 JS)
 unicode-width = "0.2.2"  # tail 流式预览按终端显示列截断(CJK 占两列)
+ring = "0.17"  # GitHub Release 渠道:下载时边下边算 SHA-256(已在依赖树里)
+tar = "0.4"  # GitHub Release 渠道:解平台包并逐个核对成员
+flate2 = "1"  # 平台包是 tar.gz
 
 [dev-dependencies]
 tempfile = "3"

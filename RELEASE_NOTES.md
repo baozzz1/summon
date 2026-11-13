@@ -6,7 +6,19 @@
 
 ## 未发布
 
-暂无待发布条目。
+### 新增
+
+- `summon upgrade` 可从 GitHub Releases 升级：下载本平台的预编译包，核对字节数、SHA-256 与包内文件（macOS 上先核代码签名团队，通过后才运行新版程序），再核对构建戳，之后替换 `~/.summon/bin/` 里的程序，再用新版重启 daemon；daemon 未运行时只替换文件、不启动。`--check` 只报告有没有新版，`--version` 指定版本（不降级），`--from` 指定 Release 所在的目录或 URL（明文 `http://` 只接受本机地址）。已是最新版而 daemon 仍在运行旧版时，用已安装的版本重启 daemon。从源码构建的版本直接使用这一渠道；npm 安装的仍默认经 npm 升级，加 `--channel github` 改走 GitHub Releases。
+- 新增安装脚本 `scripts/install.sh`，以同样的校验从 GitHub Releases 安装预编译包；已安装过的不覆盖，提示改用 `summon upgrade`。
+- 自动升级可走 GitHub Releases，从源码构建的版本也能用（默认关，`upgrade.auto: true` 打开）：daemon 定期读 Release 的 manifest，新版发布满 `min_age_hours`、整机连续空闲 `idle_minutes` 后才换代；换代后观察 10 分钟，新版起不来或很快崩了就放回换代前的程序、不再自动采用它，退回只用换代前留下的程序副本。`upgrade.channel` 选渠道：npm 安装的不写时仍走 npm，写 `github` 改走 GitHub Releases（换代后是 Release 的公开构建，此后 `summon upgrade` 只有 GitHub 渠道）。`upgrade.from` 可指向本地目录或本机 `http://` 上的 Release 做演练。
+
+### 改进
+
+- Dashboard 洞察页「分析」用掉的 token 计入用量页与 `summon usage`：归到跑分析的主 agent，记在轮外用量里，按实际模型计价。模型已回复但结果判为失败的分析同样计入；超时或没能启动、没有报告用量的不计。主 agent 自动选择时的「近 30 天 token 用量」也包含这部分。
+
+### 修复
+
+- 自动升级：换代尝试因整机不空作罢后 daemon 重启，不再把待换代的版本误记进退回名单；换代后守望进程自己出错时保留换代前的程序副本，兜底进程据此放回旧版；换代前的程序副本不完整时不再「退回」成仍是新版的程序，而是保持现状并如实说明。
 
 <!-- 开发期间在这里按需添加「新增」「改进」「修复」「升级注意」分类，删除没有内容的分类。
 发版时把条目移到新的版本节，写明版本号和日期，再保留空的「未发布」节；版本对应的提交记在 RELEASE_COMMITS.md。

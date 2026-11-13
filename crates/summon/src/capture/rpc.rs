@@ -817,7 +817,7 @@ impl SubagentThreads {
 /// 本轮各线程的模型请求。`thread/tokenUsage/updated` 每次请求后推一次:`last` 是这次请求的用量,
 /// `total` 是线程累计。同一份用量可能重复推送:累计与该线程上一条相同的不计。累计也可能回落
 /// (压缩上下文之后),所以只比上一条、不比历史最大值;没带累计的旧版本每条都计。
-struct RequestTally {
+pub(crate) struct RequestTally {
     /// 这一次 `turn/start` 的 turn id。同一行运行记录可能跨好几次 `turn/start`(轮内追加消息降级
     /// 重跑),各次的计数都从 1 起,请求 id 靠它区分。
     turn_id: String,
@@ -827,7 +827,7 @@ struct RequestTally {
 }
 
 impl RequestTally {
-    fn new(turn_id: &str) -> Self {
+    pub(crate) fn new(turn_id: &str) -> Self {
         Self {
             turn_id: turn_id.to_string(),
             last_total: std::collections::HashMap::new(),
@@ -835,7 +835,7 @@ impl RequestTally {
         }
     }
 
-    fn observe(
+    pub(crate) fn observe(
         &mut self,
         notification: &CodexAppServerNotification,
         model: Option<String>,

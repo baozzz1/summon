@@ -443,6 +443,37 @@ mod tests {
     }
 
     #[test]
+    fn the_cli_names_insights_analysis_usage_like_the_usage_page() {
+        let kit = Kit::new();
+        let agent = kit.add_agent("starlight", &agent_yaml("starlight", "星光", "claude", ""));
+        let now = Local::now().timestamp_millis();
+        let run = kit.home().join("run");
+        let row = OutsideUsage {
+            agent: "starlight".into(),
+            chat_id: String::new(),
+            tag: crate::runtime::insights_analysis::SESSION_TAG.into(),
+            cli: "claude".into(),
+            from_ms: now - 1_000,
+            to_ms: now,
+            usage: vec![ModelUsage {
+                model: "claude-test-1".into(),
+                requests: 1,
+                output: 9,
+                ..Default::default()
+            }],
+        };
+        turn_ledger::append_outside(&turn_ledger::outside_dir_in(&run), &row).unwrap();
+        let agents: HashMap<String, Agent> = [(agent.name.clone(), agent.clone())].into();
+        let today = Local::now().date_naive();
+        let report = build(&run, &agents, today, today, UsageBy::Chat);
+        let rows = serde_json::to_value(&report).unwrap()["rows"].clone();
+        assert_eq!(rows[0]["label"], "洞察分析");
+        assert_eq!(rows[0]["chat_id"], "");
+        let text = render(&report);
+        assert!(text.contains("洞察分析 · starlight"), "{text}");
+    }
+
+    #[test]
     fn counts_use_compact_english_units() {
         for (n, expected) in [
             (0, "0"),

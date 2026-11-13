@@ -204,7 +204,11 @@ fn insights_analysis(
     let stop = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&stop))?;
     let dir = run_dir.join("insights-analysis");
-    let service = analysis::Service::new(dir.clone(), stop);
+    let service = analysis::Service::new(
+        dir.clone(),
+        crate::runtime::turn_ledger::outside_dir_in(&run_dir),
+        stop,
+    );
     let ran = service
         .run_blocking(job, force)
         .map_err(|_| anyhow::anyhow!(summon_i18n::text!("rb6477a3aaa")))?;

@@ -874,9 +874,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn exact_os_argv_preserves_settings_path_and_inline_json_boundaries() {
+        use std::io::BufRead as _;
         let args = [
             "-c",
-            "read value",
+            "echo ready; read value",
             "probe",
             "--settings",
             "/tmp/config with space.json",
@@ -886,8 +887,16 @@ mod tests {
         let mut child = std::process::Command::new("/bin/sh")
             .args(args)
             .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
+        // 等脚本自己输出一行再读:spawn 返回时子进程可能还没换成 /bin/sh,机器忙时读到的还不是
+        // 它完整的 argv。
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line, "ready\n");
         let observed = read_exact_argv(child.id());
         let _ = child.kill();
         let _ = child.wait();

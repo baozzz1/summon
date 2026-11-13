@@ -788,7 +788,7 @@ const LARK_CLI_WRAPPER_DIR_NAME: &str = "lark-cli-wrappers";
 /// wrapper 自己,再把它写进新 wrapper → `exec 自己` → 任何 lark-cli 调用无限 fork/exec 空转。
 /// 2026-08-04 真实踩到:arcadia 的 wrapper 被写成自我递归,连带把
 /// `augment_launch_isolates_feishu_identity_from_sibling` 挂死 1 小时 34 分(CPU 空转、不报错)。
-fn which_lark_cli() -> Option<String> {
+pub(super) fn which_lark_cli() -> Option<String> {
     let sanitized = crate::setup::env::path_without_lark_cli_wrappers(
         &std::env::var_os("PATH").unwrap_or_default(),
     );

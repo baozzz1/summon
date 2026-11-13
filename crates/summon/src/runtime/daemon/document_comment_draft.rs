@@ -173,8 +173,11 @@ pub(super) fn generate_with_client(
             .get(),
     );
     let started = Instant::now();
-    let cancelled =
-        || stop() || started.elapsed() >= timeout || !super::document_comments::enabled(agent);
+    let cancelled = || {
+        stop()
+            || started.elapsed() >= timeout
+            || !super::document_comments::enabled_for_record(agent, record)
+    };
     anyhow::ensure!(!cancelled(), summon_i18n::format!("r9745139d37"));
     let fingerprint = backend_fingerprint(agent)?;
     let control = DraftControl {
@@ -220,7 +223,8 @@ fn generate_for_backend(
     let reader_agent = agent.clone();
     let reader_record = record.clone();
     let reader_client = client.clone();
-    let notice = record.notice.clone();
+    let load_agent = agent.clone();
+    let load_record = record.clone();
     let reader = ReaderServer::start(
         temp.path(),
         Box::new(move || {
@@ -233,7 +237,9 @@ fn generate_for_backend(
             }
             validate_document_read(&reader_agent, &reader_record, &reader_client)
         }),
-        Box::new(move || client.comment_document_text(&notice)),
+        Box::new(move || {
+            super::document_comments::read_document_text(&load_agent, &load_record, &client)
+        }),
     )?;
     let prompt = summon_i18n::format!("rf04354b53a", agent.name, read_only_context_prompt(record)?);
     let env = backend_env(agent, driver);
@@ -283,7 +289,7 @@ pub(super) fn validate_document_read(
 ) -> Result<()> {
     let current = agent.reread().context(summon_i18n::text!("r40419e6d76"))?;
     anyhow::ensure!(
-        super::document_comments::enabled(&current)
+        super::document_comments::enabled_for_record(&current, record)
             && record.agent_name == current.name
             && super::resolve_creds(&current).0.as_deref() == Some(record.notice.app_id.as_str())
             && record.epoch == super::FeishuEpochIdentity::capture(&current).fingerprint()
@@ -294,8 +300,7 @@ pub(super) fn validate_document_read(
         .context
         .as_ref()
         .context(summon_i18n::text!("r4826c9cae1"))?;
-    let fresh =
-        client.owned_comment_context(&record.notice, &record.bot_open_id, &record.owner_open_id)?;
+    let fresh = super::document_comments::read_context(&current, record, client)?;
     anyhow::ensure!(
         fresh.reply_allowed
             && fresh.fingerprint == frozen.fingerprint
@@ -484,7 +489,7 @@ mod tests {
     use serde_json::Value;
 
     fn configured_agent(cli: &str, script: &std::path::Path) -> (Agent, tempfile::TempDir) {
-        let (agent,dir)=crate::test_support::agent_dir(cli,"messaging:\n  document_comments_enabled: true\nmodel: bot-model\neffort: high\nfeishu:\n  app_id_env: DRAFT_APP\n  app_secret_env: DRAFT_SECRET\n");
+        let (agent,dir)=crate::test_support::agent_dir(cli,"messaging:\n  document_comments_enabled: true\n  document_comments_non_owner_enabled: true\nmodel: bot-model\neffort: high\nfeishu:\n  app_id_env: DRAFT_APP\n  app_secret_env: DRAFT_SECRET\n");
         std::fs::write(
             agent.dir.join(".env"),
             format!("DRAFT_APP=cli_{cli}\nDRAFT_SECRET=fake_secret\n"),
@@ -533,7 +538,9 @@ mod tests {
                 r.agent_name = agent.name.clone();
                 r.epoch = super::super::FeishuEpochIdentity::capture(agent).fingerprint();
                 r.bot_open_id = "ou_bot".into();
+                r.owner_open_id = "ou_owner".into();
                 r.context = Some(CommentContext {
+                    owner_mention: false,
                     title: "Title".into(),
                     url: "https://example.com".into(),
                     quote: "Quote".into(),
@@ -1014,6 +1021,15 @@ printf '{"id":%s,"result":{"config":{"mcp_servers":%s}}}\n' "$id" "$servers" ;;
 
     #[test]
     fn disabling_comments_cancels_active_codex_turn() {
+        disabling_comment_setting_cancels_active_codex_turn("document_comments_enabled");
+    }
+
+    #[test]
+    fn disabling_non_owner_comments_cancels_active_codex_turn() {
+        disabling_comment_setting_cancels_active_codex_turn("document_comments_non_owner_enabled");
+    }
+
+    fn disabling_comment_setting_cancels_active_codex_turn(key: &'static str) {
         let bin = tempfile::tempdir().unwrap();
         crate::test_support::write_fake_app_server(
             bin.path(),
@@ -1042,8 +1058,7 @@ printf '{"id":%s,"result":{"config":{"mcp_servers":%s}}}\n' "$id" "$servers" ;;
                             &std::fs::read_to_string(agent.manifest_path()).unwrap(),
                         )
                         .unwrap();
-                        config["messaging"]["document_comments_enabled"] =
-                            serde_yaml::Value::Bool(false);
+                        config["messaging"][key] = serde_yaml::Value::Bool(false);
                         std::fs::write(
                             agent.manifest_path(),
                             serde_yaml::to_string(&config).unwrap(),
