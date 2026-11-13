@@ -132,12 +132,23 @@ TARGET_DIR="${TARGET_DIR:-$ROOT/target}"
 SWIFT_SCRATCH="${SUMMON_SWIFT_SCRATCH_PATH:-$ROOT/menubar/.build}"
 SIDECAR_BIN="$TARGET_DIR/release/summon-sidecar"
 
+# 包是公开分发的:rustc 与 swiftc 默认把源码、依赖源码和构建目录的绝对路径编进二进制(panic 信息、
+# #file),会带出构建机的用户目录。这几处前缀各映射成固定的占位路径;RUSTFLAGS 按空白切分参数,
+# 路径里不能有空格。
+CARGO_HOME_DIR="${CARGO_HOME:-$HOME/.cargo}"
+case "$CARGO_HOME_DIR$ROOT" in
+  *[[:space:]]*) die "CARGO_HOME 或源码路径含空白,无法传给 --remap-path-prefix:$CARGO_HOME_DIR / $ROOT" ;;
+esac
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$CARGO_HOME_DIR=/cargo --remap-path-prefix=$ROOT=/summon"
+
 if [ "$SKIP_BUILD" = 0 ]; then
   say "构建 summon $VERSION($PLATFORM)"
   cargo build --release --locked -p summon
   (cd sidecar/feishu-connector && go build -trimpath -o "$SIDECAR_BIN" .)
   if [ "$IS_MAC" = 1 ]; then
-    swift build -c release --package-path menubar --scratch-path "$SWIFT_SCRATCH"
+    swift build -c release --package-path menubar --scratch-path "$SWIFT_SCRATCH" \
+      -Xswiftc -file-prefix-map -Xswiftc "$ROOT=/summon" \
+      -Xswiftc -file-prefix-map -Xswiftc "$SWIFT_SCRATCH=/build"
   fi
 fi
 
@@ -158,6 +169,16 @@ for name in "${FILES[@]}"; do
   [ -f "$src" ] || die "缺构建产物 $src"
   cp "$src" "$STAGE/$name"
   chmod 0755 "$STAGE/$name"
+done
+
+# --skip-build 拿到的可能是没带重映射的旧产物,所以按包里的文件查,不按这次有没有构建判断。
+# 要带 -a:macOS 的 grep 不把 Mach-O 当文本,不加就静默查不到。
+for name in "${FILES[@]}"; do
+  for prefix in "$HOME/" "$CARGO_HOME_DIR/" "$ROOT/"; do
+    if LC_ALL=C grep -a -q -F -- "$prefix" "$STAGE/$name"; then
+      die "$name 里含构建机路径 $prefix(没走重映射的旧产物?去掉 --skip-build 重新构建)"
+    fi
+  done
 done
 
 if [ "$IS_MAC" = 1 ]; then
