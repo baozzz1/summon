@@ -13,7 +13,8 @@ name: release
 # 隔离程度:sign-macos 不跑 cargo/go/swift,不执行被签名的二进制,签名与打包脚本取自 main
 # 而不是被打 tag 的提交。但 tag 触发的运行用的是被打 tag 那个提交里的这份工作流:改了工作流的
 # 提交可以让 sign-macos 做任何事,environment 也只看 tag 名。所以批准部署之前,要确认这次运行的
-# 提交在 main 上(main 只经 review 过的 PR 合入),见 CLAUDE.md「发版」。
+# 提交在 main 的第一父链上:仓库只允许 squash 合并,链上每个提交都是一次 review 过的 PR 合入后的
+# main。见 CLAUDE.md「发版」。
 #
 # Release 在三个包与 manifest.json 齐全之前一直是草稿,对外不可见;已发布的不改写。任何一步失败都停在
 # 草稿,在 Actions 里重跑失败的 job 接着做:草稿里已有一对附件的平台沿用它,只传了一半的逐字节比对,
@@ -56,8 +57,8 @@ jobs:
           # 只把附注 tag 解到提交。tag 现在指向哪里由 publish.py 经 API 查。
           SHA="$(git rev-parse --verify "$GITHUB_SHA^{commit}")"
           KIND="$(python3 scripts/github-release/release_info.py check-tag --tag "$TAG" --sha "$SHA")"
-          git merge-base --is-ancestor "$SHA" origin/main \
-            || { echo "::error::tag $TAG 指向的 $SHA 不在 main 上"; exit 1; }
+          bash scripts/github-release/on-main.sh "$SHA" origin/main \
+            || { echo "::error::tag $TAG 指向的 $SHA 不是某次 PR 合入后的 main"; exit 1; }
           echo "tag $TAG($KIND),提交 $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           DECISION="$(python3 scripts/github-release/publish.py prepare --repo "$REPO" --tag "$TAG" \
@@ -148,7 +149,9 @@ jobs:
           retention-days: 14
 
   # 签名证书只在 environment `release` 里,owner 批准后 job 才开始。这里只运行取自 main 的签名与打包
-  # 脚本、security 与 codesign。
+  # 脚本、security 与 codesign。脚本是 main 当前的、二进制来自被打 tag 的提交:两边的打包格式
+  # 不兼容时 pack.py 的核对失败,不签名。codesign.sh 只在给 .app 签名时引用同目录的
+  # electron.entitlements.plist,这里签的是三个独立二进制,所以稀疏检出不取它。
   sign-macos:
     needs: [prepare, build-macos]
     if: needs.prepare.outputs.skip == 'false'
@@ -171,8 +174,8 @@ jobs:
         env:
           SHA: ${{ needs.prepare.outputs.sha }}
         run: |
-          git merge-base --is-ancestor "$SHA" HEAD \
-            || { echo "::error::$SHA 不在 main 上,不签名"; exit 1; }
+          bash scripts/github-release/on-main.sh "$SHA" HEAD \
+            || { echo "::error::$SHA 不是某次 PR 合入后的 main,不签名"; exit 1; }
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: unsigned-darwin-arm64

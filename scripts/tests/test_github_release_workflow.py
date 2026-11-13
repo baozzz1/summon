@@ -82,7 +82,9 @@ class WorkflowTests(unittest.TestCase):
     def test_release_tag_is_checked_against_version_and_main(self):
         prepare = run_text(self.jobs['prepare'])
         self.assertIn('release_info.py check-tag --tag "$TAG" --sha "$SHA"', prepare)
-        self.assertIn('git merge-base --is-ancestor "$SHA" origin/main', prepare)
+        # 只认 main 的第一父链(squash 合入后的 main),不认祖先:PR 的中间提交也是祖先。
+        self.assertIn('on-main.sh "$SHA" origin/main', prepare)
+        self.assertNotIn('merge-base', self.release_text)
         # 演练 tag 同样要求在 main 上:main 上的检查不能只在发版 tag 的分支里。
         self.assertNotIn('if [ "$KIND" = release ]', prepare)
         self.assertIn('publish.py prepare', prepare)
@@ -126,7 +128,10 @@ class WorkflowTests(unittest.TestCase):
         checkouts = [s for s in steps(sign) if s.get('uses', '').startswith('actions/checkout@')]
         self.assertEqual(len(checkouts), 1)
         self.assertEqual(checkouts[0]['with']['ref'], 'main')
-        self.assertIn('git merge-base --is-ancestor "$SHA" HEAD', text)
+        self.assertIn('on-main.sh "$SHA" HEAD', text)
+        self.assertEqual(checkouts[0]['with'].get('fetch-depth'), 0)
+        sparse = checkouts[0]['with']['sparse-checkout'].split()
+        self.assertEqual(sorted(sparse), ['/scripts/codesign.sh', '/scripts/github-release/'])
         self.assertEqual(sign['needs'], ['prepare', 'build-macos'])
 
     def test_macos_build_sign_verify_order(self):

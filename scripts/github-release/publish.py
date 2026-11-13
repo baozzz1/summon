@@ -5,7 +5,8 @@
     python3 scripts/github-release/publish.py finalize --repo <owner/name> --tag <tag> --sha <提交> \\
         --built <目录> --work <目录>
 
-prepare 确认同名 tag 指向这个提交,再按 release_plan.plan_prepare 建草稿、沿用草稿或跳过(已发布),
+prepare 确认同名 tag 指向这个提交,再按 release_plan.plan_prepare 建草稿、沿用草稿或跳过(已发布;
+跳过时把 latest 收敛到已发布的最高版本,修好转为发布之后才失败的那一轮),
 标准输出只有一个词 `create` / `continue` / `skip`。演练 tag(test-…)的草稿标成 prerelease。
 
 finalize 在三个平台都构建完之后跑。--built 里是本次构建的 `summon-<平台>.tar.gz` 与
@@ -271,6 +272,9 @@ def prepare(gh, tag, sha, work):
         raise PublishError(str(err)) from None
     if decision == 'skip':
         say(f'Release {tag} 已发布,本次不构建、不上传')
+        # 转为发布之后才失败的那一轮留下的 latest 在这里补齐,重跑整个工作流就能修好。
+        if kind == 'release':
+            say(f'latest 是 {ensure_latest(gh)}')
     elif decision == 'continue':
         say(f'沿用已有的草稿 {tag}(目标提交相同)')
     else:

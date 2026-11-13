@@ -376,11 +376,27 @@ class PrepareTests(unittest.TestCase):
         self.assertIs(gh.calls[0][-1], True)
         self.assertIn('演练', gh.calls[0][3])
 
+    def test_published_release_skip_repairs_latest(self):
+        gh = FakeGh(tag_commits={TAG: SHA}, latest='v0.0.1')
+        gh.add_release(TAG, draft=False)
+        gh.add_release('v0.0.1', draft=False)
+        self.assertEqual(self.run_prepare(gh), 'skip')
+        self.assertEqual(gh.latest, TAG)
+        self.assertEqual(gh.calls, [('latest', TAG)])
+
+    def test_published_release_skip_leaves_correct_latest_alone(self):
+        gh = FakeGh(tag_commits={TAG: SHA}, latest='v999.0.0')
+        gh.add_release(TAG, draft=False)
+        gh.add_release('v999.0.0', draft=False)
+        self.assertEqual(self.run_prepare(gh), 'skip')
+        self.assertEqual(gh.calls, [])
+
     def test_existing_draft_continues_and_published_skips(self):
         gh = FakeGh(tag_commits={TAG: SHA})
         gh.add_release(TAG)
         self.assertEqual(self.run_prepare(gh), 'continue')
         gh.releases[TAG]['isDraft'] = False
+        gh.latest = TAG
         self.assertEqual(self.run_prepare(gh), 'skip')
         self.assertEqual(gh.calls, [])
 
