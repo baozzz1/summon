@@ -86,7 +86,7 @@ out="$(SUMMON_MACOS_CERT_P12="$P12_BASE64" SUMMON_MACOS_CERT_PASSWORD="$P12_PASS
 case "$out" in *SHA-256*) ;; *) fail "中间证书摘要不符的提示:$out" ;; esac
 assert_no_secret "$out" '自签证书'
 [ ! -e "$STATE/cert.p12" ] || fail '导入后 p12 应已删除'
-KEYCHAIN="$STATE/signing.keychain-db"
+KEYCHAIN="$(cd "$STATE" && pwd -P)/signing.keychain-db"
 [ -f "$KEYCHAIN" ] || fail '应建了临时钥匙串'
 security list-keychains -d user | grep -qF "$KEYCHAIN" || fail '临时钥匙串应在搜索列表里'
 security find-certificate -c 'summon keychain test' "$KEYCHAIN" > /dev/null 2>&1 \

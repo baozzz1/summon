@@ -71,7 +71,14 @@ esac
 }
 [ "$(uname -s)" = Darwin ] || die "只在 macOS 上用"
 
-KEYCHAIN="$STATE/signing.keychain-db"
+# security 列出的是解析过符号链接的路径(macOS 的 /var 是 /private/var),状态目录一律用解析后的。
+canonical_state() {
+  if [ -d "$STATE" ]; then
+    STATE="$(cd "$STATE" && pwd -P)"
+  fi
+  KEYCHAIN="$STATE/signing.keychain-db"
+}
+canonical_state
 
 # 用户钥匙串搜索列表,一行一个路径。
 search_list() {
@@ -112,6 +119,7 @@ setup() {
   [ -n "${SUMMON_MACOS_CERT_PASSWORD:-}" ] || die "缺 SUMMON_MACOS_CERT_PASSWORD"
   [ ! -e "$STATE" ] || die "$STATE 已存在;先 cleanup"
   mkdir -p "$STATE"
+  canonical_state
 
   local keychain_password path identities count
   keychain_password="$(openssl rand -hex 32)"
