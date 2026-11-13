@@ -42,7 +42,45 @@ python3 scripts/check-public-content.py
   里更新经审查的摘要。
 - 运行数据和个人上下文在源码仓库之外保存。
 
-## 提交
+## 提交与合入
 
 提交前检查暂存区内容、隐私扫描结果、许可证及第三方署名。
 提交消息只描述最终行为。
+
+`main` 只经 PR 合入：在分支上开发，推到 GitHub 开 PR。`checks` 工作流的 Linux 与 macOS
+两个 job 都通过、review 批准后，由作者（包括 agent）自行合入。不直接推送或强推 `main`。
+
+## 发版
+
+发版全部在 GitHub Actions 的 `release` 工作流里完成。版本号只用纯数字的 `x.y.z`：
+已安装的启动器只认这个形态。
+
+1. 开一个发版 PR：改 `crates/summon/Cargo.toml` 的版本与 `Cargo.lock` 里 summon 的版本，
+   把 `RELEASE_NOTES.md`「未发布」里的条目移到新的版本节 `## x.y.z · 日期`。
+2. 合入后，在 `main` 的合入提交上打 tag 并推送：`git tag vX.Y.Z <提交>`、`git push origin vX.Y.Z`。
+   tag 不在 `main` 上，或与 `Cargo.toml` 的版本不符，工作流直接失败。
+3. 工作流建草稿 Release、构建两个 Linux 包与未签名的 macOS 二进制；签名 job 绑定 environment
+   `release`，owner 在 GitHub 上批准后才导入签名证书、签名打包，之后另一个 job 解包做冒烟检查。三个包都到齐后核对字节数、SHA-256、
+   提交与包成员，生成并上传 `manifest.json`，再转为发布；latest 始终指向已发布的最高版本。
+4. 任何一步失败，Release 都停在草稿，对外不可见；修好后在 Actions 里重跑失败的 job。
+   已发布的 Release 不改写，要换内容就发下一个版本。转为发布之后才失败的（latest 没收敛好），
+   重跑整个工作流：prepare 遇到已发布的版本不再构建，只把 latest 收敛到已发布的最高版本。
+
+演练：对 `main` 上的提交推送 tag `test-<提交号前缀>`（7 到 40 位），走完同样的流程（签名 job
+同样要批准），停在 prerelease 草稿，永不转为发布。看完删掉草稿和 tag。
+
+签名的部署批准只由 owner 本人在 GitHub 网页上点，agent 不调用部署审批接口（`pending_deployments`
+等）。tag 触发的运行用的是被打 tag 那个提交里的工作流，environment 只看 tag 名，所以批准之前核对：
+这次运行的提交在 `main` 的第一父链上（即某次 PR 合入后的 `main`，
+`git rev-list --first-parent origin/main` 里有它），且它的 `.github/workflows/`、`scripts/github-release/`
+与 `main` 一致。只认第一父链的前提是仓库只允许 squash 合并：merge commit 或 rebase 合入会让 PR 的
+中间提交也成为 `main` 的祖先，而它们没有作为整体被 review 过。工作流里的检查用的是同一条判据
+（`scripts/github-release/on-main.sh`）。
+
+签名 job 只运行取自 `main` 的签名脚本，不构建、不执行被签名的二进制。脚本是 `main` 当前的，
+二进制来自被打 tag 的提交：两边打包格式不兼容时签名失败，不会签出格式不对的包。
+
+签名证书由 Apple「Developer ID Certification Authority」（G1）中间证书签发，`macos-keychain.sh`
+只钉了这一张。换成 G2 签发的证书后，导入会报「0 个」有效身份，届时把钉住的地址和摘要换成 G2 的。
+
+发布脚本在 `scripts/github-release/`，改动后跑 `scripts/verify.sh` 第一步里的脚本测试。

@@ -27,6 +27,13 @@ Codex 和 Cursor 使用各自支持的 RPC 通道，进程与会话按后端契�
 发布到稳定落点 `~/.summon/bin/`，开机自启单元只登记这个落点。落点旁的构建戳记录
 落点文件的版本与提交，发布前据此判断新旧，绝不拿旧的覆盖新的。
 
+## 发布
+
+预编译包发布在 GitHub Releases，每个版本一个 Release，附件是三个平台包与 `manifest.json`。
+推送 tag `v<版本>` 触发 `.github/workflows/release.yml`：Linux 与 macOS 包在各自的 runner 上构建，
+macOS 包用 Developer ID 签名；Release 在附件齐全、核对通过之前一直是草稿。
+`summon upgrade` 与自动升级只认 `manifest.json` 列出的包。
+
 ## 配置与手册
 
 `locales/assets/<language>/guide/` 是使用手册的源码，由 `summon guide` 按章节提供。

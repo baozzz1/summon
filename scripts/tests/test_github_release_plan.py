@@ -3,11 +3,7 @@
     python3 scripts/tests/test_github_release_plan.py
 """
 import importlib.util
-import json
-import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
-from io import StringIO
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,7 +14,6 @@ SPEC.loader.exec_module(plan)
 
 SHA = '0123456789abcdef0123456789abcdef01234567'
 OTHER = 'f' * 40
-LINUX = ['linux-x64', 'linux-arm64']
 
 
 def release(draft=True, target=SHA, assets=(), states=None):
@@ -27,151 +22,86 @@ def release(draft=True, target=SHA, assets=(), states=None):
             'assets': [{'name': n, 'state': states.get(n, 'uploaded')} for n in assets]}
 
 
-def pair(platform):
-    return [f'summon-{platform}.tar.gz', f'summon-{platform}.build.json']
-
-
 class PrepareTests(unittest.TestCase):
     def test_missing_release_is_created(self):
-        self.assertEqual(plan.plan_prepare(None, SHA, None), 'create')
         self.assertEqual(plan.plan_prepare(None, SHA, SHA), 'create')
 
     def test_published_release_is_skipped(self):
-        self.assertEqual(plan.plan_prepare(release(draft=False), SHA, None), 'skip')
-        self.assertEqual(plan.plan_prepare(release(draft=False, target=OTHER), SHA, OTHER), 'skip')
+        self.assertEqual(plan.plan_prepare(release(draft=False), SHA, OTHER), 'skip')
 
     def test_draft_for_this_commit_continues(self):
-        self.assertEqual(plan.plan_prepare(release(assets=pair('linux-x64')), SHA, None), 'continue')
         self.assertEqual(plan.plan_prepare(release(), SHA, SHA), 'continue')
 
     def test_draft_for_another_commit_fails_naming_both(self):
-        with self.assertRaises(plan.PlanError) as ctx:
-            plan.plan_prepare(release(target=OTHER), SHA, None)
-        self.assertIn(OTHER, str(ctx.exception))
-        self.assertIn(SHA, str(ctx.exception))
+        with self.assertRaisesRegex(plan.PlanError, f'{OTHER}.*{SHA}'):
+            plan.plan_prepare(release(target=OTHER), SHA, SHA)
 
-    def test_existing_tag_elsewhere_blocks_create_and_continue(self):
-        # GitHub 发布时沿用已有 tag、忽略草稿的目标提交:tag 指向别处就不能建、不能沿用。
-        for existing in (None, release()):
-            with self.subTest(release=existing):
-                with self.assertRaises(plan.PlanError) as ctx:
-                    plan.plan_prepare(existing, SHA, OTHER)
-                self.assertIn(OTHER, str(ctx.exception))
-                self.assertIn('tag', str(ctx.exception))
+    def test_tag_elsewhere_or_missing_blocks_create_and_continue(self):
+        for tag_commit in (OTHER, None):
+            for existing in (None, release()):
+                with self.assertRaisesRegex(plan.PlanError, '同名 tag'):
+                    plan.plan_prepare(existing, SHA, tag_commit)
 
     def test_needs_full_sha(self):
         with self.assertRaises(plan.PlanError):
-            plan.plan_prepare(None, SHA[:7], None)
+            plan.plan_prepare(None, SHA[:7], SHA[:7])
 
 
 class GitObjectTests(unittest.TestCase):
     def test_reads_type_and_sha(self):
-        self.assertEqual(plan.git_object({'ref': 'refs/tags/v1', 'object': {'type': 'tag', 'sha': OTHER}}),
-                         ('tag', OTHER))
-        self.assertEqual(plan.git_object({'object': {'type': 'commit', 'sha': SHA}}), ('commit', SHA))
+        self.assertEqual(plan.git_object({'object': {'type': 'tag', 'sha': OTHER}}), ('tag', OTHER))
 
     def test_rejects_unrecognized_response(self):
-        for bad in ({}, {'object': {'type': 'commit'}}, {'object': {'type': 'commit', 'sha': 'x'}}, []):
-            with self.subTest(bad=bad):
-                with self.assertRaises(plan.PlanError):
-                    plan.git_object(bad)
+        for response in (None, {}, {'object': {'type': 'commit', 'sha': 'abc'}}, []):
+            with self.assertRaises(plan.PlanError):
+                plan.git_object(response)
 
 
-class UploadTests(unittest.TestCase):
-    def test_empty_draft_uploads_both_pairs(self):
-        uploads, notes = plan.plan_upload(release(), SHA, LINUX)
-        self.assertEqual(uploads, pair('linux-x64') + pair('linux-arm64'))
-        self.assertEqual(notes, [])
-
-    def test_platform_already_uploaded_is_skipped(self):
-        uploads, notes = plan.plan_upload(release(assets=pair('linux-x64')), SHA, LINUX)
-        self.assertEqual(uploads, pair('linux-arm64'))
-        self.assertEqual(len(notes), 1)
-        self.assertIn('linux-x64', notes[0])
-
-    def test_everything_uploaded_uploads_nothing(self):
-        assets = pair('linux-x64') + pair('linux-arm64') + pair('darwin-arm64')
-        uploads, notes = plan.plan_upload(release(assets=assets), SHA, LINUX)
-        self.assertEqual(uploads, [])
-        self.assertEqual(len(notes), 2)
-
-    def test_half_pair_fails_naming_the_asset_to_delete(self):
-        for present in pair('linux-arm64'):
-            with self.subTest(present=present):
-                with self.assertRaises(plan.PlanError) as ctx:
-                    plan.plan_upload(release(assets=pair('linux-x64') + [present]), SHA, LINUX)
-                self.assertIn(f'删掉 {present}', str(ctx.exception))
-
-    def test_manifest_in_draft_blocks_upload(self):
-        with self.assertRaisesRegex(plan.PlanError, 'manifest.json'):
-            plan.plan_upload(release(assets=['manifest.json']), SHA, LINUX)
-
-    def test_unfinished_upload_blocks_upload(self):
-        assets = pair('linux-x64')
-        with self.assertRaisesRegex(plan.PlanError, '没上传完.*summon-linux-x64.tar.gz'):
-            plan.plan_upload(release(assets=assets, states={assets[0]: 'starter'}), SHA, LINUX)
-
-    def test_published_release_is_not_uploaded_to(self):
+class DraftTests(unittest.TestCase):
+    def test_draft_checks(self):
+        plan.check_draft(release(), SHA)
         with self.assertRaisesRegex(plan.PlanError, '不是草稿'):
-            plan.plan_upload(release(draft=False), SHA, LINUX)
+            plan.check_draft(release(draft=False), SHA)
+        with self.assertRaisesRegex(plan.PlanError, OTHER):
+            plan.check_draft(release(target=OTHER), SHA)
+        with self.assertRaisesRegex(plan.PlanError, 'x.tar.gz'):
+            plan.check_draft(release(assets=['x.tar.gz'], states={'x.tar.gz': 'starter'}), SHA)
 
-    def test_draft_for_another_commit_is_not_uploaded_to(self):
-        with self.assertRaisesRegex(plan.PlanError, '目标提交'):
-            plan.plan_upload(release(target=OTHER), SHA, LINUX)
+    def test_platform_decisions(self):
+        tarball, build_json = plan.pair('linux-x64')
+        self.assertEqual(plan.plan_platform(release(), 'linux-x64'), ('upload', []))
+        self.assertEqual(plan.plan_platform(release(assets=[tarball, build_json]), 'linux-x64'),
+                         ('adopt', [tarball, build_json]))
+        self.assertEqual(plan.plan_platform(release(assets=[build_json]), 'linux-x64'),
+                         ('compare', [build_json]))
+        # 别的平台的附件不影响这个平台。
+        self.assertEqual(plan.plan_platform(release(assets=plan.pair('linux-arm64')), 'linux-x64'),
+                         ('upload', []))
+
+    def test_unfinished_upload_does_not_count_as_present(self):
+        tarball, build_json = plan.pair('linux-x64')
+        r = release(assets=[tarball, build_json], states={build_json: 'starter'})
+        self.assertEqual(plan.uploaded_names(r), {tarball})
+
+    def test_published_assets_are_exactly_three_packages_and_manifest(self):
+        self.assertEqual(plan.published_assets(), [
+            'manifest.json', 'summon-darwin-arm64.tar.gz', 'summon-linux-arm64.tar.gz',
+            'summon-linux-x64.tar.gz'])
+        self.assertTrue(plan.published_complete(release(assets=plan.published_assets())))
+        self.assertFalse(plan.published_complete(
+            release(assets=plan.published_assets() + ['summon-linux-x64.build.json'])))
+        self.assertFalse(plan.published_complete(release(assets=plan.published_assets()[1:])))
 
 
-class CommandLineTests(unittest.TestCase):
-    def run_main(self, *args):
-        out, err = StringIO(), StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
-            rc = plan.main(list(args))
-        return rc, out.getvalue(), err.getvalue()
+class LatestTests(unittest.TestCase):
+    def test_highest_release_compares_numerically(self):
+        self.assertEqual(plan.highest_release(['v1.9.9', 'v1.10.0', 'v1.2.3']), 'v1.10.0')
+        self.assertEqual(plan.highest_release(['v2.0.0', 'v1.99.99']), 'v2.0.0')
 
-    def write(self, data):
-        f = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8')
-        self.addCleanup(Path(f.name).unlink)
-        with f:
-            json.dump(data, f)
-        return f.name
-
-    def test_prepare_without_release_prints_create(self):
-        self.assertEqual(self.run_main('prepare', '--sha', SHA, '--tag-absent'), (0, 'create\n', ''))
-
-    def test_prepare_continue_and_failure(self):
-        self.assertEqual(self.run_main('prepare', '--sha', SHA, '--tag-absent', '--release-json',
-                                       self.write(release()))[1], 'continue\n')
-        rc, out, err = self.run_main('prepare', '--sha', SHA, '--tag-absent', '--release-json',
-                                     self.write(release(target=OTHER)))
-        self.assertEqual((rc, out), (1, ''))
-        self.assertIn(OTHER, err)
-
-    def test_prepare_with_tag_elsewhere_fails(self):
-        rc, out, err = self.run_main('prepare', '--sha', SHA, '--tag-commit', OTHER)
-        self.assertEqual((rc, out), (1, ''))
-        self.assertIn(OTHER, err)
-        self.assertEqual(self.run_main('prepare', '--sha', SHA, '--tag-commit', SHA)[1], 'create\n')
-
-    def test_prepare_requires_tag_state(self):
-        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
-            plan.main(['prepare', '--sha', SHA])
-
-    def test_git_object_prints_type_and_sha(self):
-        path = self.write({'object': {'type': 'tag', 'sha': OTHER}})
-        self.assertEqual(self.run_main('git-object', '--json', path), (0, f'tag {OTHER}\n', ''))
-
-    def test_upload_prints_files_and_notes(self):
-        path = self.write(release(assets=pair('linux-x64')))
-        rc, out, err = self.run_main('upload', '--sha', SHA, '--release-json', path,
-                                     '--platform', 'linux-x64', '--platform', 'linux-arm64')
-        self.assertEqual(rc, 0)
-        self.assertEqual(out.split(), pair('linux-arm64'))
-        self.assertIn('linux-x64', err)
-
-    def test_unreadable_release_json_fails(self):
-        rc, _, err = self.run_main('upload', '--sha', SHA, '--release-json', '/nonexistent/x',
-                                   '--platform', 'linux-x64')
-        self.assertEqual(rc, 1)
-        self.assertIn('读不了', err)
+    def test_highest_release_ignores_other_tags(self):
+        self.assertEqual(plan.highest_release(['nightly', 'test-0123456', 'v1.0.0']), 'v1.0.0')
+        self.assertIsNone(plan.highest_release([]))
+        self.assertIsNone(plan.highest_release(['1.0.0']))
 
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@
 [简体中文](README.md) | English
 
 [![checks](https://github.com/baozzz1/summon/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/baozzz1/summon/actions/workflows/checks.yml)
-[![release](https://github.com/baozzz1/summon/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/baozzz1/summon/actions/workflows/release.yml)
+[![release](https://github.com/baozzz1/summon/actions/workflows/release.yml/badge.svg)](https://github.com/baozzz1/summon/actions/workflows/release.yml)
 [![GitHub release](https://img.shields.io/github/v/release/baozzz1/summon)](https://github.com/baozzz1/summon/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
