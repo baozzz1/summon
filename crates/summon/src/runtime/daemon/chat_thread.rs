@@ -12445,19 +12445,26 @@ pub(super) fn run_headless_interruptible(
 /// 留着它 = 该 (agent, chat) 之后每一轮都被 `InFlight::insert` 拒绝并当场杀掉(用户零回复),
 /// `agents kill` 只发信号也清不掉,Bridge 的 `contains` 探测还会把这个 chat 永久判忙。
 ///
-/// 只摘注册、不发任何信号——走到这里之前打断路已对进程组 SIGINT→SIGKILL 过。身份核对
-/// (`remove_if` 的 `same_handle`)是必需的:被 detach 的 worker 线程其实还活着,逃逸孙进程一旦
-/// 关掉 stdout 它仍会走到 `finish`,故摘除与下一轮登记可能交错,只有 Arc 身份能防误摘下一轮。
+/// 只摘注册、不发任何信号——走到这里之前打断路已对进程组 SIGINT→SIGKILL 过。摘除与完成权
+/// 裁决走 `InFlight::finish`,在注册表同一把锁内完成:条目仍是 Running 时本线程取得完成权
+/// (`Completed`);停机已接管(`ShutdownClaimed`)时条目照样摘掉,完成权与恢复 checkpoint
+/// 留给下一代。身份核对(`same_handle`)是必需的:被 detach 的 worker 线程其实还活着,逃逸孙进程
+/// 一旦关掉 stdout 它仍会走到 `finish`,故摘除与下一轮登记可能交错,只有 Arc 身份能防误摘下一轮。
+/// 没有摘到自己的条目时返回 `Missing`。
 pub(super) fn detach_inflight_turn(
     inflight: &crate::runtime::inflight::InFlight,
     key: &crate::runtime::inflight::TurnKey,
     registration: &std::sync::Mutex<Option<(crate::runtime::executor::ChildKiller, bool)>>,
-) -> bool {
+) -> crate::runtime::inflight::FinishDisposition {
+    use crate::runtime::inflight::FinishDisposition;
     // 没 spawn 过 → 压根没登记;登记被拒(停机屏障 / 同 key 已占)→ map 里那条属于别人,不能摘。
     let Some((killer, admitted)) = registration.lock().ok().and_then(|slot| slot.clone()) else {
-        return false;
+        return FinishDisposition::Missing;
     };
-    admitted && inflight.remove_if(key, &killer)
+    if !admitted {
+        return FinishDisposition::Missing;
+    }
+    inflight.finish(key, &killer)
 }
 
 /// 只在已观察到 Done/断连，或句柄已明确结束时 join；否则 drop JoinHandle=detach，
@@ -13997,14 +14004,23 @@ pub(super) fn stream_turn_headless(
     carried_followup_ids.extend(steered_ids);
     // 被 detach 的 worker 永不再调 on_finish → 本轮的在跑登记只能在这里摘;不摘的话该 (agent, chat)
     // 之后每一轮都会被 insert 拒绝(用户零回复)。只动注册表账目,不补任何信号。
-    let reclaimed = detached && detach_inflight_turn(inflight, &turn_key, &registration);
-    if reclaimed {
+    let detach = if detached {
+        detach_inflight_turn(inflight, &turn_key, &registration)
+    } else {
+        crate::runtime::inflight::FinishDisposition::Missing
+    };
+    if detach != crate::runtime::inflight::FinishDisposition::Missing {
         log(&summon_i18n::format!("r5c364727be"));
     }
-    // 看门狗(超时 / 空间不足)强杀后 worker 仍没返回:本轮的在跑登记由本线程摘掉了,没有
-    // 别人(停机接管)认领,detach 的 worker 之后也拿不到完成所有权。这一轮的终态归本线程:
-    // 照常发失败卡、清 checkpoint、销账。
-    let abandoned_by_watchdog = reclaimed
+    // 停机已接管这一轮:完成权与 checkpoint 归下一代恢复。
+    let finish = match detach {
+        crate::runtime::inflight::FinishDisposition::ShutdownClaimed => Some(detach),
+        _ => finish,
+    };
+    // 看门狗(超时 / 空间不足)强杀后 worker 仍没返回:在跑登记仍是 Running、由本线程摘掉并取得
+    // 完成权,detach 的 worker 之后拿不到完成权。这一轮的终态归本线程:照常发失败卡、
+    // 清 checkpoint、销账。
+    let abandoned_by_watchdog = detach == crate::runtime::inflight::FinishDisposition::Completed
         && !interrupted
         && rerun.is_none()
         && matches!(&out, Ok(outcome) if outcome.timed_out || outcome.api_error.is_some());
@@ -22468,8 +22484,9 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
         assert!(inflight.insert(key.clone(), inflight_turn(&stuck, dir.path())));
         let registration = std::sync::Mutex::new(Some((stuck.clone(), true)));
 
-        assert!(
+        assert_eq!(
             detach_inflight_turn(&inflight, &key, &registration),
+            crate::runtime::inflight::FinishDisposition::Completed,
             "detach 必须摘掉自己那一轮的登记"
         );
         assert!(!inflight.contains(&key), "detach 后注册表应恢复成无在跑轮");
@@ -22492,7 +22509,10 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
         let stuck = crate::runtime::executor::ChildKiller::new(990_203);
         assert!(inflight.insert(key.clone(), inflight_turn(&stuck, dir.path())));
         let registration = std::sync::Mutex::new(Some((stuck.clone(), true)));
-        assert!(detach_inflight_turn(&inflight, &key, &registration));
+        assert_eq!(
+            detach_inflight_turn(&inflight, &key, &registration),
+            FinishDisposition::Completed
+        );
 
         let next = crate::runtime::executor::ChildKiller::new(990_204);
         assert!(inflight.insert(key.clone(), inflight_turn(&next, dir.path())));
@@ -22517,12 +22537,39 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
 
         let rejected = crate::runtime::executor::ChildKiller::new(990_206);
         let registration = std::sync::Mutex::new(Some((rejected, false)));
-        assert!(!detach_inflight_turn(&inflight, &key, &registration));
+        assert_eq!(
+            detach_inflight_turn(&inflight, &key, &registration),
+            crate::runtime::inflight::FinishDisposition::Missing
+        );
         assert!(inflight.contains(&key), "被拒轮的 detach 不得摘掉在跑轮");
 
         let never_spawned = std::sync::Mutex::new(None);
-        assert!(!detach_inflight_turn(&inflight, &key, &never_spawned));
+        assert_eq!(
+            detach_inflight_turn(&inflight, &key, &never_spawned),
+            crate::runtime::inflight::FinishDisposition::Missing
+        );
         assert!(inflight.contains(&key));
+    }
+
+    /// 停机先接管、看门狗后 detach:条目照样摘掉(不毒化注册表),但完成权留给停机恢复。
+    #[test]
+    fn detach_after_shutdown_claim_leaves_completion_to_recovery() {
+        use crate::runtime::inflight::FinishDisposition;
+        let dir = tempfile::tempdir().expect("建临时家目录失败");
+        let inflight = crate::runtime::inflight::InFlight::new();
+        let key = crate::runtime::inflight::TurnKey::new("t", "p-ou_claimed");
+        let stuck = crate::runtime::executor::ChildKiller::new(990_207);
+        assert!(inflight.insert(key.clone(), inflight_turn(&stuck, dir.path())));
+        assert_eq!(
+            inflight.shutdown_interrupt_all(Duration::ZERO, &|_| false, &|_, _| {}),
+            1
+        );
+        let registration = std::sync::Mutex::new(Some((stuck, true)));
+        assert_eq!(
+            detach_inflight_turn(&inflight, &key, &registration),
+            FinishDisposition::ShutdownClaimed
+        );
+        assert!(!inflight.contains(&key));
     }
 
     /// 结构守护:detach 兜底必须真的接在生产路径上。`remove_if` 这类兜底原语最典型的失效方式

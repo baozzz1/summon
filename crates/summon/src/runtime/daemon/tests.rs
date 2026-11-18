@@ -13506,11 +13506,11 @@ fn configured_headless_watchdog_controls_the_real_rpc_worker() {
     }
 }
 
-/// 看门狗强杀后 worker 仍不返回(逃逸的孙进程攥着 stdout):本轮由本线程收尾,发失败卡、
-/// 清掉 checkpoint,结局是 Failed。
+/// 看门狗强杀后 worker 仍不返回(逃逸的孙进程攥着 stdout)的一轮。`shutdown_first`:看门狗
+/// 打断后、等 worker 的宽限期里 daemon 优雅停机接管(`shutdown_interrupt_all`),随后看门狗 detach。返回 (结局, 发出的卡,
+/// checkpoint 是否还在)。
 #[cfg(target_os = "linux")]
-#[test]
-fn watchdog_failure_card_is_sent_even_when_the_worker_never_returns() {
+fn stuck_worker_turn(shutdown_first: bool) -> (TurnResult, Vec<String>, bool) {
     let _guard = crate::test_support::process_test_guard();
     let _quota = crate::capture::rpc_pool::default_codex_quota_test_guard();
     let (mut agent, tmp) = crate::test_support::agent_dir("codex", "");
@@ -13537,6 +13537,19 @@ fn watchdog_failure_card_is_sent_even_when_the_worker_never_returns() {
     let chat = badge_chat(tmp.path(), "oc_detach_probe");
     let tag = chat_tag(chat.chat_type, chat.chat_id);
     let inflight = crate::runtime::inflight::InFlight::new();
+    let shutdown = shutdown_first.then(|| {
+        let inflight = inflight.clone();
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while inflight.is_empty() {
+                assert!(std::time::Instant::now() < deadline, "轮没有登记");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // 落在看门狗打断之后、detach 之前:轮的静默上限 1 秒,之后还有约 4 秒的打断宽限。
+            std::thread::sleep(Duration::from_millis(2500));
+            inflight.shutdown_interrupt_all(Duration::ZERO, &|_| false, &|_, _| {})
+        })
+    });
     let scope = feishu_storage_scope(&agent).key;
     let session = Session::with_name(&agent, format!("soul-{}-{tag}", agent.name), 20, 20);
     let (tx, rx) = channel();
@@ -13570,24 +13583,50 @@ fn watchdog_failure_card_is_sent_even_when_the_worker_never_returns() {
         ResolvedSettings::resolve(&messaging, &ChatOverrides::default()),
     );
     crate::capture::rpc_pool::evict_shared(&agent.name, &tag);
+    if let Some(shutdown) = shutdown {
+        // 注册表里除了这一轮,还有常驻 RPC 会话进程自己的一条。
+        assert!(shutdown.join().unwrap() >= 1, "停机应接管这一轮");
+    }
     assert!(start.elapsed() < Duration::from_secs(15));
-    assert_eq!(result, TurnResult::Failed, "不能留给重启恢复");
-    let payloads = frontend.payloads.borrow();
+    let pending = agent
+        .state_dir()
+        .join("threads")
+        .join(&tag)
+        .join("pending.json")
+        .exists();
+    let cards = frontend.payloads.borrow().clone();
+    (result, cards, pending)
+}
+
+/// 看门狗强杀后 worker 仍不返回:本轮由本线程收尾,发失败卡、清掉 checkpoint,结局是 Failed。
+#[cfg(target_os = "linux")]
+#[test]
+fn watchdog_failure_card_is_sent_even_when_the_worker_never_returns() {
+    let (result, cards, pending) = stuck_worker_turn(false);
+    assert_eq!(result, TurnResult::Failed);
     assert!(
-        payloads
+        cards
             .iter()
             .any(|card| card.contains(summon_i18n::text!("r35099d9f5e"))),
-        "要发失败卡:{payloads:?}"
+        "要发失败卡:{cards:?}"
     );
+    assert!(!pending, "checkpoint 已清");
+}
+
+/// 停机先接管、看门狗随后 detach 不返回的 worker:完成权归停机恢复,不发失败卡、不删停机写下的
+/// checkpoint,结局交给恢复。
+#[cfg(target_os = "linux")]
+#[test]
+fn watchdog_leaves_a_shutdown_claimed_turn_to_recovery() {
+    let (result, cards, pending) = stuck_worker_turn(true);
+    assert_eq!(result, TurnResult::RecoveryDeferred);
     assert!(
-        !agent
-            .state_dir()
-            .join("threads")
-            .join(&tag)
-            .join("pending.json")
-            .exists(),
-        "checkpoint 已销,恢复路径不会再报一次"
+        !cards
+            .iter()
+            .any(|card| card.contains(summon_i18n::text!("r35099d9f5e"))),
+        "停机接管的轮不发失败卡:{cards:?}"
     );
+    assert!(pending, "停机写下的恢复 checkpoint 必须保留");
 }
 
 #[test]
