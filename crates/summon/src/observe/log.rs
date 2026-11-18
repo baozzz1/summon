@@ -121,17 +121,20 @@ mod tests {
         write_line(&mut FullDisk, "[a] line\n");
     }
 
-    /// 子进程入口:由下一条测试在 stderr 指向 `/dev/full` 时单独运行。
+    /// 子进程入口:由下一条测试在 stderr 指向 `/dev/full` 时单独运行,两次 `log` 都写失败。
+    /// 每次写完在 stdout 留一个标记,父进程据此确认两次都执行到、没有 panic。
     #[test]
     #[ignore = "由 log_survives_a_full_stderr 在子进程中运行"]
     fn log_to_full_stderr_child() {
         DIRECT_STDERR.with(|direct| direct.set(true));
         log("disk-full probe");
-        // 写失败之后再写也不 panic。
+        println!("after-first-log");
         log("disk-full probe, again");
+        println!("after-second-log");
     }
 
-    /// stderr 是写满的文件时 `log` 不能 panic:`/dev/full` 对每次写返回 ENOSPC。
+    /// stderr 是写满的文件时 `log` 不能 panic:`/dev/full` 对每次写返回 ENOSPC。子进程连写两次,
+    /// 两次都失败,进程正常退出。
     #[cfg(target_os = "linux")]
     #[test]
     fn log_survives_a_full_stderr() {
@@ -153,5 +156,8 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(output.status.success(), "{stdout}");
         assert!(stdout.contains("1 passed"), "{stdout}");
+        // 第一次写失败之后,第二次写同样失败,仍不 panic。
+        assert!(stdout.contains("after-first-log"), "{stdout}");
+        assert!(stdout.contains("after-second-log"), "{stdout}");
     }
 }
