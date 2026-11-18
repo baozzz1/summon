@@ -35,24 +35,31 @@ pub(crate) fn rotate_if_oversized(path: &Path, max: u64) -> bool {
 const DELTA_FLUSH_AGE: Duration = Duration::from_secs(1);
 /// 合并中的增量正文到这个字节数就落盘,一条记录不无限长大。
 const DELTA_FLUSH_BYTES: usize = 4096;
+/// 后台落盘线程检查到期缓冲的间隔。
+const DELTA_FLUSH_TICK: Duration = Duration::from_millis(200);
 
 /// 一个 chat 一轮的事件写口:持 append 模式文件句柄 + 单调 seq + 本轮出处。
 ///
 /// codex 的流式增量(每条一两个字)按段合并后再写(判据见
 /// [`EventRecord::is_mergeable_delta`]):下一条不属于同一段、合并中的正文超过
-/// [`DELTA_FLUSH_BYTES`]、或已缓冲超过 [`DELTA_FLUSH_AGE`] 时落盘;写口销毁(轮结束、被打断、
-/// 线程 unwind)与 daemon 停机([`flush_open_sinks`])时把缓冲的写掉。
+/// [`DELTA_FLUSH_BYTES`]、或已缓冲超过 [`DELTA_FLUSH_AGE`] 时落盘。到期检查由进程内一条后台
+/// 线程做,不依赖写口使用方的循环:provider 卡住不再出声时,最后一段增量也会按期落盘。
+/// 写口销毁(轮结束、被打断、线程 unwind)与 daemon 停机([`flush_open_sinks`])时写掉缓冲。
+/// 进程被 SIGKILL 或 abort 时,最多丢掉一段未到期的缓冲(不超过 1 秒、4096 字节)。
+///
+/// 合并记录的 `ts` 是该段首条增量的时刻;按 `ts` 推算的「最后活动时间」最多早 1 秒。
 pub struct EventSink {
     inner: Arc<Mutex<SinkInner>>,
 }
 
 struct SinkInner {
     file: File,
+    /// 会话目录:写失败报空间不足时记在它上面(见 `observe::storage_full`)。
+    scope: std::path::PathBuf,
     seq: u64,
     stamp: EventStamp,
     /// 合并中的增量与它开始缓冲的时刻。
     pending: Option<(EventRecord, Instant)>,
-    flush_age: Duration,
 }
 
 /// 进程里开着的写口。停机时主线程据此写掉各写口缓冲的增量:chat 线程可能来不及走到销毁。
@@ -60,15 +67,33 @@ static OPEN_SINKS: Mutex<Vec<Weak<Mutex<SinkInner>>>> = Mutex::new(Vec::new());
 
 /// 写掉所有开着的写口里缓冲的增量。daemon 停机收尾时调。
 pub(crate) fn flush_open_sinks() {
+    for_each_open_sink(SinkInner::flush_pending);
+}
+
+fn for_each_open_sink(mut each: impl FnMut(&mut SinkInner)) {
     let sinks = OPEN_SINKS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
     for sink in sinks.iter().filter_map(Weak::upgrade) {
-        sink.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .flush_pending();
+        each(&mut sink.lock().unwrap_or_else(PoisonError::into_inner));
     }
+}
+
+/// 首个写口打开时起后台落盘线程,此后常驻:每个节拍写掉到期的缓冲。
+fn ensure_flush_ticker() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let spawned = std::thread::Builder::new()
+            .name("events-flush".into())
+            .spawn(|| loop {
+                std::thread::sleep(DELTA_FLUSH_TICK);
+                for_each_open_sink(SinkInner::flush_due);
+            });
+        if let Err(e) = spawned {
+            crate::observe::log::log(&summon_i18n::format!("event_log.flush_ticker_failed"));
+        }
+    });
 }
 
 impl EventSink {
@@ -76,22 +101,28 @@ impl EventSink {
     /// 超过单文件上限先轮转(PF2)。失败上抛给调用方,由其转成 `None`(不开 sink),不影响本轮。
     /// `stamp` 是本轮出处,此后写入的每条记录都盖上它。
     pub fn open(base: &Path, tag: &str, stamp: EventStamp) -> anyhow::Result<Self> {
-        use crate::observe::storage_full::noted;
-        let dir = base.join("threads").join(tag);
-        noted(std::fs::create_dir_all(&dir))?;
+        use crate::observe::storage_full::{noted, thread_scope};
+        let dir = thread_scope(base, tag);
+        noted(&dir, std::fs::create_dir_all(&dir))?;
         let path = dir.join("events.jsonl");
         rotate_if_oversized(&path, CHAT_LOG_MAX_BYTES);
-        let file = noted(OpenOptions::new().create(true).append(true).open(&path))?;
+        let file = noted(
+            &dir,
+            OpenOptions::new().create(true).append(true).open(&path),
+        )?;
         let inner = Arc::new(Mutex::new(SinkInner {
             file,
+            scope: dir,
             seq: 0,
             stamp,
             pending: None,
-            flush_age: DELTA_FLUSH_AGE,
         }));
-        let mut open = OPEN_SINKS.lock().unwrap_or_else(PoisonError::into_inner);
-        open.retain(|sink| sink.strong_count() > 0);
-        open.push(Arc::downgrade(&inner));
+        {
+            let mut open = OPEN_SINKS.lock().unwrap_or_else(PoisonError::into_inner);
+            open.retain(|sink| sink.strong_count() > 0);
+            open.push(Arc::downgrade(&inner));
+        }
+        ensure_flush_ticker();
         Ok(Self { inner })
     }
 
@@ -117,18 +148,6 @@ impl EventSink {
         let rec = EventRecord::user_input(text, now_ms(), 0).with_stamp(&inner.stamp);
         inner.push(rec);
     }
-
-    /// 缓冲的增量超过 [`DELTA_FLUSH_AGE`] 就写掉。事件间隔很长时(工具在跑)由调用方的循环调。
-    pub fn flush_due(&mut self) {
-        let mut inner = self.lock();
-        if inner
-            .pending
-            .as_ref()
-            .is_some_and(|(_, since)| since.elapsed() >= inner.flush_age)
-        {
-            inner.flush_pending();
-        }
-    }
 }
 
 impl Drop for EventSink {
@@ -138,11 +157,21 @@ impl Drop for EventSink {
 }
 
 impl SinkInner {
+    fn flush_due(&mut self) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|(_, since)| since.elapsed() >= DELTA_FLUSH_AGE)
+        {
+            self.flush_pending();
+        }
+    }
+
     fn push(&mut self, mut rec: EventRecord) {
         if let Some((pending, since)) = self.pending.as_mut() {
             if pending.absorb_delta(&rec) {
                 let long = pending.text.as_ref().map_or(0, String::len) >= DELTA_FLUSH_BYTES;
-                if long || since.elapsed() >= self.flush_age {
+                if long || since.elapsed() >= DELTA_FLUSH_AGE {
                     self.flush_pending();
                 }
                 return;
@@ -169,9 +198,9 @@ impl SinkInner {
         match serde_json::to_string(rec) {
             Ok(mut line) => {
                 line.push('\n');
-                // 整行拼好再写:`writeln!` 会把正文与换行分成两次写。
+                // 正文连同换行一次写出。
                 if let Err(e) = self.file.write_all(line.as_bytes()) {
-                    crate::observe::storage_full::note(&e);
+                    crate::observe::storage_full::note(&self.scope, &e);
                     crate::observe::log::log(&summon_i18n::format!("rd0b31b6bde"));
                 }
             }
@@ -400,17 +429,20 @@ mod tests {
         drop(alive);
         assert_eq!(records(dir.path(), "stop").len(), 1, "不重复写");
 
-        // 长时间没有下一条事件(工具在跑):到期由循环写掉;没到期不写。
+        // 之后没有任何事件(provider 卡住):后台线程按期写掉,不等下一条事件或写口销毁。
         let mut sink = EventSink::open(dir.path(), "pause", EventStamp::default()).unwrap();
-        sink.write(&delta("等工具", "msg_1"));
-        sink.flush_due();
-        assert!(records(dir.path(), "pause").is_empty());
-        sink.lock().flush_age = Duration::ZERO;
-        sink.flush_due();
+        sink.write(&delta("卡住前最后一段", "msg_1"));
+        assert!(records(dir.path(), "pause").is_empty(), "未到期先缓冲");
+        let deadline = Instant::now() + DELTA_FLUSH_AGE * 3;
+        while records(dir.path(), "pause").is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert_eq!(
             records(dir.path(), "pause")[0].text.as_deref(),
-            Some("等工具")
+            Some("卡住前最后一段"),
+            "缓冲超过 {DELTA_FLUSH_AGE:?} 必须落盘"
         );
+        drop(sink);
 
         // 合并中的正文到上限就落盘。
         let mut sink = EventSink::open(dir.path(), "long", EventStamp::default()).unwrap();

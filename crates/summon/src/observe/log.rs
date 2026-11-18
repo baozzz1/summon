@@ -32,17 +32,10 @@ pub(crate) fn log(msg: &str) {
     emit(&line);
 }
 
-/// 写一行到 stderr(daemon 里即 daemon.log),写失败丢弃这一行。
-///
-/// `eprintln!` 在写失败时 panic:磁盘满时 daemon.log 写不进去,调日志的线程(chat 线程、
-/// 看门狗)会当场死掉,这一轮既不收尾也不发卡。空间不足记进 [`storage_full`] 观测,
-/// 在跑的无头轮据此结束并告知用户。
-///
-/// [`storage_full`]: crate::observe::storage_full
+/// 写一行到 stderr(daemon 里即 daemon.log)。写失败(例如磁盘满)丢弃这一行,调用方照常继续:
+/// 日志写不进去不能让调它的线程(chat 线程、看门狗)中断。
 fn write_line(out: &mut dyn std::io::Write, line: &str) {
-    if let Err(error) = out.write_all(line.as_bytes()) {
-        crate::observe::storage_full::note(&error);
-    }
+    let _ = out.write_all(line.as_bytes());
 }
 
 #[cfg(not(test))]
@@ -124,10 +117,8 @@ mod tests {
     }
 
     #[test]
-    fn a_full_log_target_drops_the_line_and_records_storage_full() {
-        let start = crate::observe::storage_full::now_ms();
+    fn a_full_log_target_drops_the_line() {
         write_line(&mut FullDisk, "[a] line\n");
-        assert!(crate::observe::storage_full::seen_since(start));
     }
 
     /// 子进程入口:由下一条测试在 stderr 指向 `/dev/full` 时单独运行。
@@ -135,9 +126,8 @@ mod tests {
     #[ignore = "由 log_survives_a_full_stderr 在子进程中运行"]
     fn log_to_full_stderr_child() {
         DIRECT_STDERR.with(|direct| direct.set(true));
-        let start = crate::observe::storage_full::now_ms();
         log("disk-full probe");
-        assert!(crate::observe::storage_full::seen_since(start));
+        log("disk-full probe, again");
     }
 
     /// stderr 是写满的文件时 `log` 不能 panic:`/dev/full` 对每次写返回 ENOSPC。

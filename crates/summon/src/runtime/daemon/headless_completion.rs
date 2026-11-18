@@ -88,6 +88,9 @@ impl HeadlessExit {
                 let outcome = match stop.into_result(summon_i18n::text!("r35099d9f5e")) {
                     Ok(mut outcome) => {
                         outcome.timed_out = true;
+                        // provider 对看门狗打断回的 interrupted/aborted 只是打断的回声,不是用户
+                        // 暂停;留着它失败通知会被跳过,用户只看到一张定格的「已中止」卡。
+                        outcome.interrupted = false;
                         outcome
                     }
                     Err(error) => TurnOutcome {
@@ -189,6 +192,19 @@ mod tests {
         }
         assert!(HeadlessExit::StorageFull(reported()).observed_worker_end());
         assert!(!HeadlessExit::StorageFull(WorkerStop::Unconfirmed).observed_worker_end());
+    }
+
+    #[test]
+    fn watchdog_timeout_is_not_mistaken_for_a_user_pause() {
+        let echoed = WorkerStop::Reported(Ok(TurnOutcome {
+            interrupted: true,
+            ..Default::default()
+        }));
+        let (result, continuation) = HeadlessExit::TimedOut(echoed).into_outcome();
+        let outcome = result.unwrap();
+        assert!(outcome.timed_out);
+        assert!(!outcome.interrupted, "看门狗打断的回声不是用户暂停");
+        assert!(!continuation.is_interrupted());
     }
 
     #[test]

@@ -361,19 +361,16 @@ impl Row for OutsideUsage {
 static WRITE: Mutex<()> = Mutex::new(());
 
 fn append<T: Row>(dir: &Path, row: &T) -> anyhow::Result<()> {
-    use crate::observe::storage_full::noted;
     let agent_dir = dir.join(row.agent());
-    noted(std::fs::create_dir_all(&agent_dir))?;
+    std::fs::create_dir_all(&agent_dir)?;
     let mut line = serde_json::to_vec(row)?;
     line.push(b'\n');
     let _guard = WRITE.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut file = noted(
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(agent_dir.join(turn_ledger::file_name(row.at_ms()))),
-    )?;
-    noted(file.write_all(&line))?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(agent_dir.join(turn_ledger::file_name(row.at_ms())))?;
+    file.write_all(&line)?;
     Ok(())
 }
 

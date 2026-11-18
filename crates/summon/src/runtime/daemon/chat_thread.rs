@@ -11775,8 +11775,14 @@ pub(super) fn run_headless_interruptible(
     use std::sync::mpsc;
 
     use super::headless_completion::{HeadlessExit, WorkerStop};
-    // 本轮起点之后观测到的空间不足才算本轮的(见 `observe::storage_full`)。
+    // 只看本会话目录里、本轮起点之后的写盘报的空间不足(见 `observe::storage_full`)。
     let turn_started_ms = crate::observe::storage_full::now_ms();
+    let storage_scope = crate::observe::storage_full::thread_scope(
+        chat_ref.agent_dir,
+        &chat_tag(chat_ref.chat_type, chat_ref.chat_id),
+    );
+    let storage_full_in_turn =
+        || crate::observe::storage_full::seen_since(&storage_scope, turn_started_ms);
     let (tx_upd, rx_upd) = mpsc::channel::<TurnUpdate>();
     // events.jsonl tee(chat 线程侧落盘,与 card_stream_consume 一致;worker 只把事件投过来)。
     let tag = chat_tag(chat_ref.chat_type, chat_ref.chat_id);
@@ -12100,23 +12106,16 @@ pub(super) fn run_headless_interruptible(
                     };
                     // 看门狗静默期里观测到空间不足:多半是 provider 写不动会话文件而停摆,
                     // 失败卡说清原因,而不是只报超时。
-                    if crate::observe::storage_full::seen_since(turn_started_ms) {
+                    if storage_full_in_turn() {
                         break 'turn HeadlessExit::StorageFull(stopped);
                     }
                     break 'turn HeadlessExit::TimedOut(stopped);
                 }
             }
         }
-        // 工具在跑时事件可能隔很久才来:合并中的流式增量到期就落盘,`agents tail` 不滞后。
-        if let Some(s) = sink.as_mut() {
-            s.flush_due();
-        }
-        // 写盘报空间不足:本轮的事件流、归档与台账都已落不下,provider 通常也写不动会话文件。
-        // 不等看门狗,立即有界打断并以失败卡告知。收尾与发卡只走网络与内存,不依赖写盘。
-        if let Some(k) = killer
-            .as_ref()
-            .filter(|_| crate::observe::storage_full::seen_since(turn_started_ms))
-        {
+        // 本轮写盘报空间不足:事件流、归档与对话记录都已落不下,provider 通常也写不动会话文件。
+        // 立即有界打断 provider,以空间不足为原因结束本轮;收尾与发卡只走网络与内存。
+        if let Some(k) = killer.as_ref().filter(|_| storage_full_in_turn()) {
             log(&summon_i18n::format!("headless.storage_full.log"));
             k.interrupt();
             let stopped = WorkerStop::from_wait(await_interrupted_headless(
@@ -13998,13 +13997,22 @@ pub(super) fn stream_turn_headless(
     carried_followup_ids.extend(steered_ids);
     // 被 detach 的 worker 永不再调 on_finish → 本轮的在跑登记只能在这里摘;不摘的话该 (agent, chat)
     // 之后每一轮都会被 insert 拒绝(用户零回复)。只动注册表账目,不补任何信号。
-    if detached && detach_inflight_turn(inflight, &turn_key, &registration) {
+    let reclaimed = detached && detach_inflight_turn(inflight, &turn_key, &registration);
+    if reclaimed {
         log(&summon_i18n::format!("r5c364727be"));
     }
-    let owns_completion = matches!(
-        finish,
-        Some(crate::runtime::inflight::FinishDisposition::Completed)
-    );
+    // 看门狗(超时 / 空间不足)强杀后 worker 仍没返回:本轮的在跑登记由本线程摘掉了,没有
+    // 别人(停机接管)认领,detach 的 worker 之后也拿不到完成所有权。这一轮的终态归本线程:
+    // 照常发失败卡、清 checkpoint、销账,不留给重启恢复再发一次。
+    let abandoned_by_watchdog = reclaimed
+        && !interrupted
+        && rerun.is_none()
+        && matches!(&out, Ok(outcome) if outcome.timed_out || outcome.api_error.is_some());
+    let owns_completion = abandoned_by_watchdog
+        || matches!(
+            finish,
+            Some(crate::runtime::inflight::FinishDisposition::Completed)
+        );
     let was_spawned = registration
         .lock()
         .map(|slot| slot.is_some())

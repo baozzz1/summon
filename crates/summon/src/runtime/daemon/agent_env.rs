@@ -230,7 +230,7 @@ pub(super) fn owner_id_matches(owner: &str, open_id: &str, union_id: &str) -> bo
 }
 
 /// 把一轮发言追加到 <agent.dir>/threads/<chat-tag>/transcript.md(完整对话记录,与 summary 同目录)。
-/// 失败不阻断会话,只把空间不足记进观测。
+/// 失败不阻断会话,只把空间不足记到本会话上。
 pub(super) fn append_transcript(
     agent_dir: &std::path::Path,
     chat_type: &str,
@@ -252,7 +252,9 @@ pub(super) fn append_transcript(
     );
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let line = format!("### {stamp} {role}\n{body}\n\n");
+    let scope = path.parent().unwrap_or(&path);
     let _ = crate::observe::storage_full::noted(
+        scope,
         std::fs::OpenOptions::new()
             .create(true)
             .append(true)

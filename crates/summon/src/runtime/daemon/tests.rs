@@ -13420,6 +13420,28 @@ fn configured_headless_watchdog_controls_the_real_rpc_worker() {
         );
         assert_eq!(result.out.as_ref().unwrap().timed_out, timed_out);
         assert!(start.elapsed() < Duration::from_secs(10));
+        if timed_out {
+            // provider 对看门狗打断回 aborted:仍是超时失败,要发失败卡,不能当成用户暂停。
+            let outcome = result.out.as_ref().unwrap();
+            assert!(!outcome.interrupted, "{outcome:?}");
+            frontend.payloads.borrow_mut().clear();
+            assert!(
+                crate::runtime::daemon::chat_thread::notify_failed_turn_outcome(
+                    &frontend,
+                    &chat,
+                    &agent.name,
+                    &test_outbox(tmp.path()),
+                    outcome,
+                )
+            );
+            let payloads = frontend.payloads.borrow();
+            assert!(
+                payloads
+                    .iter()
+                    .any(|card| card.contains(summon_i18n::text!("rfea81a75a4"))),
+                "超时要发失败卡:{payloads:?}"
+            );
+        }
         let requests =
             std::fs::read_to_string(crate::test_support::fake_rpc_server_log(tmp.path())).unwrap();
         assert!(requests.contains("turn/start"));
@@ -13482,6 +13504,90 @@ fn configured_headless_watchdog_controls_the_real_rpc_worker() {
         );
         crate::capture::rpc_pool::evict_shared(&agent.name, &tag);
     }
+}
+
+/// 看门狗强杀后 worker 仍不返回(逃逸的孙进程攥着 stdout):本轮由本线程收尾,发失败卡并销掉
+/// checkpoint,不留给重启恢复再报一次。
+#[cfg(target_os = "linux")]
+#[test]
+fn watchdog_failure_card_is_sent_even_when_the_worker_never_returns() {
+    let _guard = crate::test_support::process_test_guard();
+    let _quota = crate::capture::rpc_pool::default_codex_quota_test_guard();
+    let (mut agent, tmp) = crate::test_support::agent_dir("codex", "");
+    agent.name = format!("detach-probe-{}", uuid::Uuid::new_v4().simple());
+    // 打断不回应;脱离进程组的 sleep 继承 stdout,强杀进程组后读端也等不到 EOF。
+    let cases = r#"
+    *'thread/start'*) printf '%s\n' '{"id":'"$id"',"result":{"thread":{"id":"th-1","status":{"type":"idle"},"turns":[]}}}' ;;
+    *'turn/start'*) printf '%s\n' '{"id":'"$id"',"result":{"turn":{"id":"turn-1","status":"inProgress"}}}';
+        setsid sleep 20 & ;;
+"#;
+    let script = crate::test_support::write_sigint_immune_app_server(tmp.path(), cases);
+    agent.runtime.as_mut().unwrap().cli_cmd = Some(script.display().to_string());
+    agent.messaging = Some(serde_yaml::from_str("headless_stall_secs: 1").unwrap());
+    let mut manifest: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(agent.manifest_path()).unwrap()).unwrap();
+    manifest["name"] = agent.name.clone().into();
+    manifest["runtime"]["cli_cmd"] = script.display().to_string().into();
+    manifest["messaging"] = serde_yaml::to_value(agent.messaging.as_ref().unwrap()).unwrap();
+    std::fs::write(
+        agent.manifest_path(),
+        serde_yaml::to_string(&manifest).unwrap(),
+    )
+    .unwrap();
+    let chat = badge_chat(tmp.path(), "oc_detach_probe");
+    let tag = chat_tag(chat.chat_type, chat.chat_id);
+    let inflight = crate::runtime::inflight::InFlight::new();
+    let scope = feishu_storage_scope(&agent).key;
+    let session = Session::with_name(&agent, format!("soul-{}-{tag}", agent.name), 20, 20);
+    let (tx, rx) = channel();
+    let (_wal, mut fc) = test_followup_ctx(&rx, tx, 1);
+    fc.agent_name = agent.name.clone();
+    fc.delivery_scope = scope.clone();
+    let frontend = EmitterFrontend::new();
+    let mut messaging = summon_core::config::builtin_messaging();
+    messaging.apply(&serde_yaml::from_str("headless_stall_secs: 1").unwrap());
+    let start = std::time::Instant::now();
+    let result = crate::runtime::daemon::chat_thread::stream_turn_headless(
+        CliDriver::Codex,
+        &agent,
+        &scope,
+        &session,
+        &frontend,
+        chat.chat_id,
+        chat.chat_type,
+        "fixture",
+        &inflight,
+        Vec::new(),
+        Some(&fc),
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+        None,
+        None,
+        ResolvedSettings::resolve(&messaging, &ChatOverrides::default()),
+    );
+    crate::capture::rpc_pool::evict_shared(&agent.name, &tag);
+    assert!(start.elapsed() < Duration::from_secs(15));
+    assert_eq!(result, TurnResult::Failed, "不能留给重启恢复");
+    let payloads = frontend.payloads.borrow();
+    assert!(
+        payloads
+            .iter()
+            .any(|card| card.contains(summon_i18n::text!("r35099d9f5e"))),
+        "要发失败卡:{payloads:?}"
+    );
+    assert!(
+        !agent
+            .state_dir()
+            .join("threads")
+            .join(&tag)
+            .join("pending.json")
+            .exists(),
+        "checkpoint 已销,恢复路径不会再报一次"
+    );
 }
 
 #[test]
