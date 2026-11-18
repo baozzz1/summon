@@ -8,7 +8,7 @@ use std::io::Write;
 use summon_core::registry::chat_tag;
 
 /// 把真实发到飞书的出站消息/卡片追加到 `<agent.dir>/threads/<chat-tag>/outbound.ndjson`。
-/// 只在发送成功后调用;失败静默忽略,日志归档不能影响主链路。
+/// 只在发送成功后调用;失败不影响主链路,只把空间不足记到本会话上。
 pub(crate) fn append_outbound(
     agent_dir: &std::path::Path,
     chat_type: &str,
@@ -36,11 +36,16 @@ pub(crate) fn append_outbound(
         "payload": payload,
     });
     let line = format!("{entry}\n");
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .and_then(|mut f| f.write_all(line.as_bytes()));
+    // 归档失败不影响已发出的消息;空间不足仍要记到本会话上,在跑的轮据此收尾。
+    let scope = path.parent().unwrap_or(&path);
+    let _ = crate::observe::storage_full::noted(
+        scope,
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| f.write_all(line.as_bytes())),
+    );
 }
 
 pub(crate) fn card_payload(content: &str) -> serde_json::Value {

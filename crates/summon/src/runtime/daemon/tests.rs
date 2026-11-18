@@ -13240,6 +13240,111 @@ fn rpc_steer_confirmation_controls_retry_and_failure_in_the_real_worker() {
     }
 }
 
+/// 事件流写盘报 ENOSPC(`events.jsonl` 指向 `/dev/full`):工具在飞、provider 静默时不等看门狗,
+/// 立即有界打断,失败卡写明空间不足。
+#[cfg(target_os = "linux")]
+#[test]
+fn storage_full_event_write_ends_the_headless_turn_with_a_failure_card() {
+    use crate::runtime::daemon::chat_thread::{
+        notify_failed_turn_outcome, run_headless_interruptible, TurnEngine,
+    };
+    let _guard = crate::test_support::process_test_guard();
+    let _quota = crate::capture::rpc_pool::default_codex_quota_test_guard();
+    let (mut agent, tmp) = crate::test_support::agent_dir("codex", "");
+    agent.name = format!("disk-full-probe-{}", uuid::Uuid::new_v4().simple());
+    // 工具开始后 provider 不再出声;没被打断的话 6 秒后正常完成。
+    let cases = r#"
+    *'thread/start'*) printf '%s\n' '{"id":'"$id"',"result":{"thread":{"id":"th-1","status":{"type":"idle"},"turns":[]}}}' ;;
+    *'turn/start'*) printf '%s\n' '{"id":'"$id"',"result":{"turn":{"id":"turn-1","status":"inProgress"}}}';
+        printf '%s\n' '{"method":"item/started","params":{"threadId":"th-1","turnId":"turn-1","item":{"id":"cmd_1","type":"commandExecution","command":"/bin/sh -lc build"}}}';
+        ( sleep 6;
+          printf '%s\n' '{"method":"item/completed","params":{"threadId":"th-1","turnId":"turn-1","item":{"type":"agentMessage","id":"answer","text":"done","phase":"final_answer"}}}';
+          printf '%s\n' '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"turn-1","status":"completed"}}}' ) & ;;
+    *'turn/interrupt'*) printf '%s\n' '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"turn-1","status":"aborted"}}}' ;;
+"#;
+    let script = crate::test_support::write_fake_app_server(tmp.path(), cases);
+    agent.runtime.as_mut().unwrap().cli_cmd = Some(script.display().to_string());
+    let chat = badge_chat(tmp.path(), "oc_disk_full_probe");
+    let tag = chat_tag(chat.chat_type, chat.chat_id);
+    let thread_dir = tmp.path().join("threads").join(&tag);
+    std::fs::create_dir_all(&thread_dir).unwrap();
+    std::os::unix::fs::symlink("/dev/full", thread_dir.join("events.jsonl")).unwrap();
+    let pool = crate::capture::rpc_pool::RpcPool::new(crate::runtime::inflight::InFlight::new());
+    let engine = TurnEngine::Rpc {
+        pool: pool.clone(),
+        spec: Box::new(crate::capture::RpcTurnSpec {
+            agent: agent.clone(),
+            session: "fixture".into(),
+            tag: tag.clone(),
+            chat_id: chat.chat_id.into(),
+        }),
+    };
+    let (tx, rx) = channel();
+    let (_wal, fc) = test_followup_ctx(&rx, tx, 1);
+    let frontend = EmitterFrontend::new();
+    let outbox = test_outbox(tmp.path());
+    let start = std::time::Instant::now();
+    let result = run_headless_interruptible(
+        engine,
+        CliDriver::Codex,
+        "fixture",
+        "fixture",
+        None,
+        &crate::capture::TurnCtx::default(),
+        &frontend,
+        &chat,
+        chat.chat_id.into(),
+        chat.chat_type.into(),
+        &agent.name,
+        &pending_arc("fixture", ""),
+        Arc::new(|_| {}),
+        Arc::new(|_| {}),
+        Arc::new(|_| crate::runtime::inflight::FinishDisposition::Completed),
+        &fc,
+        Duration::from_secs(1800),
+        false,
+        10,
+        false,
+        false,
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        Default::default(),
+        &outbox,
+    );
+    let elapsed = start.elapsed();
+    pool.evict(&agent.name, &tag);
+    let reason = summon_i18n::text!("headless.storage_full.reason");
+    let outcome = result.out.as_ref().expect("空间不足收尾是 Ok 的失败结局");
+    assert_eq!(outcome.api_error.as_deref(), Some(reason), "{outcome:?}");
+    assert!(!outcome.interrupted);
+    assert!(!result.interrupted && result.rerun.is_none());
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "不能等 provider 自己收尾:{elapsed:?}"
+    );
+    let requests =
+        std::fs::read_to_string(crate::test_support::fake_rpc_server_log(tmp.path())).unwrap();
+    assert!(requests.contains("turn/interrupt"), "必须打断 provider");
+
+    frontend.payloads.borrow_mut().clear();
+    assert!(notify_failed_turn_outcome(
+        &frontend,
+        &chat,
+        &agent.name,
+        &outbox,
+        outcome
+    ));
+    let payloads = frontend.payloads.borrow();
+    assert!(
+        payloads.iter().any(|card| card.contains(reason)),
+        "失败卡要写明空间不足:{payloads:?}"
+    );
+}
+
 /// 磁盘配置经真实RPC执行入口决定到期或完成，provider使用隔离假服务。
 #[test]
 fn configured_headless_watchdog_controls_the_real_rpc_worker() {
@@ -13315,6 +13420,28 @@ fn configured_headless_watchdog_controls_the_real_rpc_worker() {
         );
         assert_eq!(result.out.as_ref().unwrap().timed_out, timed_out);
         assert!(start.elapsed() < Duration::from_secs(10));
+        if timed_out {
+            // provider 对看门狗打断回 aborted:仍是超时失败,要发失败卡,不能当成用户暂停。
+            let outcome = result.out.as_ref().unwrap();
+            assert!(!outcome.interrupted, "{outcome:?}");
+            frontend.payloads.borrow_mut().clear();
+            assert!(
+                crate::runtime::daemon::chat_thread::notify_failed_turn_outcome(
+                    &frontend,
+                    &chat,
+                    &agent.name,
+                    &test_outbox(tmp.path()),
+                    outcome,
+                )
+            );
+            let payloads = frontend.payloads.borrow();
+            assert!(
+                payloads
+                    .iter()
+                    .any(|card| card.contains(summon_i18n::text!("rfea81a75a4"))),
+                "超时要发失败卡:{payloads:?}"
+            );
+        }
         let requests =
             std::fs::read_to_string(crate::test_support::fake_rpc_server_log(tmp.path())).unwrap();
         assert!(requests.contains("turn/start"));
@@ -13377,6 +13504,129 @@ fn configured_headless_watchdog_controls_the_real_rpc_worker() {
         );
         crate::capture::rpc_pool::evict_shared(&agent.name, &tag);
     }
+}
+
+/// 看门狗强杀后 worker 仍不返回(逃逸的孙进程攥着 stdout)的一轮。`shutdown_first`:看门狗
+/// 打断后、等 worker 的宽限期里 daemon 优雅停机接管(`shutdown_interrupt_all`),随后看门狗 detach。返回 (结局, 发出的卡,
+/// checkpoint 是否还在)。
+#[cfg(target_os = "linux")]
+fn stuck_worker_turn(shutdown_first: bool) -> (TurnResult, Vec<String>, bool) {
+    let _guard = crate::test_support::process_test_guard();
+    let _quota = crate::capture::rpc_pool::default_codex_quota_test_guard();
+    let (mut agent, tmp) = crate::test_support::agent_dir("codex", "");
+    agent.name = format!("detach-probe-{}", uuid::Uuid::new_v4().simple());
+    // 打断不回应;脱离进程组的 sleep 继承 stdout,强杀进程组后读端也等不到 EOF。
+    let cases = r#"
+    *'thread/start'*) printf '%s\n' '{"id":'"$id"',"result":{"thread":{"id":"th-1","status":{"type":"idle"},"turns":[]}}}' ;;
+    *'turn/start'*) printf '%s\n' '{"id":'"$id"',"result":{"turn":{"id":"turn-1","status":"inProgress"}}}';
+        setsid sleep 20 & ;;
+"#;
+    let script = crate::test_support::write_sigint_immune_app_server(tmp.path(), cases);
+    agent.runtime.as_mut().unwrap().cli_cmd = Some(script.display().to_string());
+    agent.messaging = Some(serde_yaml::from_str("headless_stall_secs: 1").unwrap());
+    let mut manifest: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(agent.manifest_path()).unwrap()).unwrap();
+    manifest["name"] = agent.name.clone().into();
+    manifest["runtime"]["cli_cmd"] = script.display().to_string().into();
+    manifest["messaging"] = serde_yaml::to_value(agent.messaging.as_ref().unwrap()).unwrap();
+    std::fs::write(
+        agent.manifest_path(),
+        serde_yaml::to_string(&manifest).unwrap(),
+    )
+    .unwrap();
+    let chat = badge_chat(tmp.path(), "oc_detach_probe");
+    let tag = chat_tag(chat.chat_type, chat.chat_id);
+    let inflight = crate::runtime::inflight::InFlight::new();
+    let shutdown = shutdown_first.then(|| {
+        let inflight = inflight.clone();
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while inflight.is_empty() {
+                assert!(std::time::Instant::now() < deadline, "轮没有登记");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // 落在看门狗打断之后、detach 之前:轮的静默上限 1 秒,之后还有约 4 秒的打断宽限。
+            std::thread::sleep(Duration::from_millis(2500));
+            inflight.shutdown_interrupt_all(Duration::ZERO, &|_| false, &|_, _| {})
+        })
+    });
+    let scope = feishu_storage_scope(&agent).key;
+    let session = Session::with_name(&agent, format!("soul-{}-{tag}", agent.name), 20, 20);
+    let (tx, rx) = channel();
+    let (_wal, mut fc) = test_followup_ctx(&rx, tx, 1);
+    fc.agent_name = agent.name.clone();
+    fc.delivery_scope = scope.clone();
+    let frontend = EmitterFrontend::new();
+    let mut messaging = summon_core::config::builtin_messaging();
+    messaging.apply(&serde_yaml::from_str("headless_stall_secs: 1").unwrap());
+    let start = std::time::Instant::now();
+    let result = crate::runtime::daemon::chat_thread::stream_turn_headless(
+        CliDriver::Codex,
+        &agent,
+        &scope,
+        &session,
+        &frontend,
+        chat.chat_id,
+        chat.chat_type,
+        "fixture",
+        &inflight,
+        Vec::new(),
+        Some(&fc),
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+        None,
+        None,
+        ResolvedSettings::resolve(&messaging, &ChatOverrides::default()),
+    );
+    crate::capture::rpc_pool::evict_shared(&agent.name, &tag);
+    if let Some(shutdown) = shutdown {
+        // 注册表里除了这一轮,还有常驻 RPC 会话进程自己的一条。
+        assert!(shutdown.join().unwrap() >= 1, "停机应接管这一轮");
+    }
+    assert!(start.elapsed() < Duration::from_secs(15));
+    let pending = agent
+        .state_dir()
+        .join("threads")
+        .join(&tag)
+        .join("pending.json")
+        .exists();
+    let cards = frontend.payloads.borrow().clone();
+    (result, cards, pending)
+}
+
+/// 看门狗强杀后 worker 仍不返回:本轮由本线程收尾,发失败卡、清掉 checkpoint,结局是 Failed。
+#[cfg(target_os = "linux")]
+#[test]
+fn watchdog_failure_card_is_sent_even_when_the_worker_never_returns() {
+    let (result, cards, pending) = stuck_worker_turn(false);
+    assert_eq!(result, TurnResult::Failed);
+    assert!(
+        cards
+            .iter()
+            .any(|card| card.contains(summon_i18n::text!("r35099d9f5e"))),
+        "要发失败卡:{cards:?}"
+    );
+    assert!(!pending, "checkpoint 已清");
+}
+
+/// 停机先接管、看门狗随后 detach 不返回的 worker:完成权归停机恢复,不发失败卡、不删停机写下的
+/// checkpoint,结局交给恢复。
+#[cfg(target_os = "linux")]
+#[test]
+fn watchdog_leaves_a_shutdown_claimed_turn_to_recovery() {
+    let (result, cards, pending) = stuck_worker_turn(true);
+    assert_eq!(result, TurnResult::RecoveryDeferred);
+    assert!(
+        !cards
+            .iter()
+            .any(|card| card.contains(summon_i18n::text!("r35099d9f5e"))),
+        "停机接管的轮不发失败卡:{cards:?}"
+    );
+    assert!(pending, "停机写下的恢复 checkpoint 必须保留");
 }
 
 #[test]

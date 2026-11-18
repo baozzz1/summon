@@ -6962,5 +6962,9 @@
   "upgrade.channel.npm_retired": "  ↳ upgrade.channel: npm is retired and treated as github (GitHub Releases); the line can be removed",
   "upgrade.channel_flag.retired": "--channel only accepts github: the npm channel is retired and summon upgrade only fetches from GitHub Releases (received {value:?})",
   "upgrade.channel_flag.redundant": "summon: --channel github can be dropped; summon upgrade only fetches from GitHub Releases",
-  "auto_upgrade.pending_without_stage": "Pending {version} has no staging directory (fetched via npm by an earlier version); discarded"
+  "auto_upgrade.pending_without_stage": "Pending {version} has no staging directory (fetched via npm by an earlier version); discarded",
+  "headless.storage_full.reason": "Out of disk space: writing this turn's records failed because the disk or quota is full, so the turn was stopped. Free up disk space and send the message again.",
+  "headless.storage_full.log": "[{name}] Storage full while writing; interrupting the turn chat={tag}",
+  "export.log.os_error_only": "[unlisted log line] {hidden} (os error {code})",
+  "event_log.flush_ticker_failed": "events.jsonl flush thread failed to start; merged deltas are written only on the next event or at turn end: {e}"
 }

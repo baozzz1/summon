@@ -336,7 +336,7 @@ fn export_in(
 
     files.push(Entry::generated(
         "env.json",
-        pretty(&env_json(&target.agent, &home, roots.probe)),
+        pretty(&env_json(&target.agent, roots, &home)),
     ));
     files.push(Entry::generated(
         "config.json",
@@ -498,7 +498,57 @@ fn program_name(cli_cmd: &str) -> Option<&str> {
     plain.then_some(cmd)
 }
 
-fn env_json(agent: &Agent, home: &str, probe: bool) -> Value {
+/// CLI 自己的会话目录(codex rollout、claude 转录、cursor 会话库所在)。未知 CLI 给 `None`。
+fn cli_session_dir(agent: &Agent, home: &Path) -> Option<PathBuf> {
+    match agent.cli_kind() {
+        "codex" | "traex" => Some(codex_home(agent, home)),
+        "claude" => Some(home.join(".claude")),
+        "cursor" => Some(home.join(".cursor")),
+        _ => None,
+    }
+}
+
+/// codex 的 `CODEX_HOME`:agent 运行环境里配的优先,其次进程环境,缺省 `~/.codex`。
+fn codex_home(agent: &Agent, home: &Path) -> PathBuf {
+    agent
+        .runtime
+        .as_ref()
+        .and_then(|r| r.env.as_ref())
+        .and_then(|env| env.get("CODEX_HOME"))
+        .map(|p| PathBuf::from(summon_core::registry::expand_tilde(p)))
+        .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
+        .unwrap_or_else(|| home.join(".codex"))
+}
+
+/// 目录所在文件系统的剩余与总空间。导出由用户发起,只在这里查;目录还不存在时查最近的
+/// 已存在上级(写进去时占用的就是那个文件系统)。
+// 块计数在 macOS 上是 u32、Linux 上是 u64:统一经 `u64::from` 放宽,Linux 上那是同型转换。
+#[allow(clippy::useless_conversion)]
+fn storage_json(role: &str, dir: &Path, home: &str) -> Value {
+    let stat = dir
+        .ancestors()
+        .find(|p| p.exists())
+        .and_then(|p| nix::sys::statvfs::statvfs(p).ok());
+    let bytes = |blocks: u64, stat: &nix::sys::statvfs::Statvfs| {
+        blocks.saturating_mul(u64::from(stat.fragment_size()))
+    };
+    json!({
+        "role": role,
+        "dir": export::tilde(&dir.to_string_lossy(), home),
+        "available_bytes": stat.as_ref().map(|s| bytes(u64::from(s.blocks_available()), s)),
+        "total_bytes": stat.as_ref().map(|s| bytes(u64::from(s.blocks()), s)),
+    })
+}
+
+fn env_json(agent: &Agent, roots: &Roots, home: &str) -> Value {
+    let probe = roots.probe;
+    let mut storage = Vec::new();
+    if let Some(summon_dir) = roots.run.parent() {
+        storage.push(storage_json("summon", summon_dir, home));
+    }
+    if let Some(dir) = cli_session_dir(agent, &roots.home) {
+        storage.push(storage_json("cli_sessions", &dir, home));
+    }
     let build = crate::version::build_info();
     let cli_cmd = agent.cli_cmd();
     let program = program_name(&cli_cmd).unwrap_or_default().to_string();
@@ -524,6 +574,7 @@ fn env_json(agent: &Agent, home: &str, probe: bool) -> Value {
         },
         "tmux": version("tmux", "-V"),
         "daemon": daemon,
+        "storage": storage,
     })
 }
 
@@ -737,10 +788,37 @@ fn log_entry(ctx: &Ctx, file: LogFile, people: &mut People, raw: bool) -> Entry 
                 LogFile::Daemon => logs::daemon_message(first).unwrap_or(first),
                 _ => logs::sidecar_message(first),
             };
+            let stamped = |line: String| {
+                let stamp = chrono::DateTime::from_timestamp_millis(at)
+                    .map(|t| {
+                        t.with_timezone(&chrono::Local)
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                format!("[{stamp}] {line}")
+            };
             if file == LogFile::Daemon {
                 let foreign = logs::agent_prefix(message)
                     .is_some_and(|name| ctx.other_agents.iter().any(|a| a == name));
                 if foreign || !logs::mentions_any(&item.text, &ctx.keys) {
+                    // 别的会话:原文模式不收;脱敏模式只收看门狗、异常收尾与写盘错误码,
+                    // 身份与正文隐去(见 `GLOBAL_DAEMON_TEMPLATES`)。
+                    let global = (!raw)
+                        .then(|| {
+                            logs::diag_line(
+                                logs::GLOBAL_DAEMON_TEMPLATES,
+                                message,
+                                people,
+                                &ctx.home,
+                            )
+                            .or_else(|| logs::os_error_line(message))
+                        })
+                        .flatten();
+                    if let Some(line) = global {
+                        entry.note.in_window += 1;
+                        entry.push(stamped(line), Some(at));
+                    }
                     continue;
                 }
             }
@@ -753,17 +831,13 @@ fn log_entry(ctx: &Ctx, file: LogFile, people: &mut People, raw: bool) -> Entry 
                 LogFile::Daemon => logs::DAEMON_TEMPLATES,
                 _ => logs::SIDECAR_TEMPLATES,
             };
-            match logs::diag_line(templates, message, people, &ctx.home) {
-                Some(line) => {
-                    let stamp = chrono::DateTime::from_timestamp_millis(at)
-                        .map(|t| {
-                            t.with_timezone(&chrono::Local)
-                                .format("%Y-%m-%d %H:%M:%S")
-                                .to_string()
-                        })
-                        .unwrap_or_default();
-                    entry.push(format!("[{stamp}] {line}"), Some(at));
-                }
+            let line = logs::diag_line(templates, message, people, &ctx.home).or_else(|| {
+                (file == LogFile::Daemon)
+                    .then(|| logs::os_error_line(message))
+                    .flatten()
+            });
+            match line {
+                Some(line) => entry.push(stamped(line), Some(at)),
                 None => entry.note.skipped += 1,
             }
         }
@@ -814,15 +888,7 @@ fn native_source(target: &Target, home: &Path) -> Option<Native> {
             })
         }
         "codex" | "traex" => {
-            let codex_home = target
-                .agent
-                .runtime
-                .as_ref()
-                .and_then(|r| r.env.as_ref())
-                .and_then(|env| env.get("CODEX_HOME"))
-                .map(|p| PathBuf::from(summon_core::registry::expand_tilde(p)))
-                .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
-                .unwrap_or_else(|| home.join(".codex"));
+            let codex_home = codex_home(&target.agent, home);
             let suffix = format!("-{}.jsonl", rec.id);
             ["sessions", "archived_sessions"]
                 .iter()
@@ -1495,6 +1561,9 @@ mod tests {
                 format!("{daemon} [{name}] 处理任务 chat=oc_test1 msg=om_test1 from={CANARY}(ou_0123456789abcdef)"),
                 format!("{daemon} [other] 新会话 chat=oc_test1 → soul-other-{tag}"),
                 format!("{daemon} [{name}] 新会话 chat=oc_elsewhere → soul-elsewhere"),
+                format!("{daemon} [other] headless-watchdog chat=g-{CANARY} silence_secs=1800 active_secs=1800"),
+                format!("{daemon} [other] 无头处理失败: write /srv/{CANARY}: No space left on device (os error 28)"),
+                format!("{daemon} [other] 归档 /srv/{CANARY} 失败: Disk quota exceeded (os error 122)"),
                 String::new(),
             ]
             .join("\n"),
@@ -1599,6 +1668,28 @@ mod tests {
             !daemon.contains("oc_elsewhere"),
             "本 agent 别的会话的行不该进来:{daemon}"
         );
+        // 别的会话的看门狗与写盘失败照收,身份与正文隐去,只留时长与错误码。
+        assert!(
+            daemon.contains("silence_secs=1800 active_secs=1800"),
+            "{daemon}"
+        );
+        assert!(daemon.contains("(os error 28)"), "{daemon}");
+        assert!(daemon.contains("(os error 122)"), "{daemon}");
+        assert!(!daemon.contains("[other]"), "{daemon}");
+        let env: Value = serde_json::from_str(file(&files, "/env.json")).unwrap();
+        let storage = env["storage"].as_array().unwrap();
+        assert_eq!(storage.len(), 2, "{env}");
+        assert_eq!(storage[0]["role"], "summon");
+        assert_eq!(storage[1]["role"], "cli_sessions");
+        assert_eq!(
+            storage[1]["dir"].as_str(),
+            Some(codex_home.to_string_lossy().as_ref())
+        );
+        for fs in storage {
+            let total = fs["total_bytes"].as_u64().expect("总空间");
+            let available = fs["available_bytes"].as_u64().expect("剩余空间");
+            assert!(total > 0 && available <= total, "{fs}");
+        }
         assert!(file(&files, "/sidecar.log").contains("event-dispatch is ready"));
         assert!(file(&files, "/events.ndjson").contains("\"repeat_of\":2"));
         assert!(file(&files, "/native.ndjson").contains("\"cli_version\":\"0.141.0\""));
@@ -1627,6 +1718,10 @@ mod tests {
             );
         }
         assert!(file(&files, "/raw/daemon.log").contains(&format!("{CANARY} continuation")));
+        assert!(
+            !file(&files, "/raw/daemon.log").contains("[other]"),
+            "原文模式不收别的会话的行"
+        );
         for (name, body) in files.iter().filter(|(name, _)| !name.contains("/raw/")) {
             assert!(
                 !body.contains(CANARY),
@@ -1652,7 +1747,10 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut rust = String::new();
         collect(&root.join("src"), &mut rust);
-        for template in logs::DAEMON_TEMPLATES {
+        for template in logs::DAEMON_TEMPLATES
+            .iter()
+            .chain(logs::GLOBAL_DAEMON_TEMPLATES)
+        {
             assert!(
                 rust.contains(&format!("\"{}\"", template.text)),
                 "源码里找不到这条格式串,白名单要跟着改:{}",

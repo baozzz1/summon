@@ -1608,6 +1608,8 @@ pub fn run() -> anyhow::Result<()> {
     let _ = remove_identity_file_if_matches(&pid_file(), daemon_pid);
     let _ = remove_identity_file_if_matches(&ready_file(), daemon_pid);
     let _ = remove_daemon_version_if_matches(daemon_pid);
+    // chat 线程不被 join,被打断的轮可能还没走到销毁事件写口:退出前写掉缓冲的流式增量。
+    crate::observe::event_log::flush_open_sinks();
     Ok(())
 }
 
