@@ -378,19 +378,14 @@ impl InFlight {
         admitted
     }
 
-    /// detach 兜底:摘除**自己那一轮**的注册(按 killer 身份核对)。
+    /// 按 killer 身份摘除一条注册，只摘除、不裁决完成权。
     ///
-    /// 摘除条目的常规路径只有 worker 线程尾部的 [`Self::finish`];worker 若永不返回(SIGKILL 后
-    /// 仍有逃逸孙进程持住 stdout,读到不了 EOF),调用方只能 detach 它,条目就此永久占位——之后
-    /// 该 (agent, chat) 的每一轮都会被 [`Self::insert`] 拒绝并当场杀掉(用户零回复),
-    /// `interrupt_one*` 只发信号不摘除也清不掉,`contains` 还让 Bridge 永久判忙。detach 前调本函数
-    /// 即可断掉这条毒化链。
+    /// 身份核对与 [`Self::finish`] 同锁同语义:pgid 会被 OS 复用,只有 `same_handle` 的 Arc 身份
+    /// 能保证不误摘同 key 的下一轮。条目处于 Running 还是 ShutdownClaimed 都照样摘除,调用方
+    /// 不据此声称完成;需要区分停机接管的路径(看门狗 detach 无法返回的 worker)走 `finish`。
+    /// 返回是否真的摘除了。
     ///
-    /// 身份核对与 `finish` 同锁同语义:pgid 会被 OS 复用,只有 `same_handle` 的 Arc 身份能保证
-    /// 不误摘同 key 的下一轮。不参与「正常完成 vs 停机接管」的所有权判定——detach 方不声称完成,
-    /// 且停机快照早已 clone 走 killer,摘除影响不到它的信号与落盘。返回是否真的摘除了。
-    ///
-    /// 唯一调用侧:`chat_thread::detach_inflight_turn`(worker 未在宽限内返回、只能 detach 那条路)。
+    /// 调用侧:`capture::rpc_pool` 注销常驻会话进程时摘除它的登记。
     pub fn remove_if(&self, key: &TurnKey, killer: &ChildKiller) -> bool {
         let Ok(mut state) = self.state.lock() else {
             return false;

@@ -22572,8 +22572,9 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
         assert!(!inflight.contains(&key));
     }
 
-    /// 结构守护:detach 兜底必须真的接在生产路径上。`remove_if` 这类兜底原语最典型的失效方式
-    /// 不是逻辑错,而是「原语落地了、调用侧空着」——那样全量测试照样全绿,泄漏链却原样成立。
+    /// 结构守护:detach 摘除登记必须真的接在生产路径上。`detach_inflight_turn`(经 `InFlight::finish`
+    /// 摘除并裁决完成权)最典型的失效方式不是逻辑错,而是「函数落地了、调用侧空着」——那样全量
+    /// 测试照样全绿,泄漏链却原样成立。
     /// 断言 ① detach 事实真的从 worker 收割处上报到 HeadlessRun ② 摘除函数在定义之外被调用。
     /// 锚点只用运行时拼的稳定代码符号(源码里不出现字面 token),不锚注释。
     #[test]
