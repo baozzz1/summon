@@ -6964,5 +6964,6 @@
   "upgrade.channel_flag.redundant": "summon:--channel github 可以去掉,summon upgrade 只从 GitHub Releases 取新版",
   "auto_upgrade.pending_without_stage": "待换代的 {version} 没有暂存目录(是更早的版本经 npm 取到的),作废",
   "headless.storage_full.reason": "磁盘空间不足:写入本轮记录时系统报空间已满(磁盘或配额),本轮已停止。请清理磁盘空间后重新发送消息。",
-  "headless.storage_full.log": "[{name}] 写盘报空间不足,有界打断本轮 chat={tag}"
+  "headless.storage_full.log": "[{name}] 写盘报空间不足,有界打断本轮 chat={tag}",
+  "export.log.os_error_only": "[未收录的日志行] {hidden} (os error {code})"
 }

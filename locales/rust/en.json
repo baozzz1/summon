@@ -6964,5 +6964,6 @@
   "upgrade.channel_flag.redundant": "summon: --channel github can be dropped; summon upgrade only fetches from GitHub Releases",
   "auto_upgrade.pending_without_stage": "Pending {version} has no staging directory (fetched via npm by an earlier version); discarded",
   "headless.storage_full.reason": "Out of disk space: writing this turn's records failed because the disk or quota is full, so the turn was stopped. Free up disk space and send the message again.",
-  "headless.storage_full.log": "[{name}] Storage full while writing; interrupting the turn chat={tag}"
+  "headless.storage_full.log": "[{name}] Storage full while writing; interrupting the turn chat={tag}",
+  "export.log.os_error_only": "[unlisted log line] {hidden} (os error {code})"
 }

@@ -96,6 +96,22 @@ pub const DAEMON_TEMPLATES: &[Template] = &[
     t("r669e439b69"),
     t("r89ce9dfd2a"),
     t("CoT delivery chat={chat} cot={cot} batch={batch} events={} outcome={} confirmed={:?}"),
+    t("headless.storage_full.log"),
+];
+
+/// 不属于本会话的 daemon.log 行里仍收的模板:看门狗、轮的异常收尾与写盘空间不足。这些行说明
+/// 整个 daemon 当时的处境(磁盘满时别的会话往往先出事)。agent 别名、会话 tag 与错误原文一律
+/// 隐去,只留计数、时长与固定措辞,别的会话的身份与正文不进诊断包。
+pub const GLOBAL_DAEMON_TEMPLATES: &[Template] = &[
+    hiding(
+        "[{name}] headless-watchdog chat={tag} silence_secs={} active_secs={}",
+        &[0, 1],
+    ),
+    hiding("r12c579218f", &[0]),
+    hiding("rdaa1a7a0a9", &[0]),
+    hiding("r2a026e4b36", &[0]),
+    hiding("r7a155393ac", &[0, 1]),
+    hiding("headless.storage_full.log", &[0, 1]),
 ];
 
 /// sidecar.log 的白名单(去掉行首时间戳之后)。`[summon-sidecar]` 两条出自
@@ -208,7 +224,7 @@ fn rebuild(template: &Template, line: &str, people: &mut People, home: &str) -> 
     let mut out = segs[0].clone();
     for (i, value) in values.iter().enumerate() {
         let shown = if template.hide.contains(&i) {
-            ::summon_core::i18n::label(HIDDEN).to_string()
+            hidden_value(value)
         } else if let Some((_, id)) = template.person.filter(|(name, _)| *name == i) {
             people.link(value, &values[id])
         } else {
@@ -218,6 +234,30 @@ fn rebuild(template: &Template, line: &str, people: &mut People, home: &str) -> 
         out.push_str(&segs[i + 1]);
     }
     Some(out)
+}
+
+/// 隐去的值换成 [`HIDDEN`];值里带 OS 错误码时把码留下。错误码只是一个数(28 = 空间不足),
+/// 不含路径或正文,却是判断写盘失败成因的关键。
+fn hidden_value(value: &str) -> String {
+    let hidden = ::summon_core::i18n::label(HIDDEN);
+    match os_error_code(value) {
+        Some(code) => format!("{hidden} (os error {code})"),
+        None => hidden.to_string(),
+    }
+}
+
+/// 文本里第一处 `(os error N)` 的 N(Rust `io::Error` 的 Display 形态)。
+pub fn os_error_code(text: &str) -> Option<i32> {
+    let (_, rest) = text.split_once("(os error ")?;
+    let (code, _) = rest.split_once(')')?;
+    code.parse().ok()
+}
+
+/// 白名单之外、带 OS 错误码的一行:只留错误码,其余整行隐去。
+pub fn os_error_line(first_line: &str) -> Option<String> {
+    let code = os_error_code(first_line)?;
+    let hidden = ::summon_core::i18n::label(HIDDEN);
+    Some(summon_i18n::format!("export.log.os_error_only"))
 }
 
 /// 一条日志在诊断包里的样子:命中白名单就是重写后的那一行,否则 `None`。只看首行,续行不收。
@@ -425,7 +465,11 @@ mod tests {
             }
             result
         }
-        for template in DAEMON_TEMPLATES.iter().chain(SIDECAR_TEMPLATES) {
+        for template in DAEMON_TEMPLATES
+            .iter()
+            .chain(GLOBAL_DAEMON_TEMPLATES)
+            .chain(SIDECAR_TEMPLATES)
+        {
             let [zh, en] = template.localized();
             assert_eq!(slots(zh.text), slots(en.text), "{}", template.text);
         }
@@ -448,9 +492,60 @@ mod tests {
     }
 
     #[test]
+    fn foreign_lines_keep_only_counts_and_error_codes() {
+        let mut people = People::default();
+        let out = diag_line(
+            GLOBAL_DAEMON_TEMPLATES,
+            "[other-bot] headless-watchdog chat=g-secretchat silence_secs=1800 active_secs=1800",
+            &mut people,
+            "/home/x",
+        )
+        .unwrap();
+        let hidden = crate::i18n::label(HIDDEN);
+        assert_eq!(
+            out,
+            format!(
+                "[{hidden}] headless-watchdog chat={hidden} silence_secs=1800 active_secs=1800"
+            )
+        );
+        let out = diag_line(
+            GLOBAL_DAEMON_TEMPLATES,
+            "[other-bot] 无头处理失败: open /home/x/private-CANARY: No space left on device (os error 28)",
+            &mut people,
+            "/home/x",
+        )
+        .unwrap();
+        assert!(
+            !out.contains("other-bot") && !out.contains("CANARY"),
+            "{out}"
+        );
+        assert!(out.ends_with(&format!("{hidden} (os error 28)")), "{out}");
+        // 白名单之外的行(工具命令、对话正文)不收,带错误码的只留错误码。
+        assert_eq!(
+            diag_line(
+                GLOBAL_DAEMON_TEMPLATES,
+                "[other-bot] 工具: Bash(echo CANARY)",
+                &mut people,
+                "/home/x"
+            ),
+            None
+        );
+        let only =
+            os_error_line("[other-bot] 写 /home/x/CANARY 失败: Disk quota exceeded (os error 122)")
+                .unwrap();
+        assert!(
+            !only.contains("CANARY") && !only.contains("other-bot"),
+            "{only}"
+        );
+        assert!(only.contains("(os error 122)"), "{only}");
+        assert_eq!(os_error_line("[a] 普通一行 (os error x)"), None);
+    }
+
+    #[test]
     fn every_template_has_a_distinctive_literal() {
         for template in DAEMON_TEMPLATES
             .iter()
+            .chain(GLOBAL_DAEMON_TEMPLATES)
             .chain(SIDECAR_TEMPLATES)
             .flat_map(|template| template.localized())
         {
