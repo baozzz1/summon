@@ -7,7 +7,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use summon_core::agent_msg::AgentMessage;
 use summon_core::event_log::{EventRecord, EventStamp};
@@ -30,11 +31,44 @@ pub(crate) fn rotate_if_oversized(path: &Path, max: u64) -> bool {
     std::fs::rename(path, std::path::PathBuf::from(rotated)).is_ok()
 }
 
+/// 流式增量合并后最晚多久落盘。`agents tail` 跟随时正文以这个节拍成段出现。
+const DELTA_FLUSH_AGE: Duration = Duration::from_secs(1);
+/// 合并中的增量正文到这个字节数就落盘,一条记录不无限长大。
+const DELTA_FLUSH_BYTES: usize = 4096;
+
 /// 一个 chat 一轮的事件写口:持 append 模式文件句柄 + 单调 seq + 本轮出处。
+///
+/// codex 的流式增量(每条一两个字)按段合并后再写(判据见
+/// [`EventRecord::is_mergeable_delta`]):下一条不属于同一段、合并中的正文超过
+/// [`DELTA_FLUSH_BYTES`]、或已缓冲超过 [`DELTA_FLUSH_AGE`] 时落盘;写口销毁(轮结束、被打断、
+/// 线程 unwind)与 daemon 停机([`flush_open_sinks`])时把缓冲的写掉。
 pub struct EventSink {
+    inner: Arc<Mutex<SinkInner>>,
+}
+
+struct SinkInner {
     file: File,
     seq: u64,
     stamp: EventStamp,
+    /// 合并中的增量与它开始缓冲的时刻。
+    pending: Option<(EventRecord, Instant)>,
+    flush_age: Duration,
+}
+
+/// 进程里开着的写口。停机时主线程据此写掉各写口缓冲的增量:chat 线程可能来不及走到销毁。
+static OPEN_SINKS: Mutex<Vec<Weak<Mutex<SinkInner>>>> = Mutex::new(Vec::new());
+
+/// 写掉所有开着的写口里缓冲的增量。daemon 停机收尾时调。
+pub(crate) fn flush_open_sinks() {
+    let sinks = OPEN_SINKS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    for sink in sinks.iter().filter_map(Weak::upgrade) {
+        sink.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .flush_pending();
+    }
 }
 
 impl EventSink {
@@ -48,31 +82,86 @@ impl EventSink {
         let path = dir.join("events.jsonl");
         rotate_if_oversized(&path, CHAT_LOG_MAX_BYTES);
         let file = noted(OpenOptions::new().create(true).append(true).open(&path))?;
-        Ok(Self {
+        let inner = Arc::new(Mutex::new(SinkInner {
             file,
             seq: 0,
             stamp,
-        })
+            pending: None,
+            flush_age: DELTA_FLUSH_AGE,
+        }));
+        let mut open = OPEN_SINKS.lock().unwrap_or_else(PoisonError::into_inner);
+        open.retain(|sink| sink.strong_count() > 0);
+        open.push(Arc::downgrade(&inner));
+        Ok(Self { inner })
     }
 
-    /// 把一个事件 tee 进文件:盖 `ts = now_ms`、`seq += 1`,投影成 `EventRecord`,序列化后写一行。
-    /// 全程 log-ignore:观测落盘失败不该让一轮挂掉。
+    fn lock(&self) -> MutexGuard<'_, SinkInner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// 把一个事件 tee 进文件:盖 `ts = now_ms`、`seq += 1`,投影成 `EventRecord`,序列化后写一行;
+    /// 可合并的流式增量先缓冲。全程 log-ignore:观测落盘失败不该让一轮挂掉。
     pub fn write(&mut self, ev: &AgentMessage) {
         // 子 agent 的事件不落盘:读方按 `end_turn` 收轮、按 Reply 重建正文,混进来会串到主轮里。
         if ev.parent_run_id.is_some() {
             return;
         }
-        self.seq += 1;
-        let ts = now_ms();
-        let rec = EventRecord::from_event(ev, ts, self.seq).with_stamp(&self.stamp);
-        self.write_record(&rec);
+        let mut inner = self.lock();
+        let rec = EventRecord::from_event(ev, now_ms(), 0).with_stamp(&inner.stamp);
+        inner.push(rec);
     }
 
     /// 写一条入站用户消息记录(kind=`user_input`),让 `agents tail` 看到触发本轮的消息。
     pub fn write_user_input(&mut self, text: &str) {
+        let mut inner = self.lock();
+        let rec = EventRecord::user_input(text, now_ms(), 0).with_stamp(&inner.stamp);
+        inner.push(rec);
+    }
+
+    /// 缓冲的增量超过 [`DELTA_FLUSH_AGE`] 就写掉。事件间隔很长时(工具在跑)由调用方的循环调。
+    pub fn flush_due(&mut self) {
+        let mut inner = self.lock();
+        if inner
+            .pending
+            .as_ref()
+            .is_some_and(|(_, since)| since.elapsed() >= inner.flush_age)
+        {
+            inner.flush_pending();
+        }
+    }
+}
+
+impl Drop for EventSink {
+    fn drop(&mut self) {
+        self.lock().flush_pending();
+    }
+}
+
+impl SinkInner {
+    fn push(&mut self, mut rec: EventRecord) {
+        if let Some((pending, since)) = self.pending.as_mut() {
+            if pending.absorb_delta(&rec) {
+                let long = pending.text.as_ref().map_or(0, String::len) >= DELTA_FLUSH_BYTES;
+                if long || since.elapsed() >= self.flush_age {
+                    self.flush_pending();
+                }
+                return;
+            }
+            self.flush_pending();
+        }
         self.seq += 1;
-        let rec = EventRecord::user_input(text, now_ms(), self.seq).with_stamp(&self.stamp);
-        self.write_record(&rec);
+        rec.seq = self.seq;
+        if rec.is_mergeable_delta() {
+            self.pending = Some((rec, Instant::now()));
+        } else {
+            self.write_record(&rec);
+        }
+    }
+
+    fn flush_pending(&mut self) {
+        if let Some((rec, _)) = self.pending.take() {
+            self.write_record(&rec);
+        }
     }
 
     /// 序列化一条记录写一行,全程 log-ignore(观测落盘失败不该让一轮挂掉)。
@@ -105,10 +194,10 @@ pub fn append_user_input(base: &std::path::Path, tag: &str, text: &str, stamp: E
 /// 供 `agents tail` 显示。失败 log-ignore —— 观测落盘绝不影响建会话。
 pub fn append_model_catalog(base: &Path, tag: &str, text: &str, stamp: EventStamp) {
     match EventSink::open(base, tag, stamp) {
-        Ok(mut sink) => {
-            sink.seq += 1;
-            let rec = EventRecord::model_catalog(text, now_ms(), sink.seq).with_stamp(&sink.stamp);
-            sink.write_record(&rec);
+        Ok(sink) => {
+            let mut inner = sink.lock();
+            let rec = EventRecord::model_catalog(text, now_ms(), 0).with_stamp(&inner.stamp);
+            inner.push(rec);
         }
         Err(e) => crate::observe::log::log(&summon_i18n::format!("r5e0c4a7d21")),
     }
@@ -243,6 +332,95 @@ mod tests {
         std::fs::write(&p, "y").unwrap();
         assert!(!rotate_if_oversized(&p, 50), "未超限不动");
         assert!(p.exists());
+    }
+
+    fn delta(text: &str, item: &str) -> AgentMessage {
+        let mut ev = AgentMessage::of(AgentKind::Assistant);
+        ev.text = Some(text.to_string());
+        ev.partial = true;
+        ev.stream_source = Some(summon_core::agent_msg::ContentStreamSource::CodexRpcDelta);
+        ev.source_item_id = Some(item.to_string());
+        ev
+    }
+
+    fn records(dir: &std::path::Path, tag: &str) -> Vec<EventRecord> {
+        let path = dir.join("threads").join(tag).join("events.jsonl");
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn codex_deltas_land_as_one_record_per_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sink = EventSink::open(dir.path(), "g1", EventStamp::default()).unwrap();
+        for piece in ["你", "好", ",世", "界"] {
+            sink.write(&delta(piece, "msg_1"));
+        }
+        assert!(records(dir.path(), "g1").is_empty(), "同段增量先缓冲");
+        // 换 item 是段边界:上一段落盘。
+        sink.write(&delta("再见", "msg_2"));
+        let recs = records(dir.path(), "g1");
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].text.as_deref(), Some("你好,世界"));
+        assert_eq!(recs[0].partial, Some(true));
+        assert_eq!(recs[0].source_item_id.as_deref(), Some("msg_1"));
+        // 非增量事件先写掉缓冲,顺序与 seq 不乱。
+        sink.write(&AgentMessage::of(AgentKind::ToolUse));
+        let recs = records(dir.path(), "g1");
+        assert_eq!(recs.len(), 3);
+        assert_eq!(recs[1].text.as_deref(), Some("再见"));
+        assert_eq!(recs[2].kind, "tool_use");
+        assert_eq!(
+            recs.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn buffered_deltas_survive_turn_end_shutdown_and_long_pauses() {
+        let dir = tempfile::tempdir().unwrap();
+        // 写口销毁(轮结束 / 被打断)写掉缓冲。
+        {
+            let mut sink = EventSink::open(dir.path(), "end", EventStamp::default()).unwrap();
+            sink.write(&delta("半句", "msg_1"));
+        }
+        assert_eq!(records(dir.path(), "end")[0].text.as_deref(), Some("半句"));
+
+        // 停机:写口还在 chat 线程手里,主线程写掉缓冲。
+        let mut alive = EventSink::open(dir.path(), "stop", EventStamp::default()).unwrap();
+        alive.write(&delta("停机前", "msg_1"));
+        flush_open_sinks();
+        assert_eq!(
+            records(dir.path(), "stop")[0].text.as_deref(),
+            Some("停机前")
+        );
+        drop(alive);
+        assert_eq!(records(dir.path(), "stop").len(), 1, "不重复写");
+
+        // 长时间没有下一条事件(工具在跑):到期由循环写掉;没到期不写。
+        let mut sink = EventSink::open(dir.path(), "pause", EventStamp::default()).unwrap();
+        sink.write(&delta("等工具", "msg_1"));
+        sink.flush_due();
+        assert!(records(dir.path(), "pause").is_empty());
+        sink.lock().flush_age = Duration::ZERO;
+        sink.flush_due();
+        assert_eq!(
+            records(dir.path(), "pause")[0].text.as_deref(),
+            Some("等工具")
+        );
+
+        // 合并中的正文到上限就落盘。
+        let mut sink = EventSink::open(dir.path(), "long", EventStamp::default()).unwrap();
+        let piece = "x".repeat(DELTA_FLUSH_BYTES / 2);
+        for _ in 0..3 {
+            sink.write(&delta(&piece, "msg_1"));
+        }
+        let recs = records(dir.path(), "long");
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].text.as_ref().unwrap().len(), DELTA_FLUSH_BYTES);
     }
 
     #[test]

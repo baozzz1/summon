@@ -12107,6 +12107,10 @@ pub(super) fn run_headless_interruptible(
                 }
             }
         }
+        // 工具在跑时事件可能隔很久才来:合并中的流式增量到期就落盘,`agents tail` 不滞后。
+        if let Some(s) = sink.as_mut() {
+            s.flush_due();
+        }
         // 写盘报空间不足:本轮的事件流、归档与台账都已落不下,provider 通常也写不动会话文件。
         // 不等看门狗,立即有界打断并以失败卡告知。收尾与发卡只走网络与内存,不依赖写盘。
         if let Some(k) = killer

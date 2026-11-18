@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::parse::agent_msg::{AgentKind, AgentMessage};
+use crate::parse::agent_msg::{AgentKind, AgentMessage, ContentStreamSource};
 
 /// `tool_input`/`tool_result` 序列化后超过此字节数就截断(防一次大文件写把单行撑爆)。
 const TOOL_VALUE_CAP: usize = 2048;
@@ -144,6 +144,48 @@ impl EventRecord {
         self.model = stamp.model.clone();
         self.turn = stamp.turn.clone();
         self
+    }
+
+    /// 可与同段后续增量合并落盘的记录:带 provider item 的 codex 流式增量(`*_delta`),只带正文。
+    /// 这类增量的读侧语义是按 item 原样拼接,合成一条与逐条读等价。无 item 的增量(cursor、
+    /// 旧版 codex)逐条另有含义(快照重发、独立 summary),不合并。
+    pub fn is_mergeable_delta(&self) -> bool {
+        let delta_source = self.stream_source.as_deref().is_some_and(|source| {
+            source == ContentStreamSource::CodexRpcDelta.as_str()
+                || source == ContentStreamSource::CodexRpcSummaryDelta.as_str()
+        });
+        self.partial == Some(true)
+            && matches!(self.kind.as_str(), "assistant" | "thinking")
+            && delta_source
+            && self.source_item_id.is_some()
+            && self.text.is_some()
+            && self.tool.is_none()
+            && self.tool_id.is_none()
+            && self.tool_input.is_none()
+            && self.tool_result.is_none()
+            && self.session_id.is_none()
+            && self.usage.is_none()
+            && self.stop_reason.is_none()
+    }
+
+    /// 把同一段(同种类、同来源、同 item、同出处)的下一条增量拼进本条;不是同一段时返回 false,
+    /// 本条不变。`ts`/`seq` 保留首条的。
+    pub fn absorb_delta(&mut self, next: &EventRecord) -> bool {
+        let same_run = self.is_mergeable_delta()
+            && next.is_mergeable_delta()
+            && self.kind == next.kind
+            && self.stream_source == next.stream_source
+            && self.source_item_id == next.source_item_id
+            && self.agent == next.agent
+            && self.model == next.model
+            && self.turn == next.turn;
+        if !same_run {
+            return false;
+        }
+        if let (Some(text), Some(more)) = (self.text.as_mut(), next.text.as_deref()) {
+            text.push_str(more);
+        }
+        true
     }
 
     /// 入站用户消息记录(kind=`user_input`)。events.jsonl 原本只 tee agent 输出,加这条让
@@ -2721,5 +2763,232 @@ mod tail_grouper_tests {
         // 窄列兜底不 panic。
         let tiny = render_live_preview(&b, false, 0);
         assert!(tiny.contains("reply"));
+    }
+}
+
+#[cfg(test)]
+mod delta_merge_tests {
+    use super::*;
+
+    fn text(
+        seq: u64,
+        kind: &str,
+        text: &str,
+        partial: bool,
+        source: &str,
+        item: &str,
+    ) -> EventRecord {
+        let mut rec = EventRecord::note(kind, text, 1_000, seq);
+        rec.partial = Some(partial);
+        rec.stream_source = Some(source.to_string());
+        rec.source_item_id = Some(item.to_string());
+        rec.turn = Some("turn-1".to_string());
+        rec
+    }
+
+    fn plain(seq: u64, kind: &str) -> EventRecord {
+        let mut rec = EventRecord::note(kind, "", 1_000, seq);
+        rec.text = None;
+        rec.turn = Some("turn-1".to_string());
+        rec
+    }
+
+    /// 一轮 codex RPC:summary 增量 + 完成快照、回复增量被工具穿插、第二段回复、终态。
+    fn codex_turn() -> Vec<EventRecord> {
+        let mut out = vec![EventRecord::user_input("示例问题", 1_000, 1)];
+        let mut seq = 1;
+        let mut next = || {
+            seq += 1;
+            seq
+        };
+        for piece in ["**Plan", "ning the", " build**"] {
+            out.push(text(
+                next(),
+                "thinking",
+                piece,
+                true,
+                "codex_rpc_summary_delta",
+                "rs_1:summary:0",
+            ));
+        }
+        out.push(text(
+            next(),
+            "thinking",
+            "**Planning the build**",
+            true,
+            "codex_rpc_summary_completed",
+            "rs_1:summary:0",
+        ));
+        for piece in ["先", "检查", "构建", "脚本。"] {
+            out.push(text(
+                next(),
+                "assistant",
+                piece,
+                true,
+                "codex_rpc_delta",
+                "msg_1",
+            ));
+        }
+        let mut tool = plain(next(), "tool_use");
+        tool.tool = Some("Bash".to_string());
+        tool.tool_input = Some(serde_json::json!({"command": "make"}));
+        out.push(tool);
+        for piece in ["然后", "汇报。"] {
+            out.push(text(
+                next(),
+                "assistant",
+                piece,
+                true,
+                "codex_rpc_delta",
+                "msg_1",
+            ));
+        }
+        out.push(text(
+            next(),
+            "assistant",
+            "先检查构建脚本。然后汇报。",
+            false,
+            "codex_rpc_completed",
+            "msg_1",
+        ));
+        for piece in ["完成", "了"] {
+            out.push(text(
+                next(),
+                "assistant",
+                piece,
+                true,
+                "codex_rpc_delta",
+                "msg_2",
+            ));
+        }
+        out.push(text(
+            next(),
+            "assistant",
+            "完成了",
+            false,
+            "codex_rpc_completed",
+            "msg_2",
+        ));
+        let mut result = plain(next(), "result");
+        result.usage = Some(UsageRec {
+            input: 10,
+            output: 5,
+            cache_read: 0,
+            cache_write: 0,
+        });
+        out.push(result);
+        out
+    }
+
+    /// 与落盘侧同一套合并:相邻同段增量并成一条。
+    fn merged(records: &[EventRecord]) -> Vec<EventRecord> {
+        let mut out: Vec<EventRecord> = Vec::new();
+        for rec in records {
+            if let Some(last) = out.last_mut() {
+                if last.absorb_delta(rec) {
+                    continue;
+                }
+            }
+            out.push(rec.clone());
+        }
+        out
+    }
+
+    /// tail 的定稿视图:定稿块与独立行按出现顺序,外加回放到尾部时冲出的未定稿块。
+    fn settled(records: &[EventRecord]) -> Vec<String> {
+        let mut grouper = TailGrouper::for_driver(crate::driver::CliDriver::Codex, false);
+        let mut live = None;
+        let mut out = Vec::new();
+        for rec in records {
+            for item in grouper.push(rec) {
+                match item {
+                    TailOut::Live(block) => live = Some(block),
+                    TailOut::Frozen => {
+                        if let Some(block) = live.take() {
+                            out.push(format!("{:?}:{}", block.kind, block.text));
+                        }
+                    }
+                    TailOut::LiveClear => {}
+                    TailOut::Line(line) => out.push(line),
+                }
+            }
+        }
+        if let Some(block) = grouper.flush_pending() {
+            out.push(format!("pending {:?}:{}", block.kind, block.text));
+        }
+        out
+    }
+
+    #[test]
+    fn only_same_run_codex_deltas_merge() {
+        let mut a = text(1, "assistant", "a", true, "codex_rpc_delta", "m1");
+        assert!(a.absorb_delta(&text(2, "assistant", "b", true, "codex_rpc_delta", "m1")));
+        assert_eq!(a.text.as_deref(), Some("ab"));
+        assert_eq!(a.seq, 1, "保留首条的 seq");
+        for other in [
+            text(3, "assistant", "c", true, "codex_rpc_delta", "m2"),
+            text(3, "thinking", "c", true, "codex_rpc_delta", "m1"),
+            text(3, "assistant", "c", false, "codex_rpc_completed", "m1"),
+            text(
+                3,
+                "thinking",
+                "c",
+                true,
+                "codex_rpc_summary_completed",
+                "m1",
+            ),
+        ] {
+            assert!(!a.clone().absorb_delta(&other), "{other:?}");
+        }
+        let mut stamped = text(3, "assistant", "c", true, "codex_rpc_delta", "m1");
+        stamped.turn = Some("turn-2".to_string());
+        assert!(!a.clone().absorb_delta(&stamped), "不同轮的出处不合并");
+        // 无 item / 无来源的增量(cursor、旧版 codex)逐条另有语义。
+        let mut naked = text(4, "assistant", "x", true, "codex_rpc_delta", "m1");
+        naked.source_item_id = None;
+        assert!(!naked.is_mergeable_delta());
+        let mut cursor = EventRecord::note("assistant", "x", 1_000, 5);
+        cursor.partial = Some(true);
+        assert!(!cursor.is_mergeable_delta());
+    }
+
+    /// 合并前后,读 events.jsonl 的各处投影一致:tail 定稿视图、孤儿卡重建、history、诊断导出
+    /// 的正文总长。
+    #[test]
+    fn readers_see_the_same_turn_before_and_after_merging() {
+        let raw = codex_turn();
+        let merged = merged(&raw);
+        assert!(merged.len() < raw.len(), "增量应被合并");
+        assert_eq!(merged.len(), raw.len() - 2 - 3 - 1 - 1);
+
+        assert_eq!(settled(&merged), settled(&raw));
+        assert_eq!(
+            rebuild_last_turn_segments(&merged),
+            rebuild_last_turn_segments(&raw)
+        );
+        let history = |records: &[EventRecord]| {
+            let mut builder = crate::observe::history::HistoryBuilder::default();
+            for rec in records {
+                builder.push(rec.clone());
+            }
+            builder.finish()
+        };
+        assert_eq!(history(&merged), history(&raw));
+        let text_len = |records: &[EventRecord]| {
+            let mut projector = crate::observe::export::events::EventProjector::default();
+            records
+                .iter()
+                .map(|rec| projector.project(rec))
+                .filter(|ev| ev.partial == Some(true))
+                .map(|ev| (ev.kind, ev.source_item_id, ev.text_len.unwrap_or(0)))
+                .fold(
+                    std::collections::BTreeMap::new(),
+                    |mut acc, (kind, item, len)| {
+                        *acc.entry((kind, item)).or_insert(0) += len;
+                        acc
+                    },
+                )
+        };
+        assert_eq!(text_len(&merged), text_len(&raw));
     }
 }
