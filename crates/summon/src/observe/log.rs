@@ -25,10 +25,45 @@ fn should_check(enabled: bool, seq: u64, every: u64) -> bool {
 
 pub(crate) fn log(msg: &str) {
     maybe_rotate();
-    eprintln!(
-        "[{}] [summon] {msg}",
+    let line = format!(
+        "[{}] [summon] {msg}\n",
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     );
+    emit(&line);
+}
+
+/// 写一行到 stderr(daemon 里即 daemon.log),写失败丢弃这一行。
+///
+/// `eprintln!` 在写失败时 panic:磁盘满时 daemon.log 写不进去,调日志的线程(chat 线程、
+/// 看门狗)会当场死掉,这一轮既不收尾也不发卡。空间不足记进 [`storage_full`] 观测,
+/// 在跑的无头轮据此结束并告知用户。
+///
+/// [`storage_full`]: crate::observe::storage_full
+fn write_line(out: &mut dyn std::io::Write, line: &str) {
+    if let Err(error) = out.write_all(line.as_bytes()) {
+        crate::observe::storage_full::note(&error);
+    }
+}
+
+#[cfg(not(test))]
+fn emit(line: &str) {
+    write_line(&mut std::io::stderr().lock(), line);
+}
+
+// 测试进程默认走 `eprint!`,让 libtest 照常捕获日志;需要验证真实 stderr 写失败的测试
+// 把本线程切到生产写法。
+#[cfg(test)]
+thread_local! {
+    static DIRECT_STDERR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn emit(line: &str) {
+    if DIRECT_STDERR.with(std::cell::Cell::get) {
+        write_line(&mut std::io::stderr().lock(), line);
+    } else {
+        eprint!("{line}");
+    }
 }
 
 /// 到节拍且超限 → rename 成 .1 + 重开新文件,把 fd1/fd2 重指过去(daemon_start 把两者都指向
@@ -74,5 +109,58 @@ mod tests {
         assert!(should_check(true, 0, 512), "到节拍才 stat");
         assert!(!should_check(true, 1, 512));
         assert!(should_check(true, 1024, 512));
+    }
+
+    struct FullDisk;
+
+    impl std::io::Write for FullDisk {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_full_log_target_drops_the_line_and_records_storage_full() {
+        let start = crate::observe::storage_full::now_ms();
+        write_line(&mut FullDisk, "[a] line\n");
+        assert!(crate::observe::storage_full::seen_since(start));
+    }
+
+    /// 子进程入口:由下一条测试在 stderr 指向 `/dev/full` 时单独运行。
+    #[test]
+    #[ignore = "由 log_survives_a_full_stderr 在子进程中运行"]
+    fn log_to_full_stderr_child() {
+        DIRECT_STDERR.with(|direct| direct.set(true));
+        let start = crate::observe::storage_full::now_ms();
+        log("disk-full probe");
+        assert!(crate::observe::storage_full::seen_since(start));
+    }
+
+    /// stderr 是写满的文件时 `log` 不能 panic:`/dev/full` 对每次写返回 ENOSPC。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn log_survives_a_full_stderr() {
+        let full = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .expect("/dev/full");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "observe::log::tests::log_to_full_stderr_child",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .stderr(full)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{stdout}");
+        assert!(stdout.contains("1 passed"), "{stdout}");
     }
 }

@@ -230,7 +230,7 @@ pub(super) fn owner_id_matches(owner: &str, open_id: &str, union_id: &str) -> bo
 }
 
 /// 把一轮发言追加到 <agent.dir>/threads/<chat-tag>/transcript.md(完整对话记录,与 summary 同目录)。
-/// 失败静默忽略(日志不该阻断会话)。
+/// 失败不阻断会话,只把空间不足记进观测。
 pub(super) fn append_transcript(
     agent_dir: &std::path::Path,
     chat_type: &str,
@@ -252,11 +252,13 @@ pub(super) fn append_transcript(
     );
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let line = format!("### {stamp} {role}\n{body}\n\n");
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .and_then(|mut f| f.write_all(line.as_bytes()));
+    let _ = crate::observe::storage_full::noted(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| f.write_all(line.as_bytes())),
+    );
 }
 
 /// 记 agent 的一轮回复。末尾的总结标签只给会话列表预览用,不进完整对话记录:agent 之后经

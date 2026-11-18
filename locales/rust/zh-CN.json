@@ -6962,5 +6962,7 @@
   "upgrade.channel.npm_retired": "  ↳ upgrade.channel: npm 已停用,按 github(GitHub Releases)处理;可以删掉这一行",
   "upgrade.channel_flag.retired": "--channel 只认 github:npm 渠道已停用,summon upgrade 只从 GitHub Releases 取新版(收到 {value:?})",
   "upgrade.channel_flag.redundant": "summon:--channel github 可以去掉,summon upgrade 只从 GitHub Releases 取新版",
-  "auto_upgrade.pending_without_stage": "待换代的 {version} 没有暂存目录(是更早的版本经 npm 取到的),作废"
+  "auto_upgrade.pending_without_stage": "待换代的 {version} 没有暂存目录(是更早的版本经 npm 取到的),作废",
+  "headless.storage_full.reason": "磁盘空间不足:写入本轮记录时系统报空间已满(磁盘或配额),本轮已停止。请清理磁盘空间后重新发送消息。",
+  "headless.storage_full.log": "[{name}] 写盘报空间不足,有界打断本轮 chat={tag}"
 }

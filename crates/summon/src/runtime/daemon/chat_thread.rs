@@ -11775,6 +11775,8 @@ pub(super) fn run_headless_interruptible(
     use std::sync::mpsc;
 
     use super::headless_completion::{HeadlessExit, WorkerStop};
+    // 本轮起点之后观测到的空间不足才算本轮的(见 `observe::storage_full`)。
+    let turn_started_ms = crate::observe::storage_full::now_ms();
     let (tx_upd, rx_upd) = mpsc::channel::<TurnUpdate>();
     // events.jsonl tee(chat 线程侧落盘,与 card_stream_consume 一致;worker 只把事件投过来)。
     let tag = chat_tag(chat_ref.chat_type, chat_ref.chat_id);
@@ -12096,9 +12098,31 @@ pub(super) fn run_headless_interruptible(
                     } else {
                         WorkerStop::NoHandle
                     };
+                    // 看门狗静默期里观测到空间不足:多半是 provider 写不动会话文件而停摆,
+                    // 失败卡说清原因,而不是只报超时。
+                    if crate::observe::storage_full::seen_since(turn_started_ms) {
+                        break 'turn HeadlessExit::StorageFull(stopped);
+                    }
                     break 'turn HeadlessExit::TimedOut(stopped);
                 }
             }
+        }
+        // 写盘报空间不足:本轮的事件流、归档与台账都已落不下,provider 通常也写不动会话文件。
+        // 不等看门狗,立即有界打断并以失败卡告知。收尾与发卡只走网络与内存,不依赖写盘。
+        if let Some(k) = killer
+            .as_ref()
+            .filter(|_| crate::observe::storage_full::seen_since(turn_started_ms))
+        {
+            log(&summon_i18n::format!("headless.storage_full.log"));
+            k.interrupt();
+            let stopped = WorkerStop::from_wait(await_interrupted_headless(
+                &rx_upd,
+                k,
+                HEADLESS_INTERRUPT_GRACE,
+                HEADLESS_FORCE_KILL_WAIT,
+                &mut last_reply,
+            ));
+            break 'turn HeadlessExit::StorageFull(stopped);
         }
         // select 另一臂:本 chat 的新 inbound / 控制卡按钮。Stop(按钮纯停)/ Rerun(`!`,默认关)。
         // 普通/控制消息留在队列里(本轮跑完按序处理,串行,不抽走)。

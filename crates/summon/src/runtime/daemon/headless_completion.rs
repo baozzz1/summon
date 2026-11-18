@@ -30,6 +30,8 @@ pub(super) enum HeadlessExit {
     Completed(anyhow::Result<TurnOutcome>),
     Disconnected,
     TimedOut(WorkerStop),
+    /// 写盘报空间不足,本轮被有界打断。
+    StorageFull(WorkerStop),
     SteerUnconfirmed(WorkerStop),
     Interrupted(WorkerStop),
     Rerun {
@@ -71,6 +73,7 @@ impl HeadlessExit {
         match self {
             Self::Completed(_) | Self::Disconnected => true,
             Self::TimedOut(stop)
+            | Self::StorageFull(stop)
             | Self::SteerUnconfirmed(stop)
             | Self::Interrupted(stop)
             | Self::Rerun { stopped: stop, .. } => matches!(stop, WorkerStop::Reported(_)),
@@ -93,6 +96,16 @@ impl HeadlessExit {
                         ..Default::default()
                     },
                 };
+                (Ok(outcome), Continuation::Complete)
+            }
+            Self::StorageFull(stop) => {
+                // 失败原因固定为空间不足:打断后 provider 报的 interrupted/aborted 只是打断的回声,
+                // 留着它会让失败通知被当成用户主动暂停而跳过。
+                let reason = summon_i18n::text!("headless.storage_full.reason");
+                let mut outcome = stop.into_result(reason).unwrap_or_default();
+                outcome.interrupted = false;
+                outcome.api_error = Some(reason.to_string());
+                outcome.api_error_kind = None;
                 (Ok(outcome), Continuation::Complete)
             }
             Self::SteerUnconfirmed(_) => (
@@ -147,6 +160,35 @@ mod tests {
             assert!(result.timed_out);
             assert!(result.api_error.is_some());
         }
+    }
+
+    #[test]
+    fn storage_full_fails_the_turn_with_its_own_reason_for_each_worker_end() {
+        let echoed_interrupt = WorkerStop::Reported(Ok(TurnOutcome {
+            interrupted: true,
+            reply: Some("部分正文".into()),
+            ..Default::default()
+        }));
+        for stop in [
+            echoed_interrupt,
+            WorkerStop::Reported(Err(anyhow::anyhow!("provider 退出失败"))),
+            WorkerStop::Unconfirmed,
+            WorkerStop::NoHandle,
+        ] {
+            let exit = HeadlessExit::StorageFull(stop);
+            let (result, continuation) = exit.into_outcome();
+            let outcome = result.unwrap();
+            assert!(!outcome.interrupted, "打断回声不能吞掉失败通知");
+            assert!(!outcome.timed_out);
+            assert_eq!(
+                outcome.api_error.as_deref(),
+                Some(summon_i18n::text!("headless.storage_full.reason"))
+            );
+            assert!(!continuation.is_interrupted());
+            assert!(!continuation.is_rerun());
+        }
+        assert!(HeadlessExit::StorageFull(reported()).observed_worker_end());
+        assert!(!HeadlessExit::StorageFull(WorkerStop::Unconfirmed).observed_worker_end());
     }
 
     #[test]

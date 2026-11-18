@@ -5,3 +5,4 @@ pub mod fleet_snapshot;
 pub mod log;
 pub mod remote_fleet;
 pub mod runtime_status;
+pub(crate) mod storage_full;

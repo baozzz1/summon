@@ -42,11 +42,12 @@ impl EventSink {
     /// 超过单文件上限先轮转(PF2)。失败上抛给调用方,由其转成 `None`(不开 sink),不影响本轮。
     /// `stamp` 是本轮出处,此后写入的每条记录都盖上它。
     pub fn open(base: &Path, tag: &str, stamp: EventStamp) -> anyhow::Result<Self> {
+        use crate::observe::storage_full::noted;
         let dir = base.join("threads").join(tag);
-        std::fs::create_dir_all(&dir)?;
+        noted(std::fs::create_dir_all(&dir))?;
         let path = dir.join("events.jsonl");
         rotate_if_oversized(&path, CHAT_LOG_MAX_BYTES);
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let file = noted(OpenOptions::new().create(true).append(true).open(&path))?;
         Ok(Self {
             file,
             seq: 0,
@@ -77,8 +78,11 @@ impl EventSink {
     /// 序列化一条记录写一行,全程 log-ignore(观测落盘失败不该让一轮挂掉)。
     fn write_record(&mut self, rec: &EventRecord) {
         match serde_json::to_string(rec) {
-            Ok(line) => {
-                if let Err(e) = writeln!(self.file, "{line}") {
+            Ok(mut line) => {
+                line.push('\n');
+                // 整行拼好再写:`writeln!` 会把正文与换行分成两次写。
+                if let Err(e) = self.file.write_all(line.as_bytes()) {
+                    crate::observe::storage_full::note(&e);
                     crate::observe::log::log(&summon_i18n::format!("rd0b31b6bde"));
                 }
             }

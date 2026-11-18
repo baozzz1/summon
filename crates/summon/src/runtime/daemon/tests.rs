@@ -13240,6 +13240,111 @@ fn rpc_steer_confirmation_controls_retry_and_failure_in_the_real_worker() {
     }
 }
 
+/// 事件流写盘报 ENOSPC(`events.jsonl` 指向 `/dev/full`):工具在飞、provider 静默时不等看门狗,
+/// 立即有界打断,失败卡写明空间不足。
+#[cfg(target_os = "linux")]
+#[test]
+fn storage_full_event_write_ends_the_headless_turn_with_a_failure_card() {
+    use crate::runtime::daemon::chat_thread::{
+        notify_failed_turn_outcome, run_headless_interruptible, TurnEngine,
+    };
+    let _guard = crate::test_support::process_test_guard();
+    let _quota = crate::capture::rpc_pool::default_codex_quota_test_guard();
+    let (mut agent, tmp) = crate::test_support::agent_dir("codex", "");
+    agent.name = format!("disk-full-probe-{}", uuid::Uuid::new_v4().simple());
+    // 工具开始后 provider 不再出声;没被打断的话 6 秒后正常完成。
+    let cases = r#"
+    *'thread/start'*) printf '%s\n' '{"id":'"$id"',"result":{"thread":{"id":"th-1","status":{"type":"idle"},"turns":[]}}}' ;;
+    *'turn/start'*) printf '%s\n' '{"id":'"$id"',"result":{"turn":{"id":"turn-1","status":"inProgress"}}}';
+        printf '%s\n' '{"method":"item/started","params":{"threadId":"th-1","turnId":"turn-1","item":{"id":"cmd_1","type":"commandExecution","command":"/bin/sh -lc build"}}}';
+        ( sleep 6;
+          printf '%s\n' '{"method":"item/completed","params":{"threadId":"th-1","turnId":"turn-1","item":{"type":"agentMessage","id":"answer","text":"done","phase":"final_answer"}}}';
+          printf '%s\n' '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"turn-1","status":"completed"}}}' ) & ;;
+    *'turn/interrupt'*) printf '%s\n' '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"turn-1","status":"aborted"}}}' ;;
+"#;
+    let script = crate::test_support::write_fake_app_server(tmp.path(), cases);
+    agent.runtime.as_mut().unwrap().cli_cmd = Some(script.display().to_string());
+    let chat = badge_chat(tmp.path(), "oc_disk_full_probe");
+    let tag = chat_tag(chat.chat_type, chat.chat_id);
+    let thread_dir = tmp.path().join("threads").join(&tag);
+    std::fs::create_dir_all(&thread_dir).unwrap();
+    std::os::unix::fs::symlink("/dev/full", thread_dir.join("events.jsonl")).unwrap();
+    let pool = crate::capture::rpc_pool::RpcPool::new(crate::runtime::inflight::InFlight::new());
+    let engine = TurnEngine::Rpc {
+        pool: pool.clone(),
+        spec: Box::new(crate::capture::RpcTurnSpec {
+            agent: agent.clone(),
+            session: "fixture".into(),
+            tag: tag.clone(),
+            chat_id: chat.chat_id.into(),
+        }),
+    };
+    let (tx, rx) = channel();
+    let (_wal, fc) = test_followup_ctx(&rx, tx, 1);
+    let frontend = EmitterFrontend::new();
+    let outbox = test_outbox(tmp.path());
+    let start = std::time::Instant::now();
+    let result = run_headless_interruptible(
+        engine,
+        CliDriver::Codex,
+        "fixture",
+        "fixture",
+        None,
+        &crate::capture::TurnCtx::default(),
+        &frontend,
+        &chat,
+        chat.chat_id.into(),
+        chat.chat_type.into(),
+        &agent.name,
+        &pending_arc("fixture", ""),
+        Arc::new(|_| {}),
+        Arc::new(|_| {}),
+        Arc::new(|_| crate::runtime::inflight::FinishDisposition::Completed),
+        &fc,
+        Duration::from_secs(1800),
+        false,
+        10,
+        false,
+        false,
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        Default::default(),
+        &outbox,
+    );
+    let elapsed = start.elapsed();
+    pool.evict(&agent.name, &tag);
+    let reason = summon_i18n::text!("headless.storage_full.reason");
+    let outcome = result.out.as_ref().expect("空间不足收尾是 Ok 的失败结局");
+    assert_eq!(outcome.api_error.as_deref(), Some(reason), "{outcome:?}");
+    assert!(!outcome.interrupted);
+    assert!(!result.interrupted && result.rerun.is_none());
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "不能等 provider 自己收尾:{elapsed:?}"
+    );
+    let requests =
+        std::fs::read_to_string(crate::test_support::fake_rpc_server_log(tmp.path())).unwrap();
+    assert!(requests.contains("turn/interrupt"), "必须打断 provider");
+
+    frontend.payloads.borrow_mut().clear();
+    assert!(notify_failed_turn_outcome(
+        &frontend,
+        &chat,
+        &agent.name,
+        &outbox,
+        outcome
+    ));
+    let payloads = frontend.payloads.borrow();
+    assert!(
+        payloads.iter().any(|card| card.contains(reason)),
+        "失败卡要写明空间不足:{payloads:?}"
+    );
+}
+
 /// 磁盘配置经真实RPC执行入口决定到期或完成，provider使用隔离假服务。
 #[test]
 fn configured_headless_watchdog_controls_the_real_rpc_worker() {
