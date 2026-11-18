@@ -127,6 +127,7 @@ mod tests {
     fn log_to_full_stderr_child() {
         DIRECT_STDERR.with(|direct| direct.set(true));
         log("disk-full probe");
+        // 写失败之后再写也不 panic。
         log("disk-full probe, again");
     }
 

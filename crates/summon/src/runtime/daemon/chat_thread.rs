@@ -14003,7 +14003,7 @@ pub(super) fn stream_turn_headless(
     }
     // 看门狗(超时 / 空间不足)强杀后 worker 仍没返回:本轮的在跑登记由本线程摘掉了,没有
     // 别人(停机接管)认领,detach 的 worker 之后也拿不到完成所有权。这一轮的终态归本线程:
-    // 照常发失败卡、清 checkpoint、销账,不留给重启恢复再发一次。
+    // 照常发失败卡、清 checkpoint、销账。
     let abandoned_by_watchdog = reclaimed
         && !interrupted
         && rerun.is_none()

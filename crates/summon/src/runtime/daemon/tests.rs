@@ -13506,8 +13506,8 @@ fn configured_headless_watchdog_controls_the_real_rpc_worker() {
     }
 }
 
-/// 看门狗强杀后 worker 仍不返回(逃逸的孙进程攥着 stdout):本轮由本线程收尾,发失败卡并销掉
-/// checkpoint,不留给重启恢复再报一次。
+/// 看门狗强杀后 worker 仍不返回(逃逸的孙进程攥着 stdout):本轮由本线程收尾,发失败卡、
+/// 清掉 checkpoint,结局是 Failed。
 #[cfg(target_os = "linux")]
 #[test]
 fn watchdog_failure_card_is_sent_even_when_the_worker_never_returns() {

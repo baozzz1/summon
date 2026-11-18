@@ -89,7 +89,7 @@ impl HeadlessExit {
                     Ok(mut outcome) => {
                         outcome.timed_out = true;
                         // provider 对看门狗打断回的 interrupted/aborted 只是打断的回声,不是用户
-                        // 暂停;留着它失败通知会被跳过,用户只看到一张定格的「已中止」卡。
+                        // 暂停:本轮按超时失败收尾并发失败卡。
                         outcome.interrupted = false;
                         outcome
                     }

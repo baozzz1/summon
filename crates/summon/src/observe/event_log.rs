@@ -31,7 +31,8 @@ pub(crate) fn rotate_if_oversized(path: &Path, max: u64) -> bool {
     std::fs::rename(path, std::path::PathBuf::from(rotated)).is_ok()
 }
 
-/// 流式增量合并后最晚多久落盘。`agents tail` 跟随时正文以这个节拍成段出现。
+/// 合并中的增量缓冲满这个时长即到期,由下一次写入或后台线程的下一个节拍写掉。
+/// `agents tail` 跟随时正文按这个节拍成段出现。
 const DELTA_FLUSH_AGE: Duration = Duration::from_secs(1);
 /// 合并中的增量正文到这个字节数就落盘,一条记录不无限长大。
 const DELTA_FLUSH_BYTES: usize = 4096;
@@ -45,9 +46,10 @@ const DELTA_FLUSH_TICK: Duration = Duration::from_millis(200);
 /// [`DELTA_FLUSH_BYTES`]、或已缓冲超过 [`DELTA_FLUSH_AGE`] 时落盘。到期检查由进程内一条后台
 /// 线程做,不依赖写口使用方的循环:provider 卡住不再出声时,最后一段增量也会按期落盘。
 /// 写口销毁(轮结束、被打断、线程 unwind)与 daemon 停机([`flush_open_sinks`])时写掉缓冲。
-/// 进程被 SIGKILL 或 abort 时,最多丢掉一段未到期的缓冲(不超过 1 秒、4096 字节)。
+/// 缓冲最久停留 [`DELTA_FLUSH_AGE`] 加一个 [`DELTA_FLUSH_TICK`](约 1.2 秒);进程被 SIGKILL
+/// 或 abort 时,最多丢掉这样一段缓冲(不超过约 1.2 秒、4096 字节的增量)。
 ///
-/// 合并记录的 `ts` 是该段首条增量的时刻;按 `ts` 推算的「最后活动时间」最多早 1 秒。
+/// 合并记录的 `ts` 是该段首条增量的时刻;按 `ts` 推算的「最后活动时间」最多早约 1.2 秒。
 pub struct EventSink {
     inner: Arc<Mutex<SinkInner>>,
 }
