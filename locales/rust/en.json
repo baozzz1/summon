@@ -1,4 +1,8 @@
 {
+  "r1d6a5e3b90": "[{}] Continue after stream interruption: inject “Continue” → chat={chat_id}",
+  "r3c0e81a5d2": "[{}] Session mirror skipped an API error already reported by the main path → chat={chat_id}",
+  "r5e9d07b4c1": "[{}] Session mirror sent an API error card → chat={chat_id}",
+  "r8a41f6c0e7": "[{}] Session mirror failed to send an API error card (ignored) → chat={chat_id}: {error:#}",
   "test.capture": "Hello {name}, {value:.2} {0:?}",
   "test.error": "Error {0}",
   "test.unit": "Not found",

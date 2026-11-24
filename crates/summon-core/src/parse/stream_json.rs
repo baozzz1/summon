@@ -4,8 +4,12 @@
 //! 一行可能含多个内容块(assistant.message.content 是数组),故返回 Vec。
 //! 噪音(system/hook_*、rate_limit_event、坏行)返回空。比抓 TUI 可靠:信 CLI 自己的协议标注。
 
-use crate::parse::agent_msg::{AgentKind, AgentMessage, Usage};
+use crate::parse::agent_msg::{AgentErrorKind, AgentKind, AgentMessage, Usage};
+use crate::parse::claude_api_error::ClaudeApiError;
 use serde_json::Value;
+
+/// API 错误记录没给出类别时 `AgentMessage::error` 填的值:错误终态靠它非空来识别。
+const UNCATEGORIZED_API_ERROR: &str = "api_error";
 
 pub fn parse_stream_json_line(line: &str) -> Vec<AgentMessage> {
     let line = line.trim();
@@ -38,12 +42,19 @@ pub fn parse_stream_json_line(line: &str) -> Vec<AgentMessage> {
                 .and_then(|msg| msg.get("stop_reason"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            // API 错误(model_not_found 等)也在 message 层;有值表示本轮是错误终态
-            let api_error = v
-                .get("message")
-                .and_then(|msg| msg.get("error"))
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            // API 错误记录:结构化标记在记录最外层(旧版本写在 `message.error`),
+            // 见 [`ClaudeApiError`]。`error` 填错误类别,有值表示本轮是错误终态。
+            let api_error_record = ClaudeApiError::from_value(&v);
+            let api_error = api_error_record.as_ref().map(|record| {
+                record
+                    .category
+                    .clone()
+                    .unwrap_or_else(|| UNCATEGORIZED_API_ERROR.to_string())
+            });
+            let error_kind = api_error_record
+                .as_ref()
+                .filter(|record| record.stream_interrupted())
+                .map(|_| AgentErrorKind::StreamInterrupted);
             // cursor `--stream-partial-output` 的增量 delta 行带顶层 `timestamp_ms`;流末尾的完整
             // 快照行无此字段。claude/codex 的 assistant 行从不带 → partial 恒 false,行为不变。
             let partial = v.get("timestamp_ms").is_some();
@@ -57,6 +68,10 @@ pub fn parse_stream_json_line(line: &str) -> Vec<AgentMessage> {
                         api_error.clone(),
                         partial,
                     )
+                })
+                .map(|mut m| {
+                    m.error_kind = error_kind;
+                    m
                 })
                 .collect()
         }
@@ -735,6 +750,27 @@ mod tests {
             Some("There's an issue with the selected model."),
             "错误文本也应作为 text 被提取(作为回复发出)"
         );
+    }
+
+    /// 实测形态:标记与类别在记录最外层,`message.error` 为 null。
+    #[test]
+    fn top_level_api_error_record_fills_error_and_kind() {
+        let line = r#"{"type":"assistant","uuid":"err-1","error":"server_error","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","error":null,"content":[{"type":"text","text":"API Error: The response stopped arriving. The response above may be incomplete."}]}}"#;
+        let msgs = parse_stream_json_line(line);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].error.as_deref(), Some("server_error"));
+        assert_eq!(
+            msgs[0].error_kind,
+            Some(AgentErrorKind::StreamInterrupted),
+            "server_error 是可续的流中断"
+        );
+        let rate = line.replace("\"server_error\"", "\"rate_limit\"").replace(
+            "API Error: The response stopped arriving. The response above may be incomplete.",
+            "You've hit your weekly limit · resets 3pm (Asia/Singapore)",
+        );
+        let msgs = parse_stream_json_line(&rate);
+        assert_eq!(msgs[0].error.as_deref(), Some("rate_limit"));
+        assert_eq!(msgs[0].error_kind, None);
     }
 
     #[test]

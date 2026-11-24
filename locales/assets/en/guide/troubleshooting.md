@@ -78,6 +78,12 @@ available model with /model and restart. The notice does not switch or retry aut
 Quota exhaustion and stream interruption use their own recovery cards. User interruptions
 and graceful restart reattachments do not send generic failure cards. After a hard
 crash, use recovery card choices; inspect daemon status and logs.
+Claude API errors reach the chat whether they land before or after the turn ends: a stream
+interruption (`API Error: The response stopped arriving…` and similar) sends the stream
+interruption card with a Continue button and keeps the partial reply already sent; other
+errors send a failure notice with the original text. Errors that appear after the turn has
+ended are sent by the session mirror (`messaging.session_mirror`); with the mirror off, only
+errors read during the turn are sent.
 
 ## Give material to a maintainer
 

@@ -1,4 +1,8 @@
 {
+  "r1d6a5e3b90": "[{}] 流中断后继续:注入「继续」→ chat={chat_id}",
+  "r3c0e81a5d2": "[{}] 会话镜像读到的 API 错误已由主路径报出,跳过 → chat={chat_id}",
+  "r5e9d07b4c1": "[{}] 会话镜像已把 API 错误发到群 → chat={chat_id}",
+  "r8a41f6c0e7": "[{}] 会话镜像发 API 错误卡失败(忽略) → chat={chat_id}: {error:#}",
   "test.capture": "你好 {name}，{value:.2} {0:?}",
   "test.error": "错误 {0}",
   "test.unit": "不存在",

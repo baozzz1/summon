@@ -6117,6 +6117,8 @@ struct ActiveMirrorTurn {
     /// 主路径已读到并下过结论的最后一个 terminal 的边界,与 mirror 的 terminal_offset 是同一套
     /// 字节偏移(行尾 `\n` 之后)。续跑区间右端未定时,mirror 据它判断某一段主路径处理完没有。
     main_read_through: Option<u64>,
+    /// run_turn 已返回:主路径不会再读这一轮的转录,之后落盘的记录只有 mirror 看得见。
+    main_tail_closed: bool,
     phase: MirrorDeliveryPhase,
 }
 
@@ -6176,6 +6178,19 @@ struct ContinuationClaim {
 /// 续跑区间里 mirror 先于主路径读到某一段时,等主路径对它下结论的上限。主路径每 300ms 读一次
 /// 转录,只在同步发段终点回复时会慢几秒;等满仍没结论就让路(宁漏勿重)。
 const CONTINUATION_VERDICT_WAIT: Duration = Duration::from_secs(30);
+
+/// mirror 读到一条 API 错误记录、主路径还在读本轮时,等主路径读到它(认领)或收尾的上限。
+/// 主路径每 300ms 读一次转录,收尾到 `close_main_tail` 之间只有同步回调。
+const API_ERROR_OWNER_WAIT: Duration = Duration::from_secs(30);
+
+/// 一条 claude API 错误记录由谁报给群。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ApiErrorOwner {
+    /// 主路径以它收尾,失败卡 / 流中断卡由主路径发。
+    Main,
+    /// 主路径没有、也不会再读到它(轮外落盘,或落在主路径已收尾的 end_turn 之后):mirror 发。
+    Mirror,
+}
 
 /// mirror 对续跑区间里一个 terminal 的判断。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -6301,6 +6316,11 @@ pub(super) struct MirrorDeliveryTracker {
     continuation_claims: std::sync::Mutex<VecDeque<ContinuationClaim>>,
     /// 测试用:替换 `CONTINUATION_VERDICT_WAIT`。
     continuation_verdict_wait: Option<Duration>,
+    /// 主路径以错误终态收尾、自己发了失败卡 / 流中断卡的 claude API 错误记录(有界)。mirror
+    /// 读到同一条记录时让路。
+    api_error_claims: std::sync::Mutex<VecDeque<crate::capture::ApiErrorRecordId>>,
+    /// 测试用:替换 `API_ERROR_OWNER_WAIT`。
+    api_error_owner_wait: Option<Duration>,
     changed: std::sync::Condvar,
     watcher: std::sync::Mutex<MirrorWatcherState>,
     watcher_changed: std::sync::Condvar,
@@ -6751,10 +6771,11 @@ impl MirrorDeliveryTracker {
     /// run_turn 返回(正常收尾、打断、出错都算):主路径不会再读这一轮的转录。续跑区间的右端钉在
     /// 它下过结论的最后一个 terminal 上。
     pub(super) fn close_main_tail(&self, token: MirrorTurnToken) {
-        let active = self.lock_active();
-        let Some(current) = active.as_ref().filter(|current| current.token == token) else {
+        let mut active = self.lock_active();
+        let Some(current) = active.as_mut().filter(|current| current.token == token) else {
             return;
         };
+        current.main_tail_closed = true;
         if let (Some(claim), Some(through)) = (
             self.lock_continuation_claims()
                 .back_mut()
@@ -6764,6 +6785,81 @@ impl MirrorDeliveryTracker {
             claim.through = Some(through.max(claim.after));
         }
         self.changed.notify_all();
+    }
+
+    /// 主路径本轮以这条 API 错误记录收尾,错误由它自己报。必须先于 `close_main_tail`:mirror
+    /// 见到主路径收尾而没有认领,就会自己发。
+    pub(super) fn claim_main_api_error(&self, record: &crate::capture::ApiErrorRecordId) {
+        const MAX_API_ERROR_CLAIMS: usize = 64;
+        let _active = self.lock_active();
+        let mut claims = self.lock_api_error_claims();
+        if !claims.iter().any(|claimed| claimed.same_record(record)) {
+            claims.push_back(record.clone());
+            while claims.len() > MAX_API_ERROR_CLAIMS {
+                claims.pop_front();
+            }
+        }
+        drop(claims);
+        self.changed.notify_all();
+    }
+
+    fn lock_api_error_claims(
+        &self,
+    ) -> std::sync::MutexGuard<'_, VecDeque<crate::capture::ApiErrorRecordId>> {
+        self.api_error_claims
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// mirror 读到一条 API 错误记录:这条错误由谁报。
+    ///
+    /// 与主路径的 end_turn 时序无关,只看主路径会不会读到它:主路径认领过,或已读到并对它所在
+    /// 的那一段下过结论(`main_read_through` 越过它:主路径读到错误记录必以它收尾并认领)→
+    /// 主路径报;没有进行中的主路径轮、主路径已收尾(run_turn 返回)、或记录落在本轮起点
+    /// (marker 消费边界 / markerless fence)之前 → mirror 报。其余情况等主路径读到它或收尾;
+    /// 等满仍没结论由 mirror 报 —— 主路径 300ms 读一次转录,这么久没读到,多半是它已按更早的
+    /// end_turn 收尾、正卡在同步发送上,不会再读到这条记录。宁可极少数情况下重复,也不漏报。
+    pub(super) fn api_error_owner(
+        &self,
+        record: &crate::capture::ApiErrorRecordId,
+    ) -> ApiErrorOwner {
+        let wait = self.api_error_owner_wait.unwrap_or(API_ERROR_OWNER_WAIT);
+        let deadline = std::time::Instant::now() + wait;
+        let mut active = self.lock_active();
+        loop {
+            if self
+                .lock_api_error_claims()
+                .iter()
+                .any(|claimed| claimed.same_record(record))
+            {
+                return ApiErrorOwner::Main;
+            }
+            let Some(current) = active.as_ref() else {
+                return ApiErrorOwner::Mirror;
+            };
+            if current.main_tail_closed {
+                return ApiErrorOwner::Mirror;
+            }
+            let turn_start = current.consumed_boundary.or(current.markerless_fence);
+            if turn_start.is_some_and(|start| record.boundary <= start) {
+                return ApiErrorOwner::Mirror;
+            }
+            if current
+                .main_read_through
+                .is_some_and(|seen| record.boundary <= seen)
+            {
+                return ApiErrorOwner::Main;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return ApiErrorOwner::Mirror;
+            }
+            active = self
+                .changed
+                .wait_timeout(active, deadline - now)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
     }
 
     /// 主路径决定跨后台任务续跑时调用一次:以 active turn 的 consumed_boundary(或 markerless
@@ -6808,6 +6904,15 @@ impl MirrorDeliveryTracker {
     fn with_continuation_verdict_wait(wait: Duration) -> Self {
         Self {
             continuation_verdict_wait: Some(wait),
+            ..Self::default()
+        }
+    }
+
+    /// 测试用:把 mirror 等主路径认领 API 错误记录的上限换成 `wait`。
+    #[cfg(test)]
+    fn with_api_error_owner_wait(wait: Duration) -> Self {
+        Self {
+            api_error_owner_wait: Some(wait),
             ..Self::default()
         }
     }
@@ -6938,6 +7043,7 @@ impl MirrorDeliveryTracker {
             steer_markers: Vec::new(),
             markerless_fence: None,
             main_read_through: None,
+            main_tail_closed: false,
             phase: MirrorDeliveryPhase::AwaitingMarker,
         });
         // 新轮开始:上一轮右端没钉上的续跑区间无从判断在哪结束,清掉;右端已钉的留着,mirror
@@ -7689,6 +7795,48 @@ impl MirrorMessageUuidCursor {
     }
 }
 
+/// mirror 对一条 API 错误记录的处理结果。
+#[derive(Debug)]
+enum MirrorApiErrorSend {
+    /// 主路径报,mirror 让路。
+    LeftToMain,
+    Sent,
+    /// 发送失败:只记日志,一张错误卡不值得让整个镜像 fail-stop(那会让之后的轮都不再镜像)。
+    Failed(anyhow::Error),
+}
+
+/// mirror 报一条 API 错误:先判归属,归 mirror 才发。
+///
+/// 身份校验(`preflight`,零网络)在判归属**之后、紧挨着发送**再做一次:判归属可能等主路径
+/// 结论长达 `API_ERROR_OWNER_WAIT`,期间 agent 被停用或飞书身份变了,入口处的校验已经过期。
+/// 校验失败返回 Err,与回复路径同样 fail-stop,确定没有外发。
+fn deliver_mirror_api_error(
+    tracker: &MirrorDeliveryTracker,
+    record: &crate::capture::ApiErrorRecordId,
+    mut preflight: impl FnMut() -> anyhow::Result<()>,
+    send: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<MirrorApiErrorSend> {
+    preflight()?;
+    if tracker.api_error_owner(record) == ApiErrorOwner::Main {
+        return Ok(MirrorApiErrorSend::LeftToMain);
+    }
+    preflight()?;
+    Ok(match send() {
+        Ok(()) => MirrorApiErrorSend::Sent,
+        Err(error) => MirrorApiErrorSend::Failed(error),
+    })
+}
+
+/// mirror 报 API 错误用的卡,与主路径同一套:流中断给带「继续」的流中断卡,其余给失败卡。
+/// 这一轮已生成的正文已由回复投递,卡上不再重复。
+fn mirror_api_error_card(error: &summon_core::claude_api_error::ClaudeApiError) -> String {
+    let reason = error.reason();
+    if error.stream_interrupted() {
+        return summon_core::feishu::card_stream_stalled("", &reason);
+    }
+    summon_core::feishu::card_markdown_v2(&super::chat_thread::turn_failure_notice_body(&reason))
+}
+
 /// 镜像发一块正文;被飞书内容审核拦下时改发一句说明顶替这一块(见 [`send_or_explain_rejection`])。
 #[allow(clippy::too_many_arguments)] // 镜像块的身份、正文与文件按钮各自独立
 fn send_mirror_block(
@@ -8154,6 +8302,48 @@ pub(super) fn run_mirror(
             }
         }
     };
+    let mut api_error_cursor = MirrorMessageUuidCursor::default();
+    let mut on_api_error = |report: &crate::capture::MirrorApiError<'_>| {
+        let record = crate::capture::ApiErrorRecordId {
+            uuid: report.error.uuid.clone(),
+            boundary: report.boundary,
+        };
+        let sent = deliver_mirror_api_error(
+            &mirror_delivery,
+            &record,
+            || ensure_mirror_epoch_current(&agent, &frozen_epoch),
+            || {
+                let uuid = api_error_cursor.next(
+                    &epoch_fingerprint,
+                    &chat_id,
+                    &mirror_sid,
+                    report.boundary,
+                    report.boundary_checkpoint,
+                    // 幂等 uuid 的命名空间,与 reply / notice 的键互不相撞。
+                    "api_error",
+                );
+                let card = mirror_api_error_card(report.error);
+                crate::frontend::outbound::send_card_idempotent_archived_id(
+                    &fc,
+                    &agent.state_dir(),
+                    &chat_type,
+                    &chat_id,
+                    "api_error_card",
+                    &card,
+                    &uuid,
+                )
+                .map(|_| ())
+            },
+        )?;
+        match sent {
+            MirrorApiErrorSend::LeftToMain => log(&summon_i18n::format!("r3c0e81a5d2", agent.name)),
+            MirrorApiErrorSend::Sent => log(&summon_i18n::format!("r5e9d07b4c1", agent.name)),
+            MirrorApiErrorSend::Failed(error) => {
+                log(&summon_i18n::format!("r8a41f6c0e7", agent.name))
+            }
+        }
+        Ok(())
+    };
     let mut on_ready = || mirror_delivery.mark_watcher_ready();
     let mut on_start_bypassed = || mirror_delivery.mark_watcher_bypassed();
     // 没有补发下界 → 历史一律只观察。
@@ -8165,6 +8355,7 @@ pub(super) fn run_mirror(
             &epoch_fingerprint,
             &stop,
             &mut on_turn,
+            &mut on_api_error,
             &mut on_ready,
             &mut on_start_bypassed,
             // 持久化消费 offset 到 threads/<tag>/mirror_offset,daemon 重启后从上次位置续读
@@ -13773,6 +13964,209 @@ mod mirror_delivery_tests {
             "main 已发但 mirror offset 未提交时，fresh tracker lazy replay 必须 fail-closed"
         );
         assert_eq!(network_sends, 0);
+    }
+
+    fn api_error_record(uuid: Option<&str>, boundary: u64) -> crate::capture::ApiErrorRecordId {
+        crate::capture::ApiErrorRecordId {
+            uuid: uuid.map(str::to_string),
+            boundary,
+        }
+    }
+
+    /// 轮外(没有进行中的主路径轮)读到的 API 错误只有 mirror 会报。
+    #[test]
+    fn an_api_error_outside_any_main_turn_is_reported_by_the_mirror() {
+        let tracker = MirrorDeliveryTracker::default();
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(Some("err-1"), 500)),
+            ApiErrorOwner::Mirror
+        );
+        // 主路径轮收尾(finish_turn 清掉 active)之后同理。
+        let token = tracker.begin_turn();
+        assert!(tracker.bind_transport_marker(token, "marker-main"));
+        tracker.mark_marker_consumed(token, 100);
+        tracker.finish_turn(token);
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(Some("err-2"), 600)),
+            ApiErrorOwner::Mirror
+        );
+    }
+
+    /// 主路径以这条记录收尾并认领:mirror 让路,在主路径收尾前后读到都一样。
+    #[test]
+    fn an_api_error_claimed_by_the_main_path_is_not_reported_twice() {
+        let tracker = MirrorDeliveryTracker::with_api_error_owner_wait(Duration::from_millis(20));
+        let token = tracker.begin_turn();
+        assert!(tracker.bind_transport_marker(token, "marker-main"));
+        tracker.mark_marker_consumed(token, 100);
+        tracker.claim_main_api_error(&api_error_record(Some("err-1"), 300));
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(Some("err-1"), 300)),
+            ApiErrorOwner::Main
+        );
+        tracker.close_main_tail(token);
+        tracker.finish_turn(token);
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(Some("err-1"), 300)),
+            ApiErrorOwner::Main,
+            "主路径收尾之后 mirror 才读到同一条记录,也不能再发"
+        );
+        // 别的记录不受这次认领影响。
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(Some("err-2"), 300)),
+            ApiErrorOwner::Mirror
+        );
+    }
+
+    /// 措辞兜底认出的记录没有 uuid,按 terminal 边界去重。
+    #[test]
+    fn an_api_error_without_uuid_is_matched_by_its_boundary() {
+        let tracker = MirrorDeliveryTracker::default();
+        tracker.claim_main_api_error(&api_error_record(None, 300));
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(None, 300)),
+            ApiErrorOwner::Main
+        );
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(None, 400)),
+            ApiErrorOwner::Mirror
+        );
+    }
+
+    /// 主路径已按 end_turn 收尾(run_turn 返回)而没有认领:错误落在它读到的终态之后,只有
+    /// mirror 看得见。mirror 先读到时等主路径收尾再判。
+    #[test]
+    fn an_api_error_after_the_main_turn_ended_is_reported_by_the_mirror() {
+        let tracker = std::sync::Arc::new(MirrorDeliveryTracker::with_api_error_owner_wait(
+            Duration::from_secs(10),
+        ));
+        let token = tracker.begin_turn();
+        assert!(tracker.bind_transport_marker(token, "marker-main"));
+        tracker.mark_marker_consumed(token, 100);
+        tracker.settle_main_segment(token, 200, &[], true);
+        let mirror = {
+            let tracker = tracker.clone();
+            std::thread::spawn(move || {
+                tracker.api_error_owner(&api_error_record(Some("err-1"), 300))
+            })
+        };
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!mirror.is_finished(), "主路径还在读本轮时先等它的结论");
+        tracker.close_main_tail(token);
+        assert_eq!(mirror.join().unwrap(), ApiErrorOwner::Mirror);
+    }
+
+    /// 主路径已读到错误记录、对它所在那一段下了结论(还没返回去认领):交给主路径,不必等。
+    #[test]
+    fn an_api_error_the_main_path_already_read_is_left_to_it() {
+        let tracker = MirrorDeliveryTracker::with_api_error_owner_wait(Duration::from_secs(10));
+        let token = tracker.begin_turn();
+        assert!(tracker.bind_transport_marker(token, "marker-main"));
+        tracker.mark_marker_consumed(token, 100);
+        tracker.settle_main_segment(token, 300, &[], true);
+        let started = std::time::Instant::now();
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(Some("err-1"), 300)),
+            ApiErrorOwner::Main
+        );
+        assert!(started.elapsed() < Duration::from_secs(1), "不该等满上限");
+    }
+
+    /// 主路径按更早的 end_turn 下了结论、迟迟没收尾(卡在同步发送上),等满上限仍没认领:
+    /// 由 mirror 报,不漏。
+    #[test]
+    fn an_unclaimed_api_error_is_reported_by_the_mirror_after_the_wait() {
+        let tracker = MirrorDeliveryTracker::with_api_error_owner_wait(Duration::from_millis(30));
+        let token = tracker.begin_turn();
+        assert!(tracker.bind_transport_marker(token, "marker-main"));
+        tracker.mark_marker_consumed(token, 100);
+        tracker.settle_main_segment(token, 200, &[], true);
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(Some("err-1"), 300)),
+            ApiErrorOwner::Mirror
+        );
+    }
+
+    /// 判归属可能等主路径结论好一阵:等完之后、真正外发之前必须重新校验身份,校验不过就不发。
+    #[test]
+    fn a_mirror_api_error_rechecks_identity_after_waiting_for_the_owner() {
+        let tracker = std::sync::Arc::new(MirrorDeliveryTracker::with_api_error_owner_wait(
+            Duration::from_secs(10),
+        ));
+        let token = tracker.begin_turn();
+        assert!(tracker.bind_transport_marker(token, "marker-main"));
+        tracker.mark_marker_consumed(token, 100);
+        let revoked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let closer = {
+            let (tracker, revoked) = (tracker.clone(), revoked.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(50));
+                // 等待期间身份失效,随后主路径收尾、记录归 mirror。
+                revoked.store(true, std::sync::atomic::Ordering::SeqCst);
+                tracker.close_main_tail(token);
+            })
+        };
+        let mut sends = 0usize;
+        let result = deliver_mirror_api_error(
+            &tracker,
+            &api_error_record(Some("err-1"), 300),
+            || {
+                if revoked.load(std::sync::atomic::Ordering::SeqCst) {
+                    anyhow::bail!("identity revoked")
+                }
+                Ok(())
+            },
+            || {
+                sends += 1;
+                Ok(())
+            },
+        );
+        closer.join().unwrap();
+        assert!(result.is_err(), "身份失效必须 fail-closed");
+        assert_eq!(sends, 0, "等归属期间身份失效,不能再外发");
+
+        let fresh = MirrorDeliveryTracker::default();
+        let mut sends = 0usize;
+        let sent = deliver_mirror_api_error(
+            &fresh,
+            &api_error_record(Some("err-2"), 300),
+            || Ok(()),
+            || {
+                sends += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(matches!(sent, MirrorApiErrorSend::Sent));
+        assert_eq!(sends, 1);
+    }
+
+    /// 落在本轮 prompt 被消费之前的错误属于更早的轮,主路径的 gate 会把它丢掉:mirror 报。
+    /// 本轮 prompt 迟迟没被消费(还在 claude 队列里)也说明记录在它之前。
+    #[test]
+    fn an_api_error_before_the_main_turn_started_is_reported_by_the_mirror() {
+        let tracker = MirrorDeliveryTracker::with_api_error_owner_wait(Duration::from_millis(30));
+        let token = tracker.begin_turn();
+        assert!(tracker.bind_transport_marker(token, "marker-main"));
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(Some("err-0"), 80)),
+            ApiErrorOwner::Mirror,
+            "prompt 还没被消费"
+        );
+        tracker.mark_marker_consumed(token, 100);
+        assert_eq!(
+            tracker.api_error_owner(&api_error_record(Some("err-1"), 80)),
+            ApiErrorOwner::Mirror,
+            "记录在 marker 消费边界之前"
+        );
+        let fenced = MirrorDeliveryTracker::default();
+        let token = fenced.begin_turn();
+        assert!(fenced.bind_markerless_fence(token, 100));
+        assert_eq!(
+            fenced.api_error_owner(&api_error_record(Some("err-1"), 90)),
+            ApiErrorOwner::Mirror,
+            "markerless fence 左侧"
+        );
     }
 }
 
