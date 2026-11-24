@@ -30,7 +30,10 @@ impl ClaudeApiError {
     }
 
     pub fn from_value(value: &Value) -> Option<Self> {
-        if value.get("type").and_then(Value::as_str) != Some("assistant") {
+        // 子 agent 的记录不代表主轮的结局(主 agent 可以自己处理子 agent 的失败)。
+        if value.get("type").and_then(Value::as_str) != Some("assistant")
+            || value.get("isSidechain").and_then(Value::as_bool) == Some(true)
+        {
             return None;
         }
         let message = value.get("message");
@@ -175,6 +178,7 @@ mod tests {
             r#"{"type":"assistant","uuid":"a","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"API Error: The response stopped arriving 这句报错要怎么处理"}]}}"#,
             r#"{"type":"assistant","uuid":"a","isApiErrorMessage":false,"message":{"content":[{"type":"text","text":"hi"}]}}"#,
             r#"{"type":"user","isApiErrorMessage":true,"error":"server_error","message":{"content":"hi"}}"#,
+            r#"{"type":"assistant","isSidechain":true,"isApiErrorMessage":true,"error":"server_error","message":{"content":[{"type":"text","text":"API Error: Connection dropped (ECONNRESET)"}]}}"#,
             "not json",
         ] {
             assert_eq!(ClaudeApiError::from_line(line), None, "{line}");

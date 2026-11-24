@@ -11560,9 +11560,21 @@ fn consume_transcript_turn(
                 now,
                 native_auto_continue,
             );
+            // 专用卡发不出去就退回失败卡(它走 outbox 重试):这一轮的 API 错误已由主路径认领,
+            // 会话镜像不会再报,这里不能只记日志。
+            let fall_back = || {
+                send_turn_failure_notice(
+                    frontend,
+                    chat_ref,
+                    &name,
+                    &outbox,
+                    o.api_error.as_deref().unwrap_or(""),
+                );
+            };
             if let Some(card) = session_limit_card {
                 if let Err(e) = frontend.send_card(chat_ref, &card) {
                     log(&summon_i18n::format!("rb1205805cd"));
+                    fall_back();
                 }
             } else if o.api_error_kind
                 == Some(summon_core::agent_msg::AgentErrorKind::StreamInterrupted)
@@ -11573,6 +11585,7 @@ fn consume_transcript_turn(
                 );
                 if let Err(e) = frontend.send_card(chat_ref, &card) {
                     log(&summon_i18n::format!("r5026fed5ca"));
+                    fall_back();
                 }
             }
             result
