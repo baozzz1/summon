@@ -14,6 +14,9 @@
 //! 转手程序用 exec 原地替换而不是再起子进程:pid、进程组、父子关系、信号与退出码都与直接起 CLI
 //! 一致,按 pid / pgid / 进程树做的存活判定、打断与回收不受影响。
 //!
+//! 只转手会跑工具的 agent 进程。`--version`、`auth status`、模型列表这类一次性探测不跑工具,
+//! 照原样起。
+//!
 //! `responsibility_spawnattrs_setdisclaim` 是 libsystem 未公开的符号,只按名字在运行时解析;解析
 //! 不到就照原样起 CLI(记一次日志),绝不因此让 agent 起不来。其余平台没有这层,命令逐字节不变。
 
@@ -73,15 +76,24 @@ fn shell_command_via(launcher: Option<&Path>, cmd: &str) -> String {
 }
 
 /// 起 agent CLI 的 `Command`,用法同 `Command::new(program)`。`path` 是子进程环境里的 PATH
-/// (程序名不带 `/` 时按它找)。找不到程序时不转手,原样交给 `Command::new`:spawn 照旧报
-/// NotFound,不变成转手程序的退出码 127。
-pub(crate) fn command(program: impl AsRef<OsStr>, path: Option<&OsStr>) -> Command {
-    command_via(launcher().as_deref(), program.as_ref(), path)
+/// (程序名不带 `/` 时按它找),`cwd` 是之后要设给它的工作目录(相对路径按它算)。找不到程序
+/// 时不转手,原样交给 `Command::new`:spawn 照旧报 NotFound,不变成转手程序的退出码 127。
+pub(crate) fn command(
+    program: impl AsRef<OsStr>,
+    path: Option<&OsStr>,
+    cwd: Option<&Path>,
+) -> Command {
+    command_via(launcher().as_deref(), program.as_ref(), path, cwd)
 }
 
-fn command_via(launcher: Option<&Path>, program: &OsStr, path: Option<&OsStr>) -> Command {
+fn command_via(
+    launcher: Option<&Path>,
+    program: &OsStr,
+    path: Option<&OsStr>,
+    cwd: Option<&Path>,
+) -> Command {
     match launcher {
-        Some(launcher) if resolve(program, path).is_some() => {
+        Some(launcher) if resolve(program, path, cwd).is_some() => {
             let mut command = Command::new(launcher);
             command.arg(SUBCOMMAND).arg("--").arg(program);
             command
@@ -103,11 +115,15 @@ where
 }
 
 /// 与 `execvp` 同一判据:带 `/` 的按路径,否则逐个 PATH 目录找可执行文件;没有 PATH 时用系统
-/// 默认搜索路径。
-fn resolve(program: &OsStr, path: Option<&OsStr>) -> Option<PathBuf> {
+/// 默认搜索路径。子进程先切到 `cwd` 再 exec,所以相对的程序路径与 PATH 项都按 `cwd` 算。
+fn resolve(program: &OsStr, path: Option<&OsStr>, cwd: Option<&Path>) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStrExt as _;
+    let in_cwd = |candidate: PathBuf| match cwd {
+        Some(cwd) if candidate.is_relative() => cwd.join(candidate),
+        _ => candidate,
+    };
     if program.as_bytes().contains(&b'/') {
-        let candidate = PathBuf::from(program);
+        let candidate = in_cwd(PathBuf::from(program));
         return is_executable(&candidate).then_some(candidate);
     }
     if program.is_empty() {
@@ -116,11 +132,12 @@ fn resolve(program: &OsStr, path: Option<&OsStr>) -> Option<PathBuf> {
     let search = path.unwrap_or(OsStr::new("/usr/bin:/bin"));
     std::env::split_paths(search)
         .map(|dir| {
-            if dir.as_os_str().is_empty() {
-                PathBuf::from(".").join(program)
+            let dir = if dir.as_os_str().is_empty() {
+                PathBuf::from(".")
             } else {
-                dir.join(program)
-            }
+                dir
+            };
+            in_cwd(dir).join(program)
         })
         .find(|candidate| is_executable(candidate))
 }
@@ -278,7 +295,12 @@ pub(crate) mod tests {
 
     #[test]
     fn command_without_launcher_is_the_plain_program() {
-        let command = command_via(None, OsStr::new("sh"), Some(OsStr::new("/bin:/usr/bin")));
+        let command = command_via(
+            None,
+            OsStr::new("sh"),
+            Some(OsStr::new("/bin:/usr/bin")),
+            None,
+        );
         assert_eq!(command.get_program(), "sh");
         assert_eq!(command.get_args().count(), 0);
     }
@@ -289,6 +311,7 @@ pub(crate) mod tests {
             Some(Path::new("/opt/summon")),
             OsStr::new("sh"),
             Some(OsStr::new("/nonexistent:/bin:/usr/bin")),
+            None,
         );
         assert_eq!(command.get_program(), "/opt/summon");
         let args: Vec<&OsStr> = command.get_args().collect();
@@ -307,7 +330,7 @@ pub(crate) mod tests {
             ("/nonexistent/claude", None),
             ("", None),
         ] {
-            let mut command = command_via(Some(launcher), OsStr::new(program), path);
+            let mut command = command_via(Some(launcher), OsStr::new(program), path, None);
             assert_eq!(command.get_program(), program);
             if !program.is_empty() {
                 let error = command.spawn().unwrap_err();
@@ -324,15 +347,46 @@ pub(crate) mod tests {
         let tool = dir.path().join("tool");
         crate::test_support::write_test_executable(&tool, "#!/bin/sh\n");
         let path = std::env::join_paths([Path::new("/nonexistent"), dir.path()]).unwrap();
-        assert_eq!(resolve(OsStr::new("tool"), Some(&path)), Some(tool.clone()));
-        assert_eq!(resolve(tool.as_os_str(), None), Some(tool));
+        assert_eq!(
+            resolve(OsStr::new("tool"), Some(&path), None),
+            Some(tool.clone())
+        );
+        assert_eq!(resolve(tool.as_os_str(), None, None), Some(tool));
         // 不可执行的文件、目录都不算。
-        assert_eq!(resolve(OsStr::new("plain"), Some(&path)), None);
-        assert_eq!(resolve(plain.as_os_str(), None), None);
-        assert_eq!(resolve(dir.path().as_os_str(), None), None);
+        assert_eq!(resolve(OsStr::new("plain"), Some(&path), None), None);
+        assert_eq!(resolve(plain.as_os_str(), None, None), None);
+        assert_eq!(resolve(dir.path().as_os_str(), None, None), None);
         assert!(
-            resolve(OsStr::new("sh"), None).is_some(),
+            resolve(OsStr::new("sh"), None, None).is_some(),
             "没有 PATH 时按系统默认路径"
+        );
+    }
+
+    /// 子进程先切工作目录再 exec:`./bin/cli`、PATH 里的相对目录都按它的工作目录找,
+    /// 不按 daemon 自己的当前目录。
+    #[test]
+    fn relative_program_and_path_entries_resolve_in_the_child_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        let tool = dir.path().join("bin").join("tool");
+        crate::test_support::write_test_executable(&tool, "#!/bin/sh\n");
+        let cwd = Some(dir.path());
+        assert_eq!(
+            resolve(OsStr::new("./bin/tool"), None, cwd),
+            Some(dir.path().join("./bin/tool"))
+        );
+        assert_eq!(
+            resolve(OsStr::new("tool"), Some(OsStr::new("bin")), cwd),
+            Some(tool.clone())
+        );
+        assert_eq!(resolve(OsStr::new("./bin/tool"), None, None), None);
+        let launcher = Path::new("/opt/summon");
+        let command = command_via(Some(launcher), OsStr::new("./bin/tool"), None, cwd);
+        assert_eq!(command.get_program(), launcher);
+        // 绝对路径不受工作目录影响。
+        assert_eq!(
+            resolve(tool.as_os_str(), None, Some(Path::new("/nonexistent"))),
+            Some(tool)
         );
     }
 
@@ -396,6 +450,7 @@ pub(crate) mod tests {
     #[test]
     fn agent_spawn_sites_go_through_this_module() {
         let src = env!("CARGO_MANIFEST_DIR");
+        let squash = |text: &str| text.split_whitespace().collect::<String>();
         for (file, needle) in [
             (
                 "src/session/session.rs",
@@ -403,28 +458,28 @@ pub(crate) mod tests {
             ),
             (
                 "src/runtime/executor.rs",
-                "responsibility::command(&spec.program",
+                "responsibility::command(&spec.program,",
             ),
             (
                 "src/codex/codex_app_server.rs",
-                "responsibility::command(\n            &config.program",
+                "responsibility::command(&config.program,",
             ),
             (
                 "src/capture/cursor_acp.rs",
-                "responsibility::command(\n            &config.program",
+                "responsibility::command(&config.program,",
             ),
             (
                 "src/runtime/insights_analysis.rs",
-                "responsibility::command(\n        agent.cli_cmd()",
+                "responsibility::command(agent.cli_cmd(),",
             ),
             (
                 "src/runtime/daemon/document_comment_draft.rs",
-                "responsibility::command(\n        agent.cli_cmd()",
+                "responsibility::command(agent.cli_cmd(),",
             ),
         ] {
             let body = std::fs::read_to_string(Path::new(src).join(file)).unwrap();
             assert!(
-                body.contains(needle),
+                squash(&body).contains(&squash(needle)),
                 "{file} 应经 responsibility 起 agent CLI"
             );
         }

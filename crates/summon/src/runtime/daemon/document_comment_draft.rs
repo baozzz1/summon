@@ -263,6 +263,7 @@ fn generate_for_backend(
     let mut command = crate::runtime::responsibility::command(
         agent.cli_cmd(),
         crate::runtime::responsibility::path_in(&env),
+        Some(temp.path()),
     );
     command
         .current_dir(temp.path())

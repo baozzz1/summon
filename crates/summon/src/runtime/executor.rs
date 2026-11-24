@@ -249,7 +249,11 @@ impl Executor for LocalExecutor {
     fn spawn(&self, spec: &SpawnSpec) -> anyhow::Result<Child> {
         let essentials = crate::runtime::daemon::essential_system_env();
         let path = crate::runtime::responsibility::path_in(essentials.iter().chain(&spec.env));
-        let mut cmd = crate::runtime::responsibility::command(&spec.program, path);
+        let mut cmd = crate::runtime::responsibility::command(
+            &spec.program,
+            path,
+            spec.work_dir.as_deref().map(Path::new),
+        );
         cmd.args(&spec.args);
         if let Some(wd) = &spec.work_dir {
             cmd.current_dir(wd);

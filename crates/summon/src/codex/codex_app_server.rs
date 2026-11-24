@@ -931,6 +931,7 @@ impl CodexAppServerClient {
         let mut command = crate::runtime::responsibility::command(
             &config.program,
             crate::runtime::responsibility::path_in(&config.env),
+            config.work_dir.as_deref(),
         );
         command.args(&config.args);
         if let Some(work_dir) = &config.work_dir {

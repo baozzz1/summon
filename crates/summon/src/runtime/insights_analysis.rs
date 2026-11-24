@@ -706,6 +706,7 @@ fn run_claude(
     let mut command = crate::runtime::responsibility::command(
         agent.cli_cmd(),
         crate::runtime::responsibility::path_in(&env),
+        Some(cwd),
     );
     command
         .current_dir(cwd)
