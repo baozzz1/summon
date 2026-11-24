@@ -44,6 +44,7 @@ export const BUILTIN: Record<string, unknown> = {
   "messaging.interrupted_reaction": "SILENT",
   "messaging.default_reaction": "OK",
   "claude.status_line_in_managed_sessions": true,
+  "macos.agent_privacy_identity": true,
   "messaging.default_model_by_cli": {},
   "messaging.efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
   "sentinel.enabled": false,

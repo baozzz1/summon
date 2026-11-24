@@ -27,7 +27,7 @@
 
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -441,7 +441,11 @@ impl CursorAcpClient {
                 detail: "config_dir must be a non-empty absolute per-process path".into(),
             });
         }
-        let mut command = Command::new(&config.program);
+        let mut command = crate::runtime::responsibility::command(
+            &config.program,
+            crate::runtime::responsibility::path_in(&config.env),
+            config.work_dir.as_deref(),
+        );
         command.args(&config.args);
         if let Some(work_dir) = &config.work_dir {
             command.current_dir(work_dir);

@@ -6970,5 +6970,7 @@
   "headless.storage_full.reason": "Out of disk space: writing this turn's records failed because the disk or quota is full, so the turn was stopped. Free up disk space and send the message again.",
   "headless.storage_full.log": "[{name}] Storage full while writing; interrupting the turn chat={tag}",
   "export.log.os_error_only": "[unlisted log line] {hidden} (os error {code})",
-  "event_log.flush_ticker_failed": "events.jsonl flush thread failed to start; merged deltas are written only on the next event or at turn end: {e}"
+  "event_log.flush_ticker_failed": "events.jsonl flush thread failed to start; merged deltas are written only on the next event or at turn end: {e}",
+  "r698939250a": "Agents request privacy access as themselves",
+  "r2cbf683bee": "macOS only. When agent CLIs started by summon, or the tools they run, request privacy access such as speech recognition, microphone, or folder access, the prompt and the grant in System Settings belong to each CLI executable (claude, codex, cursor-agent, and so on) instead of summon. Turn off to have all agents share summon's grants."
 }

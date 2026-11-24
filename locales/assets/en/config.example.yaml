@@ -56,6 +56,10 @@
 #
 # resume_sessions: true # Native resume after restart; false cold-starts fresh.
 #
+# # macOS only: agent CLIs request privacy access as themselves; false shares summon's grants.
+# macos:
+#   agent_privacy_identity: true
+#
 # # Owner sentinel is opt-in. Poll using your own user identity for explicit summons.
 # # Ordinary active sessions use fast polling; DND chats use slow compensation.
 # # Hot-reload switches with summon sentinel set.

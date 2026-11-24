@@ -6970,5 +6970,7 @@
   "headless.storage_full.reason": "磁盘空间不足:写入本轮记录时系统报空间已满(磁盘或配额),本轮已停止。请清理磁盘空间后重新发送消息。",
   "headless.storage_full.log": "[{name}] 写盘报空间不足,有界打断本轮 chat={tag}",
   "export.log.os_error_only": "[未收录的日志行] {hidden} (os error {code})",
-  "event_log.flush_ticker_failed": "events.jsonl 后台落盘线程起不来,合并中的增量只在下一条事件或轮结束时落盘: {e}"
+  "event_log.flush_ticker_failed": "events.jsonl 后台落盘线程起不来,合并中的增量只在下一条事件或轮结束时落盘: {e}",
+  "r698939250a": "agent 以自己的身份申请隐私授权",
+  "r2cbf683bee": "仅 macOS。summon 启动的 agent CLI 及其工具申请语音识别、麦克风、文件夹访问等隐私权限时，弹窗与系统设置中的授权记在 claude、codex、cursor-agent 等各自的可执行文件上，而不是 summon。关闭后所有 agent 共用 summon 的授权。"
 }
