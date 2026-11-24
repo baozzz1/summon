@@ -1775,6 +1775,12 @@ pub const CONFIG_FIELD_META: &[ConfigFieldMeta] = &[
         deprecated_since: None,
     },
     ConfigFieldMeta {
+        path: "macos.agent_privacy_identity",
+        since: "2026-11-24",
+        description: "r698939250a",
+        deprecated_since: None,
+    },
+    ConfigFieldMeta {
         path: "menubar.terminal",
         since: "2026-07-14",
         description: "r01c3fcabec",

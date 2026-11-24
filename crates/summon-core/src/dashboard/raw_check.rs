@@ -9,9 +9,9 @@ use super::fields::{key_note, NoteKind, KEY_NOTES};
 use super::RawKind;
 use crate::config::codex_policy::{self, CodexPolicyOverride, APPROVAL_VALUES, SANDBOX_VALUES};
 use crate::config::config::{
-    path_exists_in_value, Claude, Config, Cursor, CursorQuota, Dashboard, GlobalFeishu, MenuBar,
-    MessagingOverride, PreviewServer, Remote, Sentinel, SessionExitedOverride, Tools, Upgrade,
-    WebTerminal, CONFIG_FIELD_META,
+    path_exists_in_value, Claude, Config, Cursor, CursorQuota, Dashboard, GlobalFeishu, Macos,
+    MenuBar, MessagingOverride, PreviewServer, Remote, Sentinel, SessionExitedOverride, Tools,
+    Upgrade, WebTerminal, CONFIG_FIELD_META,
 };
 use crate::config::menubar::MENUBAR_ICONS;
 use crate::config::model_effort;
@@ -334,6 +334,7 @@ fn shape(kind: RawKind) -> Shape {
             ("web_terminal", strukt::<WebTerminal>(vec![])),
             ("dashboard", strukt::<Dashboard>(vec![])),
             ("upgrade", strukt::<Upgrade>(vec![])),
+            ("macos", strukt::<Macos>(vec![])),
         ]),
         RawKind::Agent => strukt::<Agent>(vec![
             (
