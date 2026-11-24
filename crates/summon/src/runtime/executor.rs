@@ -247,7 +247,13 @@ pub struct LocalExecutor;
 
 impl Executor for LocalExecutor {
     fn spawn(&self, spec: &SpawnSpec) -> anyhow::Result<Child> {
-        let mut cmd = Command::new(&spec.program);
+        let essentials = crate::runtime::daemon::essential_system_env();
+        let path = crate::runtime::responsibility::path_in(essentials.iter().chain(&spec.env));
+        let mut cmd = crate::runtime::responsibility::command(
+            &spec.program,
+            path,
+            spec.work_dir.as_deref().map(Path::new),
+        );
         cmd.args(&spec.args);
         if let Some(wd) = &spec.work_dir {
             cmd.current_dir(wd);
@@ -256,7 +262,7 @@ impl Executor for LocalExecutor {
         // 避免 ANTHROPIC_* 等 daemon 环境变量泄漏到无头子进程——agent 需要的在 spec.env 里
         // (agent 身份由 agent_identity_env 注入、task run env 由 build_run_env 注入)。
         cmd.env_clear();
-        for (k, v) in crate::runtime::daemon::essential_system_env() {
+        for (k, v) in &essentials {
             cmd.env(k, v);
         }
         // 叠加上下文环境(agent 自己的飞书凭据 + task run 的 SUMMON_*)。

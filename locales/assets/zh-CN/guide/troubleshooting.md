@@ -44,6 +44,19 @@
 - 字段名拼错会被静默忽略(yaml 不报错)——对照 `summon guide config` 核对字段名。
 - `system_prompt_core` 是内置的,改不掉;能改的是 `system_prompt`。
 
+## macOS 隐私授权弹窗
+
+summon 起的 agent CLI 及其工具（脚本、编译出的小程序）申请语音识别、麦克风、桌面 / 文稿 / 外接盘等
+隐私权限时，macOS 按 agent 的 CLI 认人：弹窗写的是 `claude`、`codex`、`cursor-agent` 这类可执行文件名，
+授权记在「系统设置 → 隐私与安全性」里对应的条目上，不记在 summon 上（`macos.agent_privacy_identity`，
+默认开）。
+
+- 以前授给 summon 的权限（例如外接盘访问）不会转给各 CLI。agent 第一次用到时会再弹窗，按 CLI 逐个授权。
+- CLI 升级后安装路径或签名变了，macOS 可能把它当成新程序再问一次。
+- CLI 由 node 等解释器运行时，弹窗显示的是实际运行的可执行文件（例如 `node`）。
+- 想让所有 agent 继续共用 summon 的授权，在 `~/.summon/config.yaml` 写
+  `macos:` 下 `agent_privacy_identity: false`。下次起 agent 生效，已在跑的会话退出后重开才生效。
+
 ## 会话自己退出了
 
 以下入口可以自动退出会话：

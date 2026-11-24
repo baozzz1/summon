@@ -297,6 +297,7 @@ Top-level global config.yaml, outside messaging:
 | tools | absolute external paths, ~/ supported; empty uses daemon PATH |
 | menubar.terminal | command argv for agents open; automatic by default |
 | menubar.show_counts | true; working/waiting counts beside icon |
+| macos.agent_privacy_identity | true; macOS only. Privacy access (speech recognition, microphone, folders) requested by agent CLIs and their tools belongs to each CLI; false shares summon's grants. Next agent launch; see `summon guide troubleshooting` |
 | remotes | empty; fleet machines with name, ssh_host, summon_bin |
 | execution_targets | empty; remote targets with provider: claude-code |
 

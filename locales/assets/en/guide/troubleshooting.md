@@ -39,6 +39,22 @@ grant only to people trusted with this machine (see config).
 - Language is machine-wide, with immediate hot switching; auto uses `lark-cli config show`
   `.lang`, then the OS's first preferred language when absent/unavailable.
 
+## macOS privacy prompts
+
+When agent CLIs started by summon, or the tools they run, request privacy access such as speech
+recognition, microphone, or Desktop/Documents/external volumes, macOS attributes the request to the
+agent CLI: the prompt names the executable (`claude`, `codex`, `cursor-agent`, ...) and the grant
+appears under that entry in System Settings > Privacy & Security, not under summon
+(`macos.agent_privacy_identity`, on by default).
+
+- Grants previously given to summon (for example external volume access) do not carry over. Each CLI
+  asks again the first time it needs the access.
+- After a CLI upgrade that changes its path or signature, macOS may ask again.
+- A CLI run by an interpreter such as node is shown as the executable actually running (for example `node`).
+- To keep all agents on summon's grants, set `agent_privacy_identity: false` under `macos:` in
+  `~/.summon/config.yaml`. It applies to the next agent launch; running sessions keep the old
+  behavior until they exit.
+
 ## Session exited by itself
 
 - idle_retire_secs (off by default): exit and resume next message, with a group receipt.

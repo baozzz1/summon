@@ -588,6 +588,20 @@
         "write": "form"
       },
       {
+        "description": "仅 macOS。summon 启动的 agent CLI 及其工具申请语音识别、麦克风、文件夹访问等隐私权限时，弹窗与系统设置中的授权记在 claude、codex、cursor-agent 等各自的可执行文件上，而不是 summon。关闭后所有 agent 共用 summon 的授权。",
+        "effect": "new_session",
+        "group": "behavior",
+        "key": "macos.agent_privacy_identity",
+        "kind": "bool",
+        "label": "agent 以自己的身份申请隐私授权",
+        "layers": [
+          "global"
+        ],
+        "preview": false,
+        "sensitive": false,
+        "write": "form"
+      },
+      {
         "description": "键为 CLI（claude / codex / cursor / traex），值为该 CLI 支持的模型 id。未指定的 CLI 使用其自报的默认模型。",
         "effect": "next_turn",
         "group": "models",

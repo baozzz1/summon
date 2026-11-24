@@ -260,7 +260,11 @@ fn generate_for_backend(
         .write(true)
         .mode(0o600)
         .open(&output_path)?;
-    let mut command = Command::new(agent.cli_cmd());
+    let mut command = crate::runtime::responsibility::command(
+        agent.cli_cmd(),
+        crate::runtime::responsibility::path_in(&env),
+        Some(temp.path()),
+    );
     command
         .current_dir(temp.path())
         .env_clear()

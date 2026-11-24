@@ -553,6 +553,8 @@ impl<'a> Session<'a> {
                 cmd = format!("{cmd} {flag} \"{}\"", path.display());
             }
         }
+        // macOS:CLI 及其工具子进程申请的隐私授权记在 CLI 自己名下(见 `runtime::responsibility`)。
+        cmd = crate::runtime::responsibility::shell_command(&cmd);
         let env_file = self.write_launch_env_file(&pairs)?;
         cmd =
             summon_core::launch_env::wrap_command_with_env_file(&env_file.to_string_lossy(), &cmd);
@@ -2064,6 +2066,36 @@ mod tests {
                 "{settings}"
             );
         }
+    }
+
+    /// 转手时 pane 里 exec 的是 `<summon> __exec-disclaimed -- <CLI 命令>`:仍是 env 文件加载器
+    /// 那一个 `exec`,pane 进程从 sh 一路 exec 到 CLI,其余部分逐字节不变。
+    #[test]
+    fn launch_command_execs_the_cli_through_the_responsibility_launcher() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cla: Agent = serde_yaml::from_str("name: k\nruntime:\n  cli: claude\n").unwrap();
+        let dir = tmp.path().join("agents").join(&cla.name);
+        std::fs::create_dir_all(&dir).unwrap();
+        cla.dir = dir;
+        let s = Session::for_agent(&cla, 200, 800);
+        let plain = s
+            .augment_launch(CliDriver::Claude, "claude --resume id".to_string())
+            .unwrap();
+        let _launcher = crate::runtime::responsibility::tests::override_launcher(
+            std::path::Path::new("/opt/summon/bin/summon"),
+        );
+        let wrapped = s
+            .augment_launch(CliDriver::Claude, "claude --resume id".to_string())
+            .unwrap();
+        assert_eq!(
+            wrapped,
+            plain.replacen(
+                "exec claude --resume id",
+                "exec '\\''/opt/summon/bin/summon'\\'' __exec-disclaimed -- claude --resume id",
+                1
+            )
+        );
+        assert_ne!(wrapped, plain);
     }
 
     /// 启动 env 里有几个 PATH(系统基础变量、runtime.env、lark-cli 隔离注入的)时,探测跟随最后

@@ -69,6 +69,10 @@
 # # 重启后按 .session 记录 resume 续接(默认开);false = 每次冷启全新会话。
 # resume_sessions: true
 #
+# # 仅 macOS:agent CLI 以自己的身份申请隐私授权(默认开);false = 所有 agent 共用 summon 的授权。
+# macos:
+#   agent_privacy_identity: true
+#
 # # owner sentinel(显式 opt-in):用你的用户身份轮询飞书,在任意会话里用
 # # `/summon <agent> <正文>` 或「@agent 进来回答/建群」召唤。普通会话走快速通道，
 # # 勿扰群进入低优先级补偿队列。热重载;开关也可用 `summon sentinel set`。
