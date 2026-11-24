@@ -1,4 +1,8 @@
 {
+  "rb5219c9bc1": "⚠️ **Subagent hit an API error**: {subagent}\n\nCategory: {category}\nError:\n{reason}",
+  "r008e45584e": "[{}] Sent subagent {agent_id} API error to the chat → chat={chat_id}",
+  "r61f2061d25": "[{}] Subagent {agent_id} API error was not sent (ignored) → chat={chat_id}: {error:#}",
+  "re3bf2f70be": "[{}] Watching subagent API errors: {}",
   "r1d6a5e3b90": "[{}] Continue after stream interruption: inject “Continue” → chat={chat_id}",
   "r3c0e81a5d2": "[{}] Session mirror skipped an API error already reported by the main path → chat={chat_id}",
   "r5e9d07b4c1": "[{}] Session mirror sent an API error card → chat={chat_id}",

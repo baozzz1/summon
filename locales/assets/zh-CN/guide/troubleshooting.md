@@ -86,6 +86,8 @@ Provider 报错或执行失败时会发独立通知卡，卡片保留具体错�
 Claude 的 API 报错不论落在本轮收尾之前还是之后都会发到群里：流中断（`API Error: The response stopped arriving…`
 等）发带「继续」按钮的流中断卡，已经发出的半截回复保留；其余报错发失败卡并附原文。本轮收尾后才出现的报错由会话镜像
 （`messaging.session_mirror`）发出，关闭镜像时只有本轮之内读到的报错会发。
+子 agent 的 API 报错另发一张「子 agent 报 API 错误」提示卡，写明是哪个子 agent、错误类别与原文；它不结束主 agent 的本轮，
+不带「继续」按钮，主轮进行中、收尾之后或终端里直接发起的轮都会发，与会话镜像开关无关。daemon 起来之前已经写下的报错不补发。
 Daemon 硬崩后，未完成任务按恢复卡选择继续；排错时结合 `summon daemon status` 与日志。
 
 ## 要把问题交给维护者

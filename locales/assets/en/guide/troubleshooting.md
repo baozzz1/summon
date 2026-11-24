@@ -84,6 +84,10 @@ interruption card with a Continue button and keeps the partial reply already sen
 errors send a failure notice with the original text. Errors that appear after the turn has
 ended are sent by the session mirror (`messaging.session_mirror`); with the mirror off, only
 errors read during the turn are sent.
+A subagent's API error sends a separate "Subagent hit an API error" notice naming the subagent,
+the error category, and the original text. It does not end the main agent's turn and has no
+Continue button. It is sent during the turn, after the turn ends, and for turns started from the
+terminal, regardless of the mirror setting. Errors written before the daemon started are not sent.
 
 ## Give material to a maintainer
 

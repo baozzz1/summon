@@ -7905,7 +7905,7 @@ fn rejected_notice_uuid(uuid: &str) -> String {
     format!("{uuid}-r")
 }
 
-fn mirror_message_uuid(
+pub(super) fn mirror_message_uuid(
     epoch_fingerprint: &str,
     chat_id: &str,
     sid: &str,
@@ -7936,7 +7936,7 @@ fn mirror_message_uuid(
     format!("summon-mirror-{encoded}")
 }
 
-fn ensure_mirror_epoch_current(
+pub(super) fn ensure_mirror_epoch_current(
     agent: &Agent,
     frozen_epoch: &FeishuEpochIdentity,
 ) -> anyhow::Result<()> {

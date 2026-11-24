@@ -2347,6 +2347,16 @@ pub(super) fn chat_thread_run(
         summon_core::subagent::SubagentState::new();
     let mut subagent_watcher: Option<SubagentWatcherGuard> =
         spawn_subagent_watcher(&agent, &sess, subagent_state.clone());
+    // 子 agent 的 claude API 报错发提示卡。独立于主轮与会话镜像:不收主轮,主轮收尾之后、
+    // 终端直敲的轮里出的错也照发。它会写本 chat 的出站归档,与 watcher 同时停。
+    let mut subagent_api_errors: Option<SubagentApiErrorGuard> = spawn_subagent_api_error_reporter(
+        &agent,
+        &sess,
+        fc.clone(),
+        frozen_epoch.clone(),
+        chat_id.clone(),
+        chat_type.clone(),
+    );
     // 「最近一张已定格的卡」:轮内由 frontend 记账,轮末之后由本线程继续往它上面刷子代理状态。
     let settled_card: crate::frontend::SharedSettledCard = Default::default();
     // 上一次真正刷上去的子代理行。只有内容**变了**才发请求 —— 否则每个 tick 都 PATCH 一次,
@@ -2640,6 +2650,7 @@ pub(super) fn chat_thread_run(
                                 if result == TurnResult::SilentReset {
                                     drop(mirror.take());
                                     drop(subagent_watcher.take());
+                                    drop(subagent_api_errors.take());
                                     silent_result_reset(
                                         &agent,
                                         delivery_scope,
@@ -2684,6 +2695,7 @@ pub(super) fn chat_thread_run(
                                     Some(Handover::Teardown(teardown)) => {
                                         drop(mirror.take());
                                         drop(subagent_watcher.take());
+                                        drop(subagent_api_errors.take());
                                         finish_handover(
                                             teardown,
                                             &agent,
@@ -2724,6 +2736,7 @@ pub(super) fn chat_thread_run(
                                 {
                                     drop(mirror.take());
                                     drop(subagent_watcher.take());
+                                    drop(subagent_api_errors.take());
                                     archive_on_agent_request(
                                         &agent,
                                         &sess,
@@ -3101,6 +3114,7 @@ pub(super) fn chat_thread_run(
                     }
                     interrupt_inflight_turn(&inflight, &agent.name, &chat_type, &chat_id);
                     drop(subagent_watcher.take());
+                    drop(subagent_api_errors.take());
                     drop(mirror.take());
                     super::teardown::do_teardown_preserving_previous(
                         &agent,
@@ -3181,6 +3195,7 @@ pub(super) fn chat_thread_run(
                 // watcher 会写 threads/<tag>（mirror_offset / subagent 状态）。必须先 stop+join，
                 // 再删目录，否则删除后仍可能被尾部写入重新创建。
                 drop(subagent_watcher.take());
+                drop(subagent_api_errors.take());
                 drop(mirror.take());
                 let tag = chat_tag(&chat_type, &chat_id);
                 let torn_down = teardown_gone_sessions(

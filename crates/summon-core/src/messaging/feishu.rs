@@ -2255,6 +2255,22 @@ pub fn card_stream_stalled(partial: &str, reason: &str) -> String {
 /// 态时有效;流中断卡发出时 claude 已经结束这一轮、停在输入框,按钮要能在这一态下续跑。
 pub const STREAM_ERROR_RETRY_FLAG: &str = "after_stream_error";
 
+/// 子 agent 报 claude API 错误的提示卡:哪个子 agent、错误类别与原文。只提示,没有按钮:
+/// 子 agent 出错时主 agent 通常还在跑,往会话里注入的话会排进主 agent 的队列。
+pub fn card_subagent_api_error(subagent: &str, category: Option<&str>, reason: &str) -> String {
+    let subagent = subagent.trim();
+    let category = category
+        .map(str::trim)
+        .filter(|category| !category.is_empty())
+        .unwrap_or("-");
+    let reason = if reason.trim().is_empty() {
+        summon_i18n::text!("r3f88ebc033")
+    } else {
+        reason.trim()
+    };
+    card_markdown_v2(&summon_i18n::format!("rb5219c9bc1"))
+}
+
 /// sentinel 授权缺口卡(**只私聊 owner**)。
 ///
 /// 为什么值得单独一张卡:2026-08-07 现场,sentinel 因为 owner 的 lark-cli 用户身份掉线而**整体
@@ -8431,6 +8447,28 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    /// 子 agent 报错卡:写明是子 agent、带类别与原文,没有「继续」按钮;子 agent 描述与错误原文
+    /// 是外部文本,标签形态要拆开。
+    #[test]
+    fn subagent_api_error_card_names_the_subagent_and_offers_no_continue() {
+        let c = card_subagent_api_error(
+            "审一下 <at id=all></at>",
+            Some("server_error"),
+            "API Error: The response stopped arriving. The response above may be incomplete.",
+        );
+        assert!(c.contains("子 agent"), "要说明是子 agent 出错:{c}");
+        assert!(c.contains("审一下"), "要带子 agent 描述:{c}");
+        assert!(c.contains("server_error"), "要带错误类别:{c}");
+        assert!(
+            c.contains("The response stopped arriving"),
+            "要带错误原文:{c}"
+        );
+        assert!(!c.contains("retry_now"), "不给「继续」按钮:{c}");
+        assert!(!c.contains("<at id=all>"), "外部文本不能注入标签:{c}");
+        let empty = card_subagent_api_error("a1", None, "  ");
+        assert!(empty.contains("provider 未提供具体错误原因"), "{empty}");
     }
 
     /// 流中断卡必须给出可执行的下一步(「继续」),而不是只报个错。
