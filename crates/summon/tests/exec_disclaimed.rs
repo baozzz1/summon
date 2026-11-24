@@ -48,6 +48,9 @@ fn environment_passes_through_unchanged() {
         .unwrap()
         .lines()
         .map(str::to_string)
+        // macOS 上 CoreFoundation 在加载它的进程里补上这个变量(值是本用户的默认文本编码,
+        // 不含凭据);CLI 自己加载 CoreFoundation 时同样会补。
+        .filter(|line| !line.starts_with("__CF_USER_TEXT_ENCODING="))
         .collect();
     lines.sort();
     assert_eq!(
@@ -157,8 +160,8 @@ fn pane_shell_exec_chain_keeps_one_pid() {
     assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), pid);
 }
 
-/// 探针:由下面的 macOS 测试以子进程方式重新执行本测试二进制,报告自己的 pid 与责任进程。
-/// 直接运行时没有输出文件,什么也不做。
+/// 探针:由下面的 macOS 测试以子进程方式重新执行本测试二进制,报告自己与父进程的 pid 和
+/// 责任进程。直接运行时没有输出文件,什么也不做。
 #[cfg(target_os = "macos")]
 #[test]
 fn responsibility_probe() {
@@ -166,7 +169,33 @@ fn responsibility_probe() {
         return;
     };
     let pid = std::process::id() as i32;
-    std::fs::write(out, format!("{pid} {}", macos::responsible_pid(pid))).unwrap();
+    let parent = nix::unistd::getppid().as_raw();
+    std::fs::write(
+        out,
+        format!(
+            "{pid} {} {parent} {}",
+            macos::responsible_pid(pid),
+            macos::responsible_pid(parent)
+        ),
+    )
+    .unwrap();
+}
+
+/// 扮演 agent CLI:不是系统自带的程序,经 `/bin/sh -c` 跑一条「工具命令」(这里是探针)。
+/// 直接运行时没有命令,什么也不做。
+#[cfg(target_os = "macos")]
+#[test]
+fn responsibility_tool_runner() {
+    let Some(script) = std::env::var_os(macos::TOOL_SCRIPT) else {
+        return;
+    };
+    let status = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .arg(std::env::current_exe().unwrap())
+        .status()
+        .unwrap();
+    assert!(status.success(), "{status:?}");
 }
 
 #[cfg(target_os = "macos")]
@@ -175,6 +204,7 @@ mod macos {
     use nix::libc;
 
     pub(super) const PROBE_OUT: &str = "SUMMON_TEST_RESPONSIBILITY_PROBE_OUT";
+    pub(super) const TOOL_SCRIPT: &str = "SUMMON_TEST_RESPONSIBILITY_TOOL_SCRIPT";
 
     /// libsystem 未公开的 `responsibility_get_pid_responsible_for_pid`。找不到就让测试失败:
     /// 这组测试要在真的 macOS 上证明责任关系,不能静默跳过。
@@ -198,6 +228,8 @@ mod macos {
         launched: i32,
         pid: i32,
         responsible: i32,
+        parent: i32,
+        parent_responsible: i32,
     }
 
     /// 跑 `command`(最终会执行探针),返回直接起的那个子进程 pid 与探针报告。
@@ -209,21 +241,20 @@ mod macos {
         let status = child.wait().unwrap();
         assert!(status.success(), "{status:?}");
         let report = std::fs::read_to_string(&out).unwrap();
-        let mut fields = report.split(' ').map(|field| field.parse().unwrap());
+        let fields: Vec<i32> = report.split(' ').map(|f| f.parse().unwrap()).collect();
         Probe {
             launched,
-            pid: fields.next().unwrap(),
-            responsible: fields.next().unwrap(),
+            pid: fields[0],
+            responsible: fields[1],
+            parent: fields[2],
+            parent_responsible: fields[3],
         }
     }
 
-    fn probe_args() -> [&'static str; 4] {
-        [
-            "responsibility_probe",
-            "--exact",
-            "--nocapture",
-            "--test-threads=1",
-        ]
+    const PROBE: &str = "responsibility_probe --exact --nocapture --test-threads=1";
+
+    fn test_args(name: &str) -> [&str; 4] {
+        [name, "--exact", "--nocapture", "--test-threads=1"]
     }
 
     fn me() -> std::path::PathBuf {
@@ -236,7 +267,7 @@ mod macos {
         let ours = responsible_pid(std::process::id() as i32);
         assert!(ours > 0, "{ours}");
         let mut command = Command::new(me());
-        command.args(probe_args());
+        command.args(test_args("responsibility_probe"));
         let probe = run_probe(command);
         assert_eq!(probe.pid, probe.launched);
         assert_eq!(probe.responsible, ours);
@@ -247,32 +278,37 @@ mod macos {
     #[test]
     fn launched_program_is_its_own_responsible_process() {
         let mut command = via_launcher(me());
-        command.args(probe_args());
+        command.args(test_args("responsibility_probe"));
         let probe = run_probe(command);
         assert_eq!(probe.pid, probe.launched);
         assert_eq!(probe.responsible, probe.pid);
     }
 
-    /// 责任关系跟着 pid 走:CLI 之后再 exec 成别的映像仍是自己负责;它 fork 出的工具子进程
-    /// 以它为责任进程,而不是 summon。
+    /// 责任关系挂在 pid 上:shebang 脚本、`env`、shell 这类启动层最后 exec 成 CLI 时,CLI 仍是
+    /// 自己负责。
     #[test]
-    fn responsibility_survives_exec_and_is_inherited_by_children() {
-        let mut exec_chain = via_launcher("/bin/sh");
-        exec_chain
-            .args(["-c", r#"exec "$0" "$@""#])
-            .arg(me())
-            .args(probe_args());
-        let probe = run_probe(exec_chain);
+    fn responsibility_survives_exec() {
+        let mut command = via_launcher("/bin/sh");
+        command
+            .args(["-c", &format!(r#"exec /usr/bin/env "$0" {PROBE}"#)])
+            .arg(me());
+        let probe = run_probe(command);
         assert_eq!(probe.pid, probe.launched);
         assert_eq!(probe.responsible, probe.pid);
+    }
 
-        let mut tool_child = via_launcher("/bin/sh");
-        tool_child
-            .args(["-c", r#""$0" "$@"; exit $?"#])
-            .arg(me())
-            .args(probe_args());
-        let probe = run_probe(tool_child);
+    /// agent 跑工具的形态:CLI(非系统程序)经 shell 起工具,shell 与工具都以 CLI 为责任进程,
+    /// 授权弹窗与记录落在 CLI 上,而不是 summon,也不是各个工具。
+    #[test]
+    fn tools_run_by_the_cli_report_the_cli_as_responsible() {
+        let mut command = via_launcher(me());
+        command
+            .args(test_args("responsibility_tool_runner"))
+            .env(TOOL_SCRIPT, format!(r#""$0" {PROBE}"#));
+        let probe = run_probe(command);
         assert_ne!(probe.pid, probe.launched);
+        assert_ne!(probe.parent, probe.launched, "探针的父进程是工具 shell");
+        assert_eq!(probe.parent_responsible, probe.launched);
         assert_eq!(probe.responsible, probe.launched);
     }
 }
