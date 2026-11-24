@@ -1060,6 +1060,15 @@ pub const FIELDS: &[FieldDecl] = &[
         Immediate,
         "re83fa81f99",
     ),
+    FieldDecl::new(
+        "macos.agent_privacy_identity",
+        "r698939250a",
+        "behavior",
+        Bool,
+        G,
+        NewSession,
+        "r2cbf683bee",
+    ),
     // ── 模型 ──
     FieldDecl::new(
         "messaging.default_model_by_cli",

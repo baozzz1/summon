@@ -19,6 +19,11 @@
 
 - 磁盘写满时，codex 无头会话的一轮不再无提示地卡住：本轮自己写会话记录遇到空间不足（ENOSPC / EDQUOT）会立即结束并发「磁盘空间不足」失败卡；daemon 日志写不进去时丢掉该行，处理线程不再因此退出，看门狗到期照常收尾。
 - 看门狗超时结束一轮时，用户总会收到写明超时的失败卡，包括 codex 回报中止、执行进程强杀后迟迟不退出这两种情况。
+- macOS：agent 及其工具申请语音识别、麦克风、文件夹访问等隐私权限时，弹窗不再显示「summon」，授权也不再记在 summon 上，改为记在 claude、codex、cursor-agent 等各自的 CLI 上。开关为 config.yaml 的 `macos.agent_privacy_identity`，默认开，下次起 agent 生效。
+
+### 升级注意
+
+- macOS：之前授给 summon 的隐私权限（如外接盘访问）不会转给各 agent CLI，agent 第一次用到时会再弹窗，需要按 CLI 逐个授权；CLI 由 node 等解释器运行时，弹窗显示的是解释器。想保持原样，在 config.yaml 写 `macos:` 下 `agent_privacy_identity: false`。
 
 ## 0.7.0 · 2026-11-14
 

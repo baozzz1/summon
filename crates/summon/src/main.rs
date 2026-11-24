@@ -17,6 +17,13 @@ mod version;
 mod workflow;
 
 fn main() -> anyhow::Result<()> {
+    // 转手起 agent 的这一层原地 exec 成 CLI,必须早于下面改环境的步骤:CLI 拿到的环境要与
+    // 直接起它时逐项一致。
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new(runtime::responsibility::SUBCOMMAND))
+    {
+        runtime::responsibility::exec_main();
+    }
     // 第一件事,早于解析/线程/spawn(`set_var` 只在单线程期安全)。被 launchd 起的 Menu Bar
     // spawn 我们时 PATH 里没有 tmux —— 不补的话 `agents status` 会把所有 claude 会话
     // 当成不存在,且不报任何错(见 setup::env)。

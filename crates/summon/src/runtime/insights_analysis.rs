@@ -703,7 +703,10 @@ fn run_claude(
         .mode(0o600)
         .open(&output_path)
         .map_err(io)?;
-    let mut command = Command::new(agent.cli_cmd());
+    let mut command = crate::runtime::responsibility::command(
+        agent.cli_cmd(),
+        crate::runtime::responsibility::path_in(&env),
+    );
     command
         .current_dir(cwd)
         .env_clear()

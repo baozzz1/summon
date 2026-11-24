@@ -38,6 +38,8 @@ pub(crate) mod preview_server;
 pub(crate) mod prices;
 pub(crate) mod process;
 pub mod reaction_store;
+/// macOS:agent CLI 以自己的身份申请隐私授权(放弃 summon 对它的责任)。
+pub(crate) mod responsibility;
 /// stdio 上的 JSON-RPC 传输层原语(codex app-server / cursor ACP 两个客户端共用)。
 pub mod rpc_stdio;
 pub(crate) mod self_followup;

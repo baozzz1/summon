@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -928,7 +928,10 @@ pub struct CodexAppServerClient {
 
 impl CodexAppServerClient {
     pub fn spawn(config: CodexAppServerConfig) -> Result<Self, CodexAppServerError> {
-        let mut command = Command::new(&config.program);
+        let mut command = crate::runtime::responsibility::command(
+            &config.program,
+            crate::runtime::responsibility::path_in(&config.env),
+        );
         command.args(&config.args);
         if let Some(work_dir) = &config.work_dir {
             command.current_dir(work_dir);

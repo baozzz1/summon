@@ -57,6 +57,8 @@ pub struct Config {
     /// 最多的 agent,还没有用量时取最早配置的),见 `summon_core::insights_analysis::resolve_primary`;
     /// 写了但这个 agent 不在或不可用时同样回落到自动。
     pub primary_agent: Option<String>,
+    /// 只在 macOS 上生效的行为开关。见 [`Macos`]。
+    pub macos: Macos,
 }
 
 /// 一台跑着 summon 的远端机器。
@@ -129,6 +131,25 @@ impl Default for Config {
             dashboard: Dashboard::default(),
             upgrade: Upgrade::default(),
             primary_agent: None,
+            macos: Macos::default(),
+        }
+    }
+}
+
+/// 只在 macOS 上生效的行为开关(config.yaml 的 `macos:` 段),其它平台读到也不起作用。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct Macos {
+    /// summon 起的 agent CLI 以自己的身份申请隐私授权(语音识别、麦克风、桌面与外接盘等文件夹),
+    /// 弹窗与「隐私与安全性」里的条目记在 claude、codex、cursor-agent 等各自的可执行文件上,
+    /// 不再记在 summon 上。默认开;关掉后所有 agent 回到共用 summon 的授权。下一次起 agent 生效。
+    pub agent_privacy_identity: bool,
+}
+
+impl Default for Macos {
+    fn default() -> Self {
+        Self {
+            agent_privacy_identity: true,
         }
     }
 }

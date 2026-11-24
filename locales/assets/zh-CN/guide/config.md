@@ -263,6 +263,7 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 | `tools` | 外部命令绝对路径（支持 `~/`），留空用 daemon 的 PATH |
 | `menubar.terminal` | `summon agents open` 在终端里打开会话时用的命令参数列表；默认自动选择 |
 | `menubar.show_counts` | `true`；Menu Bar 状态栏在图标旁显示 working / waiting 计数，关掉只剩图标 |
+| `macos.agent_privacy_identity` | `true`；仅 macOS。agent CLI 及其工具申请的隐私授权（语音识别、麦克风、文件夹访问等）记在各 CLI 自己名下，`false` 时所有 agent 共用 summon 的授权；下次起 agent 生效，详见 `summon guide troubleshooting` |
 | `remotes` | 跨机 fleet 列表，每项 `name`、`ssh_host`、`summon_bin`；默认空 |
 | `execution_targets` | 远程工具目标表，每项 `provider: claude-code`；默认空 |
 
