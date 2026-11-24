@@ -2255,10 +2255,8 @@ pub fn card_stream_stalled(partial: &str, reason: &str) -> String {
 /// 态时有效;流中断卡发出时 claude 已经结束这一轮、停在输入框,按钮要能在这一态下续跑。
 pub const STREAM_ERROR_RETRY_FLAG: &str = "after_stream_error";
 
-/// 子 agent 报 claude API 错误的提示卡:哪个子 agent、错误类别与原文。
-///
-/// 只是提示,不带「继续」:子 agent 出错时主 agent 通常还在跑,会自己处理子 agent 的失败;往会话
-/// 里注入一句「继续」会作为新消息排进主 agent 的队列,打乱它正在做的事。
+/// 子 agent 报 claude API 错误的提示卡:哪个子 agent、错误类别与原文。只提示,没有按钮:
+/// 子 agent 出错时主 agent 通常还在跑,往会话里注入的话会排进主 agent 的队列。
 pub fn card_subagent_api_error(subagent: &str, category: Option<&str>, reason: &str) -> String {
     let subagent = subagent.trim();
     let category = category
@@ -8451,8 +8449,8 @@ mod tests {
         }
     }
 
-    /// 子 agent 报错卡:写明是子 agent、带类别与原文;不带会打乱主 agent 的「继续」按钮;
-    /// 子 agent 描述与错误原文是外部文本,标签形态要拆开。
+    /// 子 agent 报错卡:写明是子 agent、带类别与原文,没有「继续」按钮;子 agent 描述与错误原文
+    /// 是外部文本,标签形态要拆开。
     #[test]
     fn subagent_api_error_card_names_the_subagent_and_offers_no_continue() {
         let c = card_subagent_api_error(

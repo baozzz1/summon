@@ -1,5 +1,5 @@
 {
-  "rb5219c9bc1": "⚠️ **子 agent 报 API 错误**:{subagent}\n\n主 agent 的本轮不会因此结束。\n\n类别:{category}\n错误原文:\n{reason}",
+  "rb5219c9bc1": "⚠️ **子 agent 报 API 错误**:{subagent}\n\n类别:{category}\n错误原文:\n{reason}",
   "r008e45584e": "[{}] 子 agent {agent_id} 的 API 错误已发到群 → chat={chat_id}",
   "r61f2061d25": "[{}] 子 agent {agent_id} 的 API 错误没有发出(忽略) → chat={chat_id}: {error:#}",
   "re3bf2f70be": "[{}] 开始监视子 agent 的 API 错误:{}",

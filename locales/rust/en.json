@@ -1,5 +1,5 @@
 {
-  "rb5219c9bc1": "⚠️ **Subagent hit an API error**: {subagent}\n\nThe main agent's turn does not end because of it.\n\nCategory: {category}\nError:\n{reason}",
+  "rb5219c9bc1": "⚠️ **Subagent hit an API error**: {subagent}\n\nCategory: {category}\nError:\n{reason}",
   "r008e45584e": "[{}] Sent subagent {agent_id} API error to the chat → chat={chat_id}",
   "r61f2061d25": "[{}] Subagent {agent_id} API error was not sent (ignored) → chat={chat_id}: {error:#}",
   "re3bf2f70be": "[{}] Watching subagent API errors: {}",
