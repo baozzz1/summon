@@ -297,14 +297,15 @@ mod macos {
         assert_eq!(probe.responsible, probe.pid);
     }
 
-    /// agent 跑工具的形态:CLI(非系统程序)经 shell 起工具,shell 与工具都以 CLI 为责任进程,
+    /// agent 跑工具的形态:CLI(非系统程序)经 shell 起工具(`; exit $?` 让 shell 留着、不直接 exec
+    /// 成工具),shell 与工具都以 CLI 为责任进程,
     /// 授权弹窗与记录落在 CLI 上,而不是 summon,也不是各个工具。
     #[test]
     fn tools_run_by_the_cli_report_the_cli_as_responsible() {
         let mut command = via_launcher(me());
         command
             .args(test_args("responsibility_tool_runner"))
-            .env(TOOL_SCRIPT, format!(r#""$0" {PROBE}"#));
+            .env(TOOL_SCRIPT, format!(r#""$0" {PROBE}; exit $?"#));
         let probe = run_probe(command);
         assert_ne!(probe.pid, probe.launched);
         assert_ne!(probe.parent, probe.launched, "探针的父进程是工具 shell");
