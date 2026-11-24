@@ -4011,12 +4011,7 @@ pub(super) fn send_turn_failure_notice(
     outbox: &crate::runtime::outbox_store::OutboxStore,
     reason: &str,
 ) -> bool {
-    let reason = if reason.trim().is_empty() {
-        summon_i18n::text!("r3f88ebc033")
-    } else {
-        reason
-    };
-    let body = summon_i18n::format!("r8d11cb1624");
+    let body = turn_failure_notice_body(reason);
     let complete = frontend
         .send_failure_card(chat, &summon_core::feishu::card_markdown_v2(&body))
         .is_ok();
@@ -4031,6 +4026,16 @@ pub(super) fn send_turn_failure_notice(
         },
         &body,
     )
+}
+
+/// 失败卡正文:标题加 provider 给的错误原文。会话镜像报轮外 API 错误时同用这一份。
+pub(super) fn turn_failure_notice_body(reason: &str) -> String {
+    let reason = if reason.trim().is_empty() {
+        summon_i18n::text!("r3f88ebc033")
+    } else {
+        reason
+    };
+    summon_i18n::format!("r8d11cb1624")
 }
 
 /// 已获得终态所有权的失败轮才通知；可恢复错误由各自的专用卡承载。
@@ -11463,6 +11468,15 @@ fn consume_transcript_turn(
                         &mut on_background_idle,
                         continuation_cap,
                     );
+            // 本轮以 API 错误记录收尾:错误由主路径报,认领必须先于收尾,mirror 读到同一条
+            // 记录时据此让路。
+            if let Some(record) = outcome
+                .as_ref()
+                .ok()
+                .and_then(|outcome| outcome.api_error_record.as_ref())
+            {
+                mirror_delivery.claim_main_api_error(record);
+            }
             // 先于终态投递:mirror 可能正等着判断某个续跑 terminal 主路径读到没有。
             mirror_delivery.close_main_tail(mirror_token);
             outcome
@@ -11476,10 +11490,8 @@ fn consume_transcript_turn(
             .claude_session_limit
             .as_ref()
             .is_some_and(|limit| limit.is_actionable_at(chrono::Utc::now()))
-            || outcome
-                .api_error
-                .as_deref()
-                .is_some_and(summon_core::retry_wait::is_stream_stall);
+            || outcome.api_error_kind
+                == Some(summon_core::agent_msg::AgentErrorKind::StreamInterrupted);
         if !specialized_notice
             && !notify_failed_turn_outcome(frontend, chat_ref, &name, &outbox, outcome)
         {
@@ -11552,13 +11564,12 @@ fn consume_transcript_turn(
                 if let Err(e) = frontend.send_card(chat_ref, &card) {
                     log(&summon_i18n::format!("rb1205805cd"));
                 }
-            } else if o
-                .api_error
-                .as_deref()
-                .is_some_and(summon_core::retry_wait::is_stream_stall)
+            } else if o.api_error_kind
+                == Some(summon_core::agent_msg::AgentErrorKind::StreamInterrupted)
             {
                 let card = summon_core::feishu::card_stream_stalled(
                     &summon_core::feed_tag::strip_feed_tag(o.reply.as_deref().unwrap_or("")),
+                    o.api_error.as_deref().unwrap_or(""),
                 );
                 if let Err(e) = frontend.send_card(chat_ref, &card) {
                     log(&summon_i18n::format!("r5026fed5ca"));

@@ -22,6 +22,9 @@ pub enum AgentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentErrorKind {
     UsageLimitExceeded,
+    /// 回复流中途断开(claude 的 `server_error` 类 API 错误):会话与上下文都在,发一句「继续」
+    /// 即可接着跑。
+    StreamInterrupted,
 }
 
 /// R1 规范别名;新代码用 `AgentEventKind`,老代码的 `AgentKind` 不须改。

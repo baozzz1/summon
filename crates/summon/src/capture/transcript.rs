@@ -19,7 +19,8 @@ use anyhow::Context as _;
 // `is_turn_end` 收在 core:捕获层「何时算一轮结束」与历史投影 `observe::history`「一轮何时收口成
 // completed」必须同判。两边曾分叉——这里早就认 end_turn 收尾,history 却只认无头路径的 `result`,
 // 于是 claude 会话的每一轮在 `agents history` 里永远显示 running。
-use summon_core::agent_msg::{is_turn_end, AgentKind, AgentMessage};
+use summon_core::agent_msg::{is_turn_end, AgentErrorKind, AgentKind, AgentMessage};
+use summon_core::claude_api_error::ClaudeApiError;
 #[cfg(test)]
 use summon_core::claude_log::claude_transcript_path;
 use summon_core::claude_log::project_dirname;
@@ -29,7 +30,7 @@ use summon_core::retry_wait::{parse_retry_wait, RetryWait};
 use summon_core::scrubber::pane_proves_session_gone;
 use summon_core::stream_json::parse_stream_json_line;
 
-use super::{MediationCard, TurnOutcome};
+use super::{ApiErrorRecordId, MediationCard, TurnOutcome};
 use crate::observe::log::log;
 use crate::runtime::executor::{Executor, FileIdentity};
 use crate::runtime::fsio::atomic_write;
@@ -824,6 +825,26 @@ fn terminal_boundary(checkpoint: &FileTailCheckpoint, tail: &TranscriptTail) -> 
     checkpoint.end().saturating_sub(tail.pending.len() as u64)
 }
 
+/// 错误终态的结构化事实:能否「继续」与记录身份。`record` 为 `None` 的错误终态(额度用尽等由
+/// 别的判据收的轮)没有可去重的记录,也不归为流中断。
+fn api_error_identity(
+    record: Option<ClaudeApiError>,
+    boundary: u64,
+) -> (Option<AgentErrorKind>, Option<Box<ApiErrorRecordId>>) {
+    let Some(record) = record else {
+        return (None, None);
+    };
+    (
+        record
+            .stream_interrupted()
+            .then_some(AgentErrorKind::StreamInterrupted),
+        Some(Box::new(ApiErrorRecordId {
+            uuid: record.uuid,
+            boundary,
+        })),
+    )
+}
+
 /// 接管轮里这个段终点是不是重放出来的:接管那一刻(`replay_end`)已经落盘的段终点,上一代可能
 /// 已经把它当段终点回复发过,再交出去就是同一段话发两遍;之后写出的只有本代见过,照常交出。
 fn replayed_segment_end(replay_end: Option<u64>, boundary: u64) -> bool {
@@ -1205,6 +1226,18 @@ pub(crate) enum MirrorTurnKind {
 type MirrorTurnSink<'a> =
     dyn FnMut(MirrorTurnKind, &MirrorMarkerEvidence, u64, &[u8], &str) -> anyhow::Result<()> + 'a;
 type MirrorOffsetSink<'a> = dyn FnMut(u64, &FileTailCheckpoint) -> anyhow::Result<()> + 'a;
+
+/// 会话镜像读到的一条 claude API 错误记录。与这一轮正文是否已由谁投递无关,单独上报:
+/// 主轮按 `end_turn` 收尾之后才落盘的错误记录,只有镜像还看得见。
+pub(crate) struct MirrorApiError<'a> {
+    pub(crate) error: &'a ClaudeApiError,
+    /// 错误记录所在 terminal 的边界(与主路径 terminal 边界同一口径)。
+    pub(crate) boundary: u64,
+    /// 边界前的 exact 指纹,发送幂等键用。
+    pub(crate) boundary_checkpoint: &'a [u8],
+}
+
+type MirrorApiErrorSink<'a> = dyn FnMut(&MirrorApiError<'_>) -> anyhow::Result<()> + 'a;
 
 impl FileTailCheckpoint {
     fn end(&self) -> u64 {
@@ -1858,6 +1891,9 @@ struct TranscriptTail {
     /// 它们一并收进选项;发卡前按这个数截断,只留真实选项(否则用户点到「Type something.」会在
     /// TUI 开自由输入框、飞书侧无法打字,成了陷阱按钮)。仅本轮有效,`reset_turn` 清。
     ask_user_question_count: Option<usize>,
+    /// 本轮见到的 claude API 错误记录(正文、类别与 uuid)。错误终态的展示原文、能否「继续」
+    /// 与跨路径去重都从这里取;`reset_turn` 清。
+    api_error: Option<ClaudeApiError>,
 }
 
 /// 喂一批字节后的状态推进结果。
@@ -1874,13 +1910,34 @@ enum TailStep {
         tools: Vec<String>,
         final_text: String,
     },
-    /// API 错误终态:assistant 消息带 `error` 字段(model_not_found 等),立即收尾并标记失败。
+    /// API 错误终态:读到 claude 的 API 错误记录(见 [`ClaudeApiError`]),立即收尾并标记失败。
+    /// `final_text` 是这一轮已生成的正文(不含错误说明),`error` 是错误原文;记录本身留在
+    /// `TranscriptTail::api_error`。
     ApiError {
         stream: Option<String>,
         tools: Vec<String>,
         final_text: String,
         error: String,
     },
+}
+
+impl TailStep {
+    /// 把 `end_turn` 终态改成以 `error` 收尾的错误终态,已生成的正文原样保留。
+    fn into_api_error(self, error: String) -> Self {
+        match self {
+            TailStep::Done {
+                stream,
+                tools,
+                final_text,
+            } => TailStep::ApiError {
+                stream,
+                tools,
+                final_text,
+                error,
+            },
+            other => other,
+        }
+    }
 }
 
 impl TranscriptTail {
@@ -1964,10 +2021,24 @@ impl TranscriptTail {
             for msg in parse_stream_json_line(&line) {
                 // tee 在 UI 投影前:无论是否终态,先把 typed 事件喂出去(全量落盘)。
                 on_event(&msg);
-                if let Some(step) = self.apply(&msg, &mut tools, &mut streamed) {
+                if msg.error.is_some() && self.api_error.is_none() {
+                    self.api_error = ClaudeApiError::from_line(&line);
+                }
+                if let Some(mut step) = self.apply(&msg, &mut tools, &mut streamed) {
                     // 已经收到真终态:同一条消息前半截留下的候选标记就地作废(它属于这一轮)。
                     self.pending_end = false;
                     self.pending_error = None;
+                    // 流中断时 claude 先把半截回复按 end_turn 落盘,紧接着写 API 错误记录。两行
+                    // 同批读到就并成一个错误终态;分两批读到的,错误记录由会话镜像另发
+                    // (见 `tail_forward_turns` 的 `on_api_error`)。
+                    if matches!(step, TailStep::Done { .. }) {
+                        if let Some(len) =
+                            self.absorb_trailing_api_error(&complete[consumed..], on_event)
+                        {
+                            consumed += len;
+                            step = step.into_api_error(self.api_error_reason());
+                        }
+                    }
                     // 终态:complete[consumed..] 是下一轮的开头,塞回 pending 头部留给下次 feed。
                     let leftover = &complete[consumed..];
                     if !leftover.is_empty() {
@@ -2010,6 +2081,16 @@ impl TranscriptTail {
     ) -> Option<TailStep> {
         match msg.kind {
             AgentKind::Assistant => {
+                // API 错误记录的正文是错误说明,不是回复:不并进本轮正文,按错误终态收尾。
+                // 它以 stop_sequence(偶见 tool_use)结束,不检测就会傻等满 stall 超时。
+                if let Some(error) = self.assistant_api_error(msg) {
+                    return Some(TailStep::ApiError {
+                        stream: streamed.then(|| self.accumulated()),
+                        tools: std::mem::take(tools),
+                        final_text: self.accumulated(),
+                        error,
+                    });
+                }
                 if let Some(t) = &msg.text {
                     self.assistant.push(t.clone());
                     *streamed = true;
@@ -2030,38 +2111,6 @@ impl TranscriptTail {
                         tools: std::mem::take(tools),
                         final_text,
                     });
-                }
-                // 流中断(`API Error: Response stalled mid-stream…`):claude 把它写成**普通 text 块**,
-                // `error` 字段是 None、`stop_reason` 是 `stop_sequence` —— 于是既躲过下面那条只看
-                // `error` 字段的判据,又因为不是 `end_turn` 而不收轮,结果一直挂到 stall 兜底,
-                // 错误文本还混进回复正文。这里当终态收掉,上层据此发「继续」重试卡。
-                if let Some(t) = msg.text.as_deref() {
-                    if summon_core::retry_wait::is_stream_stall(t) {
-                        return Some(TailStep::ApiError {
-                            stream: streamed.then(|| self.accumulated()),
-                            tools: std::mem::take(tools),
-                            // 已累积的正文是**真内容**(错误文本是最后追加的那块),留给用户看。
-                            final_text: self.accumulated(),
-                            error: t.trim().to_string(),
-                        });
-                    }
-                }
-                // API 错误(model_not_found 等):claude 以 `error` 字段 + `stop_sequence`
-                // 收尾(不是 end_turn),如果不专门检测就会傻等满 240s stall 超时。
-                if let Some(err) = &msg.error {
-                    if !err.is_empty() {
-                        let final_text = msg
-                            .text
-                            .clone()
-                            .filter(|t| !t.trim().is_empty())
-                            .unwrap_or_else(|| self.accumulated());
-                        return Some(TailStep::ApiError {
-                            stream: streamed.then(|| self.accumulated()),
-                            tools: std::mem::take(tools),
-                            final_text,
-                            error: err.clone(),
-                        });
-                    }
                 }
             }
             AgentKind::ToolUse => {
@@ -2114,6 +2163,59 @@ impl TranscriptTail {
             }
         }
         None
+    }
+
+    /// 这条 assistant 文本是不是 API 错误记录,是则返回展示用的错误原文。
+    ///
+    /// 结构化标记(解析器填的 `error` 类别)为准;没有标记、措辞却是流中断的短文本按同一类处理,
+    /// 并补一条无 uuid 的记录,让下游统一从 `api_error` 取类别与原文。
+    fn assistant_api_error(&mut self, msg: &AgentMessage) -> Option<String> {
+        let text = msg
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        if let Some(category) = msg.error.as_deref().filter(|error| !error.is_empty()) {
+            return Some(text.unwrap_or(category).to_string());
+        }
+        let text = text.filter(|text| summon_core::retry_wait::is_stream_stall(text))?;
+        self.api_error.get_or_insert_with(|| ClaudeApiError {
+            uuid: None,
+            category: None,
+            text: text.to_string(),
+        });
+        Some(text.to_string())
+    }
+
+    /// 错误终态的展示原文。
+    fn api_error_reason(&self) -> String {
+        self.api_error
+            .as_ref()
+            .map(ClaudeApiError::reason)
+            .unwrap_or_default()
+    }
+
+    /// `end_turn` 之后紧挨着的那一行若是 API 错误记录,把它并进当前终态:记下记录、把事件
+    /// tee 出去,返回这一行的字节数。只看紧挨着的**完整**一行 —— 实测两条记录总是相邻写出;
+    /// 半行或别的记录都不并,交给会话镜像按独立错误发。
+    fn absorb_trailing_api_error(
+        &mut self,
+        rest: &[u8],
+        on_event: &mut dyn FnMut(&AgentMessage),
+    ) -> Option<usize> {
+        let end = rest.iter().position(|byte| *byte == b'\n')?;
+        let line = String::from_utf8_lossy(&rest[..end]);
+        let record = ClaudeApiError::from_line(&line)?;
+        if let Some(limit) =
+            summon_core::claude_session_limit::parse_claude_session_limit_event(&line)
+        {
+            self.session_limit = Some(limit);
+        }
+        for msg in parse_stream_json_line(&line) {
+            on_event(&msg);
+        }
+        self.api_error = Some(record);
+        Some(end + 1)
     }
 
     /// 静默满 `END_TURN_GRACE` 后确认候选终态:同一条消息不会再有文本记录了,这一轮就此收口。
@@ -2180,6 +2282,7 @@ impl TranscriptTail {
         self.notices = summon_core::turn_notice::TurnNoticeWindow::default();
         self.ask_user_question_count = None;
         self.marker_evidence = MirrorMarkerEvidence::default();
+        self.api_error = None;
     }
 
     /// 还有后台任务没收到完成通知:主路径在 end_turn 不收尾、续跑。
@@ -3564,7 +3667,9 @@ impl<'a, E: Executor> Transcript<'a, E> {
         let mut interrupted = false; // 任务4:被「⏸ 打断」按钮纯停 → 带 partial 收尾、卡片由 daemon 定格为已暂停
         let mut session_ended = false;
         let mut timed_out = false;
-        let mut api_error: Option<String> = None; // Claude API 错误(model_not_found 等),秒级感知
+        let mut api_error: Option<String> = None; // Claude API 错误原文,秒级感知
+        let mut api_error_kind: Option<AgentErrorKind> = None;
+        let mut api_error_record: Option<Box<ApiErrorRecordId>> = None;
         let mut claude_session_limit = None;
         let mut followup_message_ids = Vec::new();
         // `!` 重跑会替换当前 prompt；会话若在 marker 回显后才退出，判定必须针对正在跑的那轮，
@@ -3850,6 +3955,10 @@ impl<'a, E: Executor> Transcript<'a, E> {
                         }
                         claude_session_limit = tail.session_limit.take();
                         api_error = Some(error);
+                        (api_error_kind, api_error_record) = api_error_identity(
+                            tail.api_error.take(),
+                            terminal_boundary(&checkpoint, &tail),
+                        );
                         on_segment_settled(
                             terminal_boundary(&checkpoint, &tail),
                             &tail.marker_evidence,
@@ -3870,6 +3979,10 @@ impl<'a, E: Executor> Transcript<'a, E> {
                         }) => {
                             api_error = Some(error);
                             on_terminal_observed();
+                            (api_error_kind, api_error_record) = api_error_identity(
+                                tail.api_error.take(),
+                                terminal_boundary(&checkpoint, &tail),
+                            );
                             on_segment_settled(
                                 terminal_boundary(&checkpoint, &tail),
                                 &tail.marker_evidence,
@@ -4118,7 +4231,8 @@ impl<'a, E: Executor> Transcript<'a, E> {
             timed_out,
             api_error,
             claude_session_limit,
-            api_error_kind: None,
+            api_error_kind,
+            api_error_record,
             subagent_tail: Some(Box::new(subagents)),
             interim_replies,
             yielded_to_queue,
@@ -4127,7 +4241,8 @@ impl<'a, E: Executor> Transcript<'a, E> {
 
     /// 会话镜像最小原型(claude/Transcript,`messaging.session_mirror` **默认开**):**持续** tail
     /// 转录,每个完成的 assistant turn 回调 `on_turn(evidence, boundary, text)` —— 无论这轮由飞书
-    /// 注入触发,还是用户 attach 进 tmux 直敲触发(RPC→pub-sub)。evidence 是本 terminal 前的
+    /// 注入触发,还是用户 attach 进 tmux 直敲触发(RPC→pub-sub)。以 claude API 错误记录收尾的
+    /// terminal 另回调 `on_api_error`,与这一轮正文由谁投递无关。evidence 是本 terminal 前的
     /// 有界 Enqueued/Consumed transport 候选与未知 shape 歧义证据；终端直敲通常为空。daemon 按
     /// active exact marker 选关联，避免
     /// 上轮残留 marker 覆盖本轮。boundary 是 terminal 行后的绝对字节 offset。
@@ -4152,6 +4267,7 @@ impl<'a, E: Executor> Transcript<'a, E> {
         expected_epoch_fingerprint: &str,
         stop: &std::sync::atomic::AtomicBool,
         on_turn: &mut MirrorTurnSink<'_>,
+        on_api_error: &mut MirrorApiErrorSink<'_>,
         on_ready: &mut dyn FnMut(),
         on_start_bypassed: &mut dyn FnMut(),
         offset_path: Option<&std::path::Path>,
@@ -4252,6 +4368,7 @@ impl<'a, E: Executor> Transcript<'a, E> {
             catchup_floor,
             on_turn,
             &mut persist_terminal,
+            on_api_error,
             on_ready,
         )?;
         Ok(())
@@ -4298,6 +4415,9 @@ fn tail_forward_turns<E: Executor>(
     catchup_floor: Option<u64>,
     on_turn: &mut MirrorTurnSink<'_>,
     on_turn_offset: &mut MirrorOffsetSink<'_>,
+    // 以 API 错误记录收尾的 terminal:回复回调之后、提交 offset 之前上报那条记录。历史 backlog 与
+    // seed cutoff 内的轮不报。
+    on_api_error: &mut MirrorApiErrorSink<'_>,
     on_ready: &mut dyn FnMut(),
 ) -> anyhow::Result<()> {
     use std::sync::atomic::Ordering;
@@ -4336,13 +4456,27 @@ fn tail_forward_turns<E: Executor>(
                    boundary_checkpoint: &FileTailCheckpoint,
                    observation_only: Option<MirrorTurnKind>,
                    catchup: bool,
+                   api_error: Option<&ClaudeApiError>,
                    on_turn: &mut MirrorTurnSink<'_>,
-                   on_turn_offset: &mut MirrorOffsetSink<'_>|
+                   on_turn_offset: &mut MirrorOffsetSink<'_>,
+                   on_api_error: &mut MirrorApiErrorSink<'_>|
      -> anyhow::Result<()> {
         let visible = summon_core::feed_tag::strip_feed_tag(final_text);
         let t = visible.trim();
+        let report_api_error = |on_api_error: &mut MirrorApiErrorSink<'_>| match api_error {
+            Some(error) => on_api_error(&MirrorApiError {
+                error,
+                boundary,
+                boundary_checkpoint: &boundary_checkpoint.bytes,
+            }),
+            None => Ok(()),
+        };
         if let Some(kind) = observation_only {
             on_turn(kind, evidence, boundary, &boundary_checkpoint.bytes, t)?;
+            // 歧义只关乎这一轮正文归谁;错误记录的归属另由去重裁决。历史 backlog 一律不报。
+            if kind == MirrorTurnKind::AmbiguousObserved {
+                report_api_error(on_api_error)?;
+            }
             on_turn_offset(boundary, boundary_checkpoint)?;
             return Ok(());
         }
@@ -4383,6 +4517,9 @@ fn tail_forward_turns<E: Executor>(
                 &boundary_checkpoint.bytes,
                 t,
             )?;
+        }
+        if !consumed {
+            report_api_error(on_api_error)?;
         }
         // 每个 terminal 都提交连续 boundary：正文/peer 为空是“无需联网”的成功，不应在重启后
         // 反复解析。watermark 覆盖轮也必须落盘，否则 watermark 归零后会把历史重发回飞书。
@@ -4469,8 +4606,10 @@ fn tail_forward_turns<E: Executor>(
                         &boundary_checkpoint,
                         observation_only,
                         catchup_ok,
+                        tail.api_error.as_ref(),
                         on_turn,
                         on_turn_offset,
+                        on_api_error,
                     )?;
                     turn_start = boundary;
                     tail.reset_turn();
@@ -4535,8 +4674,10 @@ fn tail_forward_turns<E: Executor>(
                         &boundary_checkpoint,
                         observation_only,
                         catchup_ok,
+                        tail.api_error.as_ref(),
                         on_turn,
                         on_turn_offset,
+                        on_api_error,
                     )?;
                     pending_end_checkpoint = None;
                     turn_start = boundary;
@@ -4566,10 +4707,46 @@ fn tail_forward_turns<E: Executor>(
     Ok(())
 }
 
+/// 不关心 API 错误记录的 [`tail_forward_turns`]:只验正文转发与 offset 的测试用。
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn tail_forward_turns_quiet<E: Executor>(
+    exec: &E,
+    path: &std::path::Path,
+    start_offset: u64,
+    checkpoint: FileTailCheckpoint,
+    poll: Duration,
+    grace: Duration,
+    stop: &std::sync::atomic::AtomicBool,
+    skip_until: Option<&std::sync::atomic::AtomicU64>,
+    restored_ambiguous_baseline: bool,
+    catchup_floor: Option<u64>,
+    on_turn: &mut MirrorTurnSink<'_>,
+    on_turn_offset: &mut MirrorOffsetSink<'_>,
+    on_ready: &mut dyn FnMut(),
+) -> anyhow::Result<()> {
+    tail_forward_turns(
+        exec,
+        path,
+        start_offset,
+        checkpoint,
+        poll,
+        grace,
+        stop,
+        skip_until,
+        restored_ambiguous_baseline,
+        catchup_floor,
+        on_turn,
+        on_turn_offset,
+        &mut |_| Ok(()),
+        on_ready,
+    )
+}
+
 /// 跟踪一份外部会话的转录,每轮收尾(assistant `end_turn`,或 API 报错收尾)回调一次。
 ///
 /// - 正文非空的轮先 `on_reply(boundary, 正文)`;API 报错收尾的轮同样按回复转发,正文是这一轮
-///   累积的文字(通常就是报错)。
+///   累积的文字后接错误原文,只报错没有正文的轮就是错误原文。
 /// - 不转发的轮(正文为空、超出补发上限、marker 证据不确定)只记日志。
 /// - 每轮最后都 `on_boundary(boundary)`,转发与否都一样。boundary 是该轮收尾记录之后的字节
 ///   位置,从它续读不会再报这一轮。
@@ -4590,11 +4767,15 @@ pub(crate) fn tail_external_replies(
 ) -> anyhow::Result<()> {
     let exec = crate::runtime::executor::LocalExecutor;
     let checkpoint = FileTailCheckpoint::capture_at(&exec, path, start_offset)?;
+    // 一轮的正文与错误原文合成一条回复:遥控回传按 boundary 去重,同一轮发两条会被挡掉一条。
+    // 正文先暂存,错误回调追加原文,offset 回调前发出。
+    let held: std::cell::RefCell<Option<(u64, String)>> = std::cell::RefCell::new(None);
     let mut on_turn =
         |kind: MirrorTurnKind, _: &MirrorMarkerEvidence, boundary: u64, _: &[u8], text: &str| {
             match kind {
                 MirrorTurnKind::Reply | MirrorTurnKind::CatchupReply if !text.trim().is_empty() => {
-                    on_reply(boundary, text)
+                    *held.borrow_mut() = Some((boundary, text.to_string()));
+                    Ok(())
                 }
                 // 通知块是同一轮里先报的一块,这一轮自己的回调随后就到;遥控不转发通知。
                 MirrorTurnKind::Notice => Ok(()),
@@ -4604,6 +4785,18 @@ pub(crate) fn tail_external_replies(
                 }
             }
         };
+    let mut on_api_error = |report: &MirrorApiError<'_>| {
+        let reason = report.error.reason();
+        let mut held = held.borrow_mut();
+        match held.as_mut() {
+            Some((boundary, text)) if *boundary == report.boundary => {
+                text.push_str("\n\n");
+                text.push_str(&reason);
+            }
+            _ => *held = Some((report.boundary, reason)),
+        }
+        Ok(())
+    };
     // 补发下界取起点。`tail_forward_turns` 把起于首读 EOF 之前的轮当历史只观察,而起点与首读
     // 之间常有新字节:写下 offset 之后、开读之前落下的,daemon 停机期间结束的,重启时正在跑的
     // 那一轮。它们都结束在起点之后、是该发的回复,经这个下界按 CatchupReply 报出;
@@ -4624,7 +4817,13 @@ pub(crate) fn tail_external_replies(
         false,
         Some(start_offset),
         &mut on_turn,
-        &mut |boundary, _| on_boundary(boundary),
+        &mut |boundary, _| {
+            if let Some((_, text)) = held.borrow_mut().take() {
+                on_reply(boundary, &text)?;
+            }
+            on_boundary(boundary)
+        },
+        &mut on_api_error,
         on_ready,
     )
 }
@@ -7166,7 +7365,7 @@ mod tests {
             .unwrap() else {
                 return;
             };
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &worker_path,
                 start,
@@ -7360,7 +7559,7 @@ mod tests {
             committed = Some(checkpoint.clone());
             Ok(())
         };
-        let error = tail_forward_turns(
+        let error = tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             0,
@@ -7418,7 +7617,7 @@ mod tests {
                 stop.store(true, Ordering::Relaxed);
                 Ok(())
             };
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             0,
@@ -7461,7 +7660,7 @@ mod tests {
                 .unwrap();
         let path_for_ready = path.clone();
         let mut turns = Vec::new();
-        let error = tail_forward_turns(
+        let error = tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             start,
@@ -9534,18 +9733,36 @@ mod tests {
     /// 但 error 字段非空 → 立即收尾。
     #[test]
     fn api_error_triggers_immediate_terminal_state() {
-        let line = r#"{"type":"assistant","sessionId":"s","message":{"id":"m","role":"assistant","stop_reason":"stop_sequence","error":"model_not_found","isApiErrorMessage":true,"apiErrorStatus":404,"content":[{"type":"text","text":"There's an issue with the selected model."}]}}"#;
         let mut tail = TranscriptTail::default();
-        match tail.feed(&format!("{line}\n"), &mut |_| {}) {
+        match tail.feed(&format!("{STREAM_STOPPED_ERROR}\n"), &mut |_| {}) {
             TailStep::ApiError {
                 final_text, error, ..
             } => {
-                assert_eq!(error, "model_not_found");
-                assert_eq!(final_text, "There's an issue with the selected model.");
+                assert_eq!(error, STREAM_STOPPED_TEXT, "错误原文取记录正文");
+                assert_eq!(final_text, "", "错误说明不并进回复正文");
             }
             TailStep::Done { .. } => panic!("API 错误不应走 Done 分支"),
             TailStep::Progress { .. } => panic!("API 错误应立即收尾,不应是 Progress"),
         }
+        let record = tail.api_error.as_ref().expect("记下错误记录");
+        assert_eq!(record.uuid.as_deref(), Some("err-1"));
+        assert!(record.stream_interrupted());
+    }
+
+    /// 较早版本把类别写在 `message.error`:同样立即收尾,原文取正文。
+    #[test]
+    fn legacy_message_error_triggers_immediate_terminal_state() {
+        let line = r#"{"type":"assistant","sessionId":"s","message":{"id":"m","role":"assistant","stop_reason":"stop_sequence","error":"model_not_found","isApiErrorMessage":true,"apiErrorStatus":404,"content":[{"type":"text","text":"There's an issue with the selected model."}]}}"#;
+        let mut tail = TranscriptTail::default();
+        match tail.feed(&format!("{line}\n"), &mut |_| {}) {
+            TailStep::ApiError { error, .. } => {
+                assert_eq!(error, "There's an issue with the selected model.");
+            }
+            other => panic!("旧格式 API 错误应立即收尾:{other:?}"),
+        }
+        let record = tail.api_error.as_ref().expect("记下错误记录");
+        assert_eq!(record.category.as_deref(), Some("model_not_found"));
+        assert!(!record.stream_interrupted());
     }
 
     #[test]
@@ -9635,7 +9852,7 @@ mod tests {
                     Ok(())
                 };
             let mut on_off = |_: u64, _: &FileTailCheckpoint| Ok(());
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &p2,
                 0,
@@ -9827,7 +10044,7 @@ mod tests {
                     Ok(())
                 };
             let mut on_off = |_: u64, _: &FileTailCheckpoint| Ok(());
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &p2,
                 0,
@@ -9890,7 +10107,7 @@ mod tests {
                     Ok(())
                 };
             let mut on_off = |_: u64, _: &FileTailCheckpoint| Ok(());
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &p2,
                 0,
@@ -9964,7 +10181,7 @@ mod tests {
                 Ok(())
             };
             let mut on_off = |_: u64, _: &FileTailCheckpoint| Ok(());
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &p2,
                 0,
@@ -10055,7 +10272,7 @@ mod tests {
 
         let stop = AtomicBool::new(false);
         let mut got = Vec::<(MirrorTurnKind, Vec<String>, Vec<String>, String)>::new();
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             0,
@@ -10147,7 +10364,7 @@ mod tests {
 
         let stop = AtomicBool::new(false);
         let mut got = Vec::<(MirrorTurnKind, String)>::new();
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             start,
@@ -10214,7 +10431,7 @@ mod tests {
 
         let stop = AtomicBool::new(false);
         let mut got = Vec::<(MirrorTurnKind, String)>::new();
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             start,
@@ -10284,7 +10501,7 @@ mod tests {
 
         let stop = AtomicBool::new(false);
         let mut got = Vec::<(MirrorTurnKind, Vec<String>, String)>::new();
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             start,
@@ -10360,7 +10577,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut observed = Vec::new();
         let mut commits = 0;
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             0,
@@ -10429,7 +10646,7 @@ mod tests {
                 o2.lock().unwrap().push(offset);
                 Ok(())
             };
-            let result = tail_forward_turns(
+            let result = tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &p2,
                 0,
@@ -10542,7 +10759,7 @@ mod tests {
                 c2.lock().unwrap().push(offset);
                 Ok(())
             };
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &p2,
                 0,
@@ -10624,7 +10841,7 @@ mod tests {
             Arc::clone(&offsets),
         );
         let worker = std::thread::spawn(move || {
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &worker_path,
                 0,
@@ -10715,7 +10932,7 @@ mod tests {
                 *o2.lock().unwrap() = off;
                 Ok(())
             };
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &p2,
                 0,
@@ -10790,7 +11007,7 @@ mod tests {
         let (worker_path, worker_stop, worker_delivered) =
             (path.clone(), Arc::clone(&stop), Arc::clone(&delivered));
         let worker = std::thread::spawn(move || {
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &worker_path,
                 0,
@@ -10879,7 +11096,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut delivered = Vec::<(Vec<String>, String)>::new();
         let mut offsets = Vec::<u64>::new();
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             0,
@@ -10938,7 +11155,7 @@ mod tests {
         let mut delivered = Vec::<String>::new();
         let mut committed = Vec::<u64>::new();
 
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             0,
@@ -11032,7 +11249,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut delivered = Vec::<(MirrorTurnKind, String)>::new();
         let mut offsets = Vec::<u64>::new();
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &exec,
             std::path::Path::new("virtual.jsonl"),
             0,
@@ -11099,7 +11316,7 @@ mod tests {
                 deliveries.push(text.to_string());
                 anyhow::bail!("注入发送失败")
             };
-        let result = tail_forward_turns(
+        let result = tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             0,
@@ -11152,7 +11369,7 @@ mod tests {
                     Ok(())
                 };
             let mut on_off = |_: u64, _: &FileTailCheckpoint| Ok(());
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &p2,
                 0,
@@ -11202,7 +11419,7 @@ mod tests {
         let mut observed = Vec::<(MirrorTurnKind, Vec<String>, String)>::new();
         let mut offsets = Vec::<u64>::new();
 
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             0,
@@ -11450,7 +11667,7 @@ mod tests {
         file.write_all(rec("text", "live answer", Some("end_turn")).as_bytes())
             .unwrap();
         let mut observed = Vec::new();
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &exec,
             &predicted,
             start,
@@ -12152,7 +12369,7 @@ mod tests {
             let stop = AtomicBool::new(false);
             let mut observed = Vec::new();
             let mut commits = 0usize;
-            tail_forward_turns(
+            tail_forward_turns_quiet(
                 &crate::runtime::executor::LocalExecutor,
                 &path,
                 0,
@@ -12220,7 +12437,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut observed = Vec::new();
         let mut committed = Vec::new();
-        tail_forward_turns(
+        tail_forward_turns_quiet(
             &crate::runtime::executor::LocalExecutor,
             &path,
             0,
@@ -12261,5 +12478,477 @@ mod tests {
             !after[..end].contains("mirror_watermark"),
             "normal turn 不能推进 prefix cutoff；gate 会跨过尚未投递的前序 attach"
         );
+    }
+
+    /// 实测形态的流中断记录(2026-11-24 现场):标记与类别在记录最外层,`message.error` 为 null。
+    const STREAM_STOPPED_ERROR: &str = r#"{"parentUuid":"a-1","isSidechain":false,"type":"assistant","uuid":"err-1","timestamp":"2026-11-24T06:26:51.094Z","error":"server_error","isApiErrorMessage":true,"message":{"id":"m-err","container":null,"model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","stop_sequence":"","type":"message","error":null,"content":[{"type":"text","text":"API Error: The response stopped arriving. The response above may be incomplete."}]}}"#;
+    const STREAM_STOPPED_TEXT: &str =
+        "API Error: The response stopped arriving. The response above may be incomplete.";
+    /// 流中断前落盘的半截回复:真模型、`end_turn`。
+    const HALF_REPLY: &str = r#"{"parentUuid":"u-1","isSidechain":false,"type":"assistant","uuid":"a-1","message":{"id":"m-1","model":"claude-opus","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"已经写了一半"}]}}"#;
+    const TURN_DURATION: &str =
+        r#"{"type":"system","subtype":"turn_duration","durationMs":1200,"uuid":"s-1"}"#;
+
+    /// (a) 同一批读到 end_turn 与紧随其后的错误记录:并成一个错误终态,半截正文留作回复,
+    /// 错误原文另给;错误记录之后的字节留给下一次 feed。
+    #[test]
+    fn an_api_error_right_after_end_turn_turns_the_terminal_into_an_error() {
+        let mut tail = TranscriptTail::default();
+        let mut events = 0usize;
+        let chunk = lines(&[HALF_REPLY, STREAM_STOPPED_ERROR, TURN_DURATION]);
+        match tail.feed(&chunk, &mut |_| events += 1) {
+            TailStep::ApiError {
+                final_text, error, ..
+            } => {
+                assert_eq!(final_text, "已经写了一半", "半截正文照样作为回复");
+                assert_eq!(error, STREAM_STOPPED_TEXT);
+            }
+            other => panic!("end_turn 后紧跟 API 错误应并成错误终态:{other:?}"),
+        }
+        assert_eq!(events, 2, "两条记录的事件都要 tee 出去");
+        let record = tail.api_error.as_ref().expect("记下错误记录");
+        assert_eq!(record.uuid.as_deref(), Some("err-1"));
+        assert!(record.stream_interrupted());
+        assert_eq!(
+            tail.pending,
+            lines(&[TURN_DURATION]).into_bytes(),
+            "错误记录之后的行不属于这一轮的终态"
+        );
+    }
+
+    /// (b) 错误记录晚一批才落盘:主轮已按 end_turn 收尾,错误记录自成一个错误终态,不带正文。
+    #[test]
+    fn an_api_error_in_a_later_read_is_its_own_terminal() {
+        let mut tail = TranscriptTail::default();
+        match tail.feed(&lines(&[HALF_REPLY]), &mut |_| {}) {
+            TailStep::Done { final_text, .. } => assert_eq!(final_text, "已经写了一半"),
+            other => panic!("只读到 end_turn 时照常收尾:{other:?}"),
+        }
+        assert!(tail.api_error.is_none());
+        tail.reset_turn();
+        match tail.feed(&lines(&[STREAM_STOPPED_ERROR]), &mut |_| {}) {
+            TailStep::ApiError {
+                final_text, error, ..
+            } => {
+                assert_eq!(final_text, "", "错误说明不并进正文");
+                assert_eq!(error, STREAM_STOPPED_TEXT);
+            }
+            other => panic!("迟到的错误记录也是错误终态:{other:?}"),
+        }
+        assert_eq!(
+            tail.api_error.as_ref().and_then(|r| r.uuid.as_deref()),
+            Some("err-1")
+        );
+    }
+
+    /// 只并紧挨着的那一行:中间隔着别的记录时 end_turn 照常收尾,边界不挪。
+    #[test]
+    fn an_api_error_behind_other_records_is_not_merged_into_end_turn() {
+        let mut tail = TranscriptTail::default();
+        let chunk = lines(&[HALF_REPLY, TURN_DURATION, STREAM_STOPPED_ERROR]);
+        assert!(matches!(
+            tail.feed(&chunk, &mut |_| {}),
+            TailStep::Done { .. }
+        ));
+        assert!(tail.api_error.is_none());
+        assert_eq!(
+            tail.pending,
+            lines(&[TURN_DURATION, STREAM_STOPPED_ERROR]).into_bytes()
+        );
+    }
+
+    /// (c) 轮中途的错误(工具调用之后):已生成的正文保留,错误原文单列。
+    #[test]
+    fn an_api_error_mid_turn_keeps_the_text_generated_so_far() {
+        let thinking_out_loud = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":"先看一下目录"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#;
+        let result = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a b"}]}}"#;
+        let mut tail = TranscriptTail::default();
+        let chunk = lines(&[thinking_out_loud, result, STREAM_STOPPED_ERROR]);
+        match tail.feed(&chunk, &mut |_| {}) {
+            TailStep::ApiError {
+                final_text, error, ..
+            } => {
+                assert_eq!(final_text, "先看一下目录");
+                assert_eq!(error, STREAM_STOPPED_TEXT);
+            }
+            other => panic!("轮中途的错误记录应立即收尾:{other:?}"),
+        }
+    }
+
+    /// 实测额度记录同时带最外层 `rate_limit` 标记与五小时额度字段:仍取出结构化重置时间,
+    /// 由额度卡承载(不归为可「继续」的流中断)。
+    #[test]
+    fn a_flagged_five_hour_limit_record_keeps_its_session_limit() {
+        let line = r#"{"type":"assistant","uuid":"err-rl","timestamp":"2026-09-02T09:20:55.766Z","isSidechain":false,"error":"rate_limit","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","error":null,"content":[{"type":"text","text":"You've hit your session limit · resets 6:10pm (Asia/Singapore)"}]},"quotaLimits":{"status":"rejected","resetsAt":1788343800,"rateLimitType":"five_hour"}}"#;
+        let mut tail = TranscriptTail::default();
+        match tail.feed(&lines(&[line]), &mut |_| {}) {
+            TailStep::ApiError { error, .. } => assert_eq!(
+                error,
+                "You've hit your session limit · resets 6:10pm (Asia/Singapore)"
+            ),
+            other => panic!("额度记录应立即收尾:{other:?}"),
+        }
+        assert!(tail.session_limit.is_some(), "额度卡要用的重置时间");
+        let record = tail.api_error.as_ref().expect("记下错误记录");
+        assert_eq!(record.category.as_deref(), Some("rate_limit"));
+        assert!(!record.stream_interrupted());
+    }
+
+    /// mirror 观察到的一件事,按发生顺序记下。
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum MirrorSeen {
+        Turn(MirrorTurnKind, u64, String),
+        ApiError(u64, Option<String>, String),
+        Offset(u64),
+    }
+
+    /// 从空转录起跑 mirror tail,Ready 之后依次追加 `writes`(每段之间停一会儿,保证分批读到),
+    /// 收齐 `expect_offsets` 个 offset 提交后停下,返回观察序列。`existing` 是起跑前已有的历史。
+    fn run_mirror_over(
+        existing: &str,
+        writes: &[String],
+        expect_offsets: usize,
+    ) -> Vec<MirrorSeen> {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mirror-api-error.jsonl");
+        std::fs::write(&path, existing).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(Mutex::new(Vec::<MirrorSeen>::new()));
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (p2, s2, g2) = (path.clone(), stop.clone(), seen.clone());
+        let handle = std::thread::spawn(move || {
+            let g3 = g2.clone();
+            let g4 = g2.clone();
+            let s3 = s2.clone();
+            tail_forward_turns(
+                &crate::runtime::executor::LocalExecutor,
+                &p2,
+                0,
+                FileTailCheckpoint::capture_at(&crate::runtime::executor::LocalExecutor, &p2, 0)
+                    .unwrap(),
+                Duration::from_millis(10),
+                Duration::from_millis(30),
+                &s2,
+                None,
+                false,
+                None,
+                &mut |kind, _, boundary, _, text| {
+                    g2.lock()
+                        .unwrap()
+                        .push(MirrorSeen::Turn(kind, boundary, text.to_string()));
+                    Ok(())
+                },
+                &mut |boundary, _| {
+                    let mut seen = g3.lock().unwrap();
+                    seen.push(MirrorSeen::Offset(boundary));
+                    let offsets = seen
+                        .iter()
+                        .filter(|event| matches!(event, MirrorSeen::Offset(_)))
+                        .count();
+                    if offsets >= expect_offsets {
+                        s3.store(true, Ordering::Relaxed);
+                    }
+                    Ok(())
+                },
+                &mut |report| {
+                    g4.lock().unwrap().push(MirrorSeen::ApiError(
+                        report.boundary,
+                        report.error.uuid.clone(),
+                        report.error.reason(),
+                    ));
+                    Ok(())
+                },
+                &mut || ready_tx.send(()).unwrap(),
+            )
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("mirror ready");
+        for chunk in writes {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            file.write_all(chunk.as_bytes()).unwrap();
+            file.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(120));
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        stop.store(true, Ordering::Relaxed);
+        handle.join().unwrap().unwrap();
+        let seen = seen.lock().unwrap().clone();
+        seen
+    }
+
+    /// (a) 镜像同批读到 end_turn 与错误记录:先转发半截正文,再上报错误,最后才提交 offset。
+    #[test]
+    fn mirror_reports_an_api_error_right_after_end_turn() {
+        let batch = lines(&[HALF_REPLY, STREAM_STOPPED_ERROR]);
+        let end = batch.len() as u64;
+        let seen = run_mirror_over("", &[batch], 1);
+        assert_eq!(
+            seen,
+            [
+                MirrorSeen::Turn(MirrorTurnKind::Reply, end, "已经写了一半".into()),
+                MirrorSeen::ApiError(end, Some("err-1".into()), STREAM_STOPPED_TEXT.into()),
+                MirrorSeen::Offset(end),
+            ]
+        );
+    }
+
+    /// (b) 主轮按 end_turn 收尾之后错误记录才落盘:错误记录自成一个 terminal 照样上报。
+    #[test]
+    fn mirror_reports_an_api_error_written_after_the_turn_ended() {
+        let first = lines(&[HALF_REPLY]);
+        let second = lines(&[STREAM_STOPPED_ERROR]);
+        let reply_end = first.len() as u64;
+        let error_end = reply_end + second.len() as u64;
+        let seen = run_mirror_over("", &[first, second], 2);
+        assert_eq!(
+            seen,
+            [
+                MirrorSeen::Turn(MirrorTurnKind::Reply, reply_end, "已经写了一半".into()),
+                MirrorSeen::Offset(reply_end),
+                MirrorSeen::Turn(MirrorTurnKind::ReplyObserved, error_end, String::new()),
+                MirrorSeen::ApiError(error_end, Some("err-1".into()), STREAM_STOPPED_TEXT.into()),
+                MirrorSeen::Offset(error_end),
+            ]
+        );
+    }
+
+    /// 历史 backlog 里的错误记录(镜像起跑前就已落盘)不上报,只推进 offset。
+    #[test]
+    fn mirror_never_reports_historical_api_errors() {
+        let history = lines(&[HALF_REPLY, STREAM_STOPPED_ERROR]);
+        let fresh = lines(&[HALF_REPLY.replace("已经写了一半", "新一轮").as_str()]);
+        // 历史里 end_turn 与错误记录同批读到、并成一个 terminal,加上新一轮共两次提交。
+        let seen = run_mirror_over(&history, &[fresh], 2);
+        assert!(
+            !seen
+                .iter()
+                .any(|event| matches!(event, MirrorSeen::ApiError(..))),
+            "历史错误不能补发进群:{seen:?}"
+        );
+        assert!(seen.contains(&MirrorSeen::Turn(
+            MirrorTurnKind::Reply,
+            (history.len() + lines(&[HALF_REPLY.replace("已经写了一半", "新一轮").as_str()]).len())
+                as u64,
+            "新一轮".into()
+        )));
+    }
+
+    /// 遥控回传:同一轮的正文与错误原文合成一条回复;只有错误的轮,回复就是错误原文。
+    #[test]
+    fn external_replies_carry_the_api_error_with_the_reply() {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("external.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let replies = Arc::new(Mutex::new(Vec::<(u64, String)>::new()));
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (p2, s2, r2) = (path.clone(), stop.clone(), replies.clone());
+        let handle = std::thread::spawn(move || {
+            let mut boundaries = 0;
+            let s3 = s2.clone();
+            tail_external_replies(
+                &p2,
+                0,
+                Duration::from_millis(10),
+                &s2,
+                &mut || ready_tx.send(()).unwrap(),
+                &mut |boundary, text| {
+                    r2.lock().unwrap().push((boundary, text.to_string()));
+                    Ok(())
+                },
+                &mut |_| {
+                    boundaries += 1;
+                    if boundaries >= 2 {
+                        s3.store(true, Ordering::Relaxed);
+                    }
+                    Ok(())
+                },
+            )
+        });
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let first = lines(&[HALF_REPLY, STREAM_STOPPED_ERROR]);
+        let second = lines(&[STREAM_STOPPED_ERROR.replace("err-1", "err-2").as_str()]);
+        for chunk in [&first, &second] {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            file.write_all(chunk.as_bytes()).unwrap();
+            std::thread::sleep(Duration::from_millis(120));
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        stop.store(true, Ordering::Relaxed);
+        handle.join().unwrap().unwrap();
+        let end = first.len() as u64;
+        assert_eq!(
+            *replies.lock().unwrap(),
+            [
+                (end, format!("已经写了一半\n\n{STREAM_STOPPED_TEXT}")),
+                (end + second.len() as u64, STREAM_STOPPED_TEXT.to_string()),
+            ]
+        );
+    }
+
+    /// 主路径整轮:`later` 为 `None` 时 `bytes` 一次读完;否则读了一阵之后再长出 `later`。
+    /// 返回 run_turn 的结局与 on_message 收到的回复。
+    fn run_turn_over_replay(bytes: String, later: Option<String>) -> (TurnOutcome, Vec<String>) {
+        use std::cell::{Cell, RefCell};
+        struct Replay {
+            bytes: RefCell<Vec<u8>>,
+            later: RefCell<Option<Vec<u8>>>,
+            first_read: Cell<Option<Instant>>,
+        }
+        impl Executor for Replay {
+            fn spawn(
+                &self,
+                _: &crate::runtime::executor::SpawnSpec,
+            ) -> anyhow::Result<std::process::Child> {
+                unreachable!()
+            }
+            fn read_file_tail(&self, _: &std::path::Path, from: u64) -> anyhow::Result<Vec<u8>> {
+                let first = *self.first_read.get().get_or_insert_with(Instant::now);
+                self.first_read.set(Some(first));
+                if first.elapsed() > Duration::from_millis(1500) {
+                    if let Some(more) = self.later.borrow_mut().take() {
+                        self.bytes.borrow_mut().extend(more);
+                    }
+                }
+                let bytes = self.bytes.borrow();
+                Ok(bytes.get(from as usize..).unwrap_or_default().to_vec())
+            }
+            fn tmux(&self, _: &[&str]) -> anyhow::Result<String> {
+                unreachable!()
+            }
+        }
+        let (agent, dir) = crate::test_support::agent_dir("claude", "");
+        let fake = dir.path().join("tmux");
+        crate::test_support::write_test_executable(&fake, "#!/bin/sh\nprintf '❯ \\n'\n");
+        let mut config = summon_core::config::Config::default();
+        config.tools.tmux = Some(fake);
+        summon_core::tools::configure(&config);
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                summon_core::tools::configure(&summon_core::config::Config::default());
+            }
+        }
+        let _reset = Reset;
+        let session =
+            crate::session::session::Session::with_name(&agent, "api-error-test".into(), 100, 100);
+        crate::session::resume_store::write(
+            &agent,
+            "api-error-test",
+            "claude",
+            &uuid::Uuid::new_v4().to_string(),
+            Some("/tmp"),
+            None,
+        );
+        let replay = Replay {
+            bytes: RefCell::new(bytes.into()),
+            later: RefCell::new(later.map(String::into_bytes)),
+            first_read: Cell::new(None),
+        };
+        let started = Instant::now();
+        let replies = RefCell::new(Vec::new());
+        let mut capture = Transcript::new(&session, replay);
+        let outcome = capture
+            .run_turn(
+                "probe",
+                TurnInjection::PreInjected { baseline: 0 },
+                &mut |text| replies.borrow_mut().push(text.to_string()),
+                &mut |_| {},
+                &mut |_| {},
+                &mut |_| {},
+                &mut |_| MediationCard::Settled,
+                &mut || {
+                    (started.elapsed() > Duration::from_secs(20))
+                        .then_some(crate::capture::TurnInterrupt::Stop)
+                },
+                &mut || {},
+                &mut |_, _, _| {},
+                &mut |_| {},
+                &mut || true,
+                &mut || {},
+                &mut |_, _, _| {},
+                &mut |_| {},
+                &mut |_| {},
+                &mut |_| {},
+                &mut |_| {},
+                &mut || {},
+                &mut |_| false,
+                &mut |_| false,
+                Duration::from_secs(60),
+            )
+            .unwrap();
+        (outcome, replies.into_inner())
+    }
+
+    /// (a) 主路径同批读到 end_turn 与错误记录:半截正文照发,本轮以可「继续」的错误收尾,
+    /// 并带出错误记录的身份供 mirror 去重。
+    #[test]
+    #[ignore = "process-wide tmux fixture; run with --ignored --test-threads=1"]
+    fn main_turn_ending_in_a_stream_error_reports_it_with_the_partial_reply() {
+        let bytes = lines(&[HALF_REPLY, STREAM_STOPPED_ERROR]);
+        let end = bytes.len() as u64;
+        let (outcome, replies) = run_turn_over_replay(bytes, None);
+        assert_eq!(replies, ["已经写了一半"]);
+        assert_eq!(outcome.reply.as_deref(), Some("已经写了一半"));
+        assert_eq!(outcome.api_error.as_deref(), Some(STREAM_STOPPED_TEXT));
+        assert_eq!(
+            outcome.api_error_kind,
+            Some(AgentErrorKind::StreamInterrupted)
+        );
+        assert_eq!(
+            outcome.api_error_record,
+            Some(Box::new(ApiErrorRecordId {
+                uuid: Some("err-1".into()),
+                boundary: end,
+            }))
+        );
+    }
+
+    /// (b) 错误记录晚于主路径读到 end_turn:主路径照常收尾、不认领,留给 mirror 报。
+    #[test]
+    #[ignore = "process-wide tmux fixture; run with --ignored --test-threads=1"]
+    fn main_turn_that_ended_before_the_error_leaves_it_to_the_mirror() {
+        let (outcome, replies) =
+            run_turn_over_replay(lines(&[HALF_REPLY]), Some(lines(&[STREAM_STOPPED_ERROR])));
+        assert_eq!(replies, ["已经写了一半"]);
+        assert_eq!(outcome.api_error, None);
+        assert_eq!(outcome.api_error_record, None);
+    }
+
+    /// 额度用尽等非流中断错误:原文照报,不给「继续」。
+    #[test]
+    #[ignore = "process-wide tmux fixture; run with --ignored --test-threads=1"]
+    fn main_turn_ending_in_an_auth_error_is_not_resumable() {
+        let auth = STREAM_STOPPED_ERROR
+            .replace("\"server_error\"", "\"authentication_failed\"")
+            .replace(STREAM_STOPPED_TEXT, "Login expired · Please run /login");
+        let (outcome, _) = run_turn_over_replay(lines(&[auth.as_str()]), None);
+        assert_eq!(
+            outcome.api_error.as_deref(),
+            Some("Login expired · Please run /login")
+        );
+        assert_eq!(outcome.api_error_kind, None);
+        assert!(outcome.api_error_record.is_some());
     }
 }
