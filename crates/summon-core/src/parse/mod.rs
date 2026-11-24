@@ -1,4 +1,5 @@
 pub mod agent_msg;
+pub mod claude_api_error;
 pub mod claude_hook;
 pub mod claude_log;
 pub mod claude_session_limit;

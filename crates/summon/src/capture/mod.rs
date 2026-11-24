@@ -31,8 +31,9 @@ pub use transcript::{SubagentTail, Transcript};
 // 冷启 seed 等待复用转录 tail(`session.rs::cold_seed_wait` 调用,取代抓屏看门狗)。
 pub(crate) use transcript::{
     capture_mirror_eof_fence, mirror_eof_fence_still_valid, parse_mirror_offset_record,
-    resolve_seed_transcript, wait_first_turn_end, MirrorMarkerEvidence, MirrorOffsetBoundaryKind,
-    MirrorOffsetRecord, MirrorTurnKind, SeedWait, TurnInjection, END_TURN_GRACE,
+    resolve_seed_transcript, wait_first_turn_end, MirrorApiError, MirrorMarkerEvidence,
+    MirrorOffsetBoundaryKind, MirrorOffsetRecord, MirrorTurnKind, SeedWait, TurnInjection,
+    END_TURN_GRACE,
 };
 // 接管失败的三类结局:daemon 侧靠 `downcast_ref::<ReattachError>()` 分流(见 `reattach_next_step`)。
 pub(crate) use transcript::ReattachError;
@@ -101,13 +102,15 @@ pub struct TurnOutcome {
     pub session_ended: bool,
     /// 捕获层的静默看门狗是否按超时收口；与用户主动打断分开。
     pub timed_out: bool,
-    /// Claude API 错误(model_not_found 等):捕获层从 JSONL 的 `message.error` 字段检测到,
-    /// 上层据此把 TurnResult 标为 Failed(贴 ERROR 表情),而不是等 240s stall 超时。
+    /// Provider 报的错误原文。claude/Transcript 取自转录里的 API 错误记录,上层据此把
+    /// TurnResult 标为 Failed(贴 ERROR 表情),而不是等 240s stall 超时。
     pub api_error: Option<String>,
     /// Claude 五小时会话额度的结构化重置时刻。与错误文案分离，避免从展示文本猜日期。
     pub claude_session_limit: Option<summon_core::claude_session_limit::ClaudeSessionLimit>,
     /// Provider 的结构化失败类别。与 `api_error` 文案分离，避免靠本地化字符串决定产品行为。
     pub api_error_kind: Option<summon_core::agent_msg::AgentErrorKind>,
+    /// claude/Transcript:本轮收尾的那条 API 错误记录。会话镜像据它认出主路径已经报过这条错误。
+    pub api_error_record: Option<Box<ApiErrorRecordId>>,
     /// claude/Transcript:本轮子 agent 转录的旁路 tail(读到哪、还有谁没对上)。子 agent 比
     /// 主轮活得久时,CoT 跟随线程从这里接着读。其余捕获路恒 `None`。
     pub subagent_tail: Option<Box<SubagentTail>>,
@@ -115,6 +118,25 @@ pub struct TurnOutcome {
     pub interim_replies: usize,
     /// 主 Agent 已结束输出，将后台等待期间到达的任务交给独立轮次。
     pub yielded_to_queue: bool,
+}
+
+/// 一条 claude API 错误记录在转录里的身份。主路径与会话镜像各自读到同一条记录时据它去重。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiErrorRecordId {
+    /// 记录自己的 `uuid`。
+    pub uuid: Option<String>,
+    /// 记录所在 terminal 的边界:收尾那一行行尾之后的字节偏移,与会话镜像的 terminal 边界同一口径。
+    pub boundary: u64,
+}
+
+impl ApiErrorRecordId {
+    /// 两边都有 uuid 时按 uuid 比;缺 uuid 的(措辞兜底认出的记录)按边界比。
+    pub fn same_record(&self, other: &Self) -> bool {
+        match (&self.uuid, &other.uuid) {
+            (Some(left), Some(right)) => left == right,
+            _ => self.boundary == other.boundary,
+        }
+    }
 }
 
 /// claude/Transcript:主 Agent 已结束输出、只剩后台任务在跑的那一刻。

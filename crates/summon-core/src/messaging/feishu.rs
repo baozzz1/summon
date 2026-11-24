@@ -2211,19 +2211,27 @@ pub fn card_stream_with_interrupt_rendered(markdown: &RenderedLarkMd) -> String 
 
 /// turn 被打断后把「过程卡」(流式卡)定格的卡片:⏸ 已暂停 + 折叠已生成部分(partial)。
 /// schema 2.0(与流式卡同 schema,PATCH 不可换)。超长裁剪。
-/// 流中断卡:claude 报 `API Error: Response stalled mid-stream…` 时发一张,带「继续」按钮。
+/// 流中断卡:claude 的回复流中途断开(API 错误记录类别 `server_error`)时发一张,带错误原文与
+/// 「继续」按钮。
 ///
 /// 为什么值得单独一张卡:这一态**是可续的** —— 会话还活着、上下文都在,往里发一句「继续」就能
 /// 接着跑。只贴个 ERROR 表情等于把一个一键可恢复的情况呈现成了失败,用户还得自己想到去说「继续」。
 ///
-/// 按钮复用既有的 `retry_now` 动作(注入「继续」+ Esc),不新增动作类型。**不加二次确认**:
-/// 它不销毁任何东西,最坏是白催一次。
-pub fn card_stream_stalled(partial: &str) -> String {
+/// 按钮复用既有的 `retry_now` 动作,不新增动作类型;value 带 [`STREAM_ERROR_RETRY_FLAG`],
+/// 让点击在 claude 已停在空闲输入框时也能把「继续」送进去。**不加二次确认**:它不销毁任何
+/// 东西,最坏是白催一次。
+pub fn card_stream_stalled(partial: &str, reason: &str) -> String {
     use serde_json::json;
     let mut elements = vec![json!({
         "tag": "markdown",
         "content": summon_i18n::text!("rf508e0e2a4")
     })];
+    if !reason.trim().is_empty() {
+        elements.push(json!({
+            "tag": "markdown",
+            "content": lark_md_body(reason.trim())
+        }));
+    }
     let clipped = clip_for_stream(partial, CARD_TEXT_SAFE_LIMIT);
     let body = clipped.as_deref().unwrap_or(partial);
     if !body.trim().is_empty() {
@@ -2238,10 +2246,14 @@ pub fn card_stream_stalled(partial: &str) -> String {
     elements.push(button_row(vec![cb_btn(
         summon_i18n::text!("rd582054c8b"),
         "primary",
-        json!({"action": "retry_now"}),
+        json!({"action": "retry_now", STREAM_ERROR_RETRY_FLAG: true}),
     )]));
     json!({"schema": "2.0", "body": {"elements": elements}}).to_string()
 }
+
+/// 流中断卡「继续」按钮 value 里的标记。live 卡的「立即重试」只在 claude 停在「等 API 重试」
+/// 态时有效;流中断卡发出时 claude 已经结束这一轮、停在输入框,按钮要能在这一态下续跑。
+pub const STREAM_ERROR_RETRY_FLAG: &str = "after_stream_error";
 
 /// sentinel 授权缺口卡(**只私聊 owner**)。
 ///
@@ -7269,7 +7281,7 @@ mod tests {
                 None,
             ),
             card_stream_with_interrupt_rendered(&rendered),
-            card_stream_stalled(text),
+            card_stream_stalled(text, text),
             card_observation_interrupted_with_body(
                 &[crate::segment::TurnSegment::Reply(text.into())],
                 "12:00",
@@ -8424,13 +8436,24 @@ mod tests {
     /// 流中断卡必须给出可执行的下一步(「继续」),而不是只报个错。
     #[test]
     fn stalled_card_offers_a_continue_button() {
-        let c = card_stream_stalled("已经写了一半");
+        let c = card_stream_stalled(
+            "已经写了一半",
+            "API Error: The response stopped arriving. The response above may be incomplete.",
+        );
         assert!(c.contains("回复中断"));
         assert!(c.contains("继续"), "必须有继续按钮:{c}");
         assert!(c.contains("retry_now"), "复用既有注入动作,不新增类型:{c}");
+        assert!(
+            c.contains(STREAM_ERROR_RETRY_FLAG),
+            "按钮要能在 claude 已空闲时续跑:{c}"
+        );
         assert!(c.contains("已经写了一半"), "已生成部分要留给用户");
+        assert!(
+            c.contains("The response stopped arriving"),
+            "要带错误原文:{c}"
+        );
         // 空 partial 不渲空折叠面板。
-        assert!(!card_stream_stalled("   ").contains("collapsible_panel"));
+        assert!(!card_stream_stalled("   ", "").contains("collapsible_panel"));
     }
 
     /// 授权缺口卡必须给出**从错误原文取的** scope 名和可直接执行的命令 —— 2026-08-07 现场,

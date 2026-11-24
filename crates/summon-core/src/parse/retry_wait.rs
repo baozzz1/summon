@@ -30,14 +30,15 @@ const FIELD_SEP: &str = " · ";
 /// 前缀部分(`Waiting for API response` / `Unable to connect…`)不参与判据:不同错误类型给不同前缀。
 const RETRY_MARKER: &str = "retry";
 
-/// **流中断**错误的判据词根。claude 把它作为 assistant 的**普通 text 块**写进转录,
-/// `stop_reason=stop_sequence`、`message.error` 为 **None** —— 所以既躲过了只看 `error` 字段的
-/// `TailStep::ApiError`,又因为 `stop_sequence` 不算 `end_turn` 而不收轮。结果是这一轮一直挂到
-/// stall 兜底,错误文本还混进回复正文。这里补上识别。
+/// **流中断**错误的措辞兜底。流中断以 API 错误记录的结构化类别为准(`server_error`,见
+/// [`crate::parse::claude_api_error::ClaudeApiError::stream_interrupted`]);这里只给没有类别的
+/// 记录用。
 ///
-/// 实测原文:`API Error: Response stalled mid-stream. The response above may be incomplete.`
-/// 只取最稳的词根组合(`api error` + `stalled`),文案微调不至于漏判。
-const STALL_MARKERS: [&str; 2] = ["api error", "stalled"];
+/// 实测措辞:`API Error: Response stalled mid-stream. The response above may be incomplete.`、
+/// `API Error: The response stopped arriving. The response above may be incomplete.`。
+/// 取词根组合:`api error` 加上 `stalled` 或 `may be incomplete` 之一。
+const STALL_PREFIX: &str = "api error";
+const STALL_MARKERS: [&str; 2] = ["stalled", "may be incomplete"];
 
 /// 这段 assistant 文本是不是「流中断,回复可能不完整」。
 ///
@@ -53,7 +54,7 @@ pub fn is_stream_stall(text: &str) -> bool {
         return false;
     }
     let lower = t.to_lowercase();
-    STALL_MARKERS.iter().all(|m| lower.contains(m))
+    lower.contains(STALL_PREFIX) && STALL_MARKERS.iter().any(|m| lower.contains(m))
 }
 
 /// 尽力把 pane 解析成「等 API 重试」态。判据(三条全满足):/// 尽力把 pane 解析成「等 API 重试」态。判据(三条全满足):
@@ -241,6 +242,9 @@ mod stall_tests {
     fn real_stall_text_is_recognized() {
         assert!(is_stream_stall(
             "API Error: Response stalled mid-stream. The response above may be incomplete."
+        ));
+        assert!(is_stream_stall(
+            "API Error: The response stopped arriving. The response above may be incomplete."
         ));
     }
 

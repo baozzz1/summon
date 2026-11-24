@@ -941,15 +941,33 @@ pub(super) fn handle_tui_inject(
             return;
         }
     }
-    // 立即重试的陈旧点击防护。判据必须是**重试态本身仍在**:claude 一旦自己恢复,注入的
-    // 「继续」就落到空闲 prompt 上、凭空多跑一整轮 —— 那恰恰是这个按钮要替用户避免的事。
-    // 不 `finalize_card`:这个按钮长在 live 卡上,由 chat 线程持续 patch,外部覆盖会和它打架;
-    // 重试态一结束,下一个心跳就把按钮和倒计时一起抹掉。
+    // 立即重试的陈旧点击防护。live 卡上的按钮,判据必须是**重试态本身仍在**:claude 一旦自己
+    // 恢复,注入的「继续」就落到空闲 prompt 上、凭空多跑一整轮 —— 那恰恰是这个按钮要替用户避免
+    // 的事。不 `finalize_card`:这个按钮长在 live 卡上,由 chat 线程持续 patch,外部覆盖会和它
+    // 打架;重试态一结束,下一个心跳就把按钮和倒计时一起抹掉。
+    //
+    // 流中断卡上的同一个按钮发生在那一轮已经因 API 错误结束之后:claude 停在空闲输入框,续跑
+    // 正是要「继续」落到空闲 prompt 上。判据换成「此刻是空输入框」(只读判定,不按键),忙着
+    // (已经在续跑、或别的轮在跑)和停在面板上都按过期丢弃,不打断、不往草稿里追加。
+    let mut resume_idle = false;
     if action == "retry_now" {
         let pane = tmux.capture().unwrap_or_default();
         if summon_core::retry_wait::parse_retry_wait(&pane).is_none() {
-            log(&summon_i18n::format!("r3350e76a1a", agent.name));
-            return;
+            let after_stream_error = card
+                .value
+                .get(summon_core::feishu::STREAM_ERROR_RETRY_FLAG)
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            if !after_stream_error
+                || !crate::session::input_gate::observe_idle_prompt(
+                    &tmux,
+                    crate::session::input_gate::GateTiming::default(),
+                )
+            {
+                log(&summon_i18n::format!("r3350e76a1a", agent.name));
+                return;
+            }
+            resume_idle = true;
         }
     }
     // copy-mode(滚屏)会吞 send-keys,注入前先退出一次(幂等),与正规 prompt 注入路径一致(review #6)。
@@ -1000,6 +1018,11 @@ pub(super) fn handle_tui_inject(
         // 重发,队列里的「继续」最多是句无害跟进;若 Esc 结束了这一轮,「继续」正好被消费、接着往下做。
         // 反过来先 Esc 则会留下一个无人接续的空档。
         // 用「继续」而不是重发原 prompt:本轮已做过的工具调用都还在上下文里,重发会让它重复执行一段。
+        // 流中断后续跑:没有在跑的请求可打断,只送「继续」。
+        "retry_now" if resume_idle => {
+            log(&summon_i18n::format!("r1d6a5e3b90", agent.name));
+            tmux.send_line(summon_i18n::text!("r7c9691192f"))
+        }
         "retry_now" => {
             log(&summon_i18n::format!("r71374dd735", agent.name));
             (|| -> std::io::Result<()> {

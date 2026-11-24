@@ -70,6 +70,9 @@ Provider 报错或执行失败时会发独立通知卡，卡片保留具体错�
 例如 `Selected model is at capacity. Please try a different model.` 表示所选模型当前容量不足，
 可通过 `/model` 选择其他可用模型后重新发起。通知本身不会切换模型或自动重试。
 额度超限和流中断使用各自的恢复卡；用户主动打断与优雅重启接管不发通用失败卡。
+Claude 的 API 报错不论落在本轮收尾之前还是之后都会发到群里：流中断（`API Error: The response stopped arriving…`
+等）发带「继续」按钮的流中断卡，已经发出的半截回复保留；其余报错发失败卡并附原文。本轮收尾后才出现的报错由会话镜像
+（`messaging.session_mirror`）发出，关闭镜像时只有本轮之内读到的报错会发。
 Daemon 硬崩后，未完成任务按恢复卡选择继续；排错时结合 `summon daemon status` 与日志。
 
 ## 要把问题交给维护者
