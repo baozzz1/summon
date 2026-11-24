@@ -87,14 +87,14 @@ pub(crate) fn spawn_subagent_watcher(
 }
 
 /// 一个 sid 对应的观测目标(转录路径 + subagents 目录)。
-struct WatchTarget {
-    sid: String,
-    transcript_path: std::path::PathBuf,
-    subagents_dir: std::path::PathBuf,
+pub(super) struct WatchTarget {
+    pub(super) sid: String,
+    pub(super) transcript_path: std::path::PathBuf,
+    pub(super) subagents_dir: std::path::PathBuf,
 }
 
 /// 解析当前 sid 的观测目标。转录路径解析失败 → None(下个 tick 再试)。
-fn resolve_target(
+pub(super) fn resolve_target(
     agent: &Agent,
     tmux_name: &str,
     chat_id: Option<&str>,

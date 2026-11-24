@@ -12594,6 +12594,31 @@ mod tests {
         assert!(!record.stream_interrupted());
     }
 
+    /// 子 agent 的 API 错误记录写在子 agent 自己的转录里,只经旁路 tail 进 CoT(主 tail 读不到
+    /// 子转录,见 `subagent_lines_never_reach_the_main_turn_tail`)。旁路交出的事件不带错误终态
+    /// 标记,主 agent 照常往下跑;子 agent 的错误另由 daemon 的子 agent 上报线程发提示。
+    #[test]
+    fn a_subagent_api_error_never_ends_the_main_turn() {
+        let sidechain =
+            STREAM_STOPPED_ERROR.replace("\"isSidechain\":false", "\"isSidechain\":true");
+        let (_dir, main) = subagent_fixture();
+        let mut sub = SubagentTail::new(&main, "sid-1");
+        sub.note(&agent_call("toolu_parent"));
+        write_subagent(&main, "a1", "toolu_parent", &lines(&[sidechain.as_str()]));
+        let mut seen = Vec::new();
+        assert!(sub.poll(
+            &crate::runtime::executor::LocalExecutor,
+            Instant::now(),
+            &mut |msg| seen.push(msg.clone())
+        ));
+        assert!(!seen.is_empty());
+        assert!(
+            seen.iter()
+                .all(|msg| msg.error.is_none() && msg.error_kind.is_none()),
+            "{seen:?}"
+        );
+    }
+
     /// mirror 观察到的一件事,按发生顺序记下。
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum MirrorSeen {

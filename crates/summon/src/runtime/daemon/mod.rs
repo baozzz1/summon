@@ -199,6 +199,7 @@ mod sentinel;
 /// 主线程的停机等待器:自管道坏了退回轮询停机 flag,不让 daemon 随之退出。
 mod shutdown_wait;
 mod steward;
+mod subagent_api_error;
 mod subagent_card;
 mod subagent_watcher;
 mod teardown;
@@ -244,6 +245,7 @@ use reattach::*;
 use record::*;
 #[cfg(debug_assertions)]
 pub(crate) use record::{record_flag_file, record_outbound_timeline, InboundRecord};
+use subagent_api_error::*;
 use subagent_watcher::*;
 pub(crate) use teardown::now_unix_ms;
 use teardown::*;

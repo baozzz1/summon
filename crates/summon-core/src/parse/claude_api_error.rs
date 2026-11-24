@@ -30,10 +30,23 @@ impl ClaudeApiError {
     }
 
     pub fn from_value(value: &Value) -> Option<Self> {
-        // 子 agent 的记录不代表主轮的结局(主 agent 可以自己处理子 agent 的失败)。
-        if value.get("type").and_then(Value::as_str) != Some("assistant")
-            || value.get("isSidechain").and_then(Value::as_bool) == Some(true)
-        {
+        // 子 agent 的记录不代表主轮的结局(主 agent 可以自己处理子 agent 的失败):按它收主轮会
+        // 截断仍在运行的主 agent。子 agent 的错误另经 [`Self::from_subagent_line`] 单独上报。
+        if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            return None;
+        }
+        Self::from_record(value)
+    }
+
+    /// 子 agent 转录(`<sid>/subagents/agent-<id>.jsonl`,记录都带 `isSidechain: true`)里的一行
+    /// 是不是 API 错误记录。判据与主转录相同,只是不排除子 agent 的记录。
+    pub fn from_subagent_line(line: &str) -> Option<Self> {
+        let value: Value = serde_json::from_str(line.trim()).ok()?;
+        Self::from_record(&value)
+    }
+
+    fn from_record(value: &Value) -> Option<Self> {
+        if value.get("type").and_then(Value::as_str) != Some("assistant") {
             return None;
         }
         let message = value.get("message");
@@ -182,6 +195,36 @@ mod tests {
             "not json",
         ] {
             assert_eq!(ClaudeApiError::from_line(line), None, "{line}");
+        }
+    }
+
+    /// 实测子 agent 记录(2.1.304):`isSidechain` 与 `agentId` 之外与主转录同形。主转录口径
+    /// 不认它(不收主轮),子 agent 口径认它。
+    #[test]
+    fn subagent_records_are_recognized_only_on_the_subagent_path() {
+        let line = r#"{"parentUuid":"p-9","isSidechain":true,"agentId":"a8d4e49d8e32008b9","type":"assistant","uuid":"sub-err-1","timestamp":"2026-10-20T07:19:57.993Z","error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"message":{"model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","error":null,"content":[{"type":"text","text":"You've hit your weekly limit · resets Oct 23 at 3pm (Asia/Singapore)"}]}}"#;
+        assert_eq!(
+            ClaudeApiError::from_line(line),
+            None,
+            "主转录口径不认子 agent 记录"
+        );
+        let error = ClaudeApiError::from_subagent_line(line).expect("子 agent 的 API 错误记录");
+        assert_eq!(error.uuid.as_deref(), Some("sub-err-1"));
+        assert_eq!(error.category.as_deref(), Some("rate_limit"));
+        assert_eq!(
+            error.reason(),
+            "You've hit your weekly limit · resets Oct 23 at 3pm (Asia/Singapore)"
+        );
+        for ordinary in [
+            r#"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"API Error: The response stopped arriving 这句怎么处理"}]}}"#,
+            r#"{"type":"user","isSidechain":true,"isApiErrorMessage":true,"error":"server_error","message":{"content":"hi"}}"#,
+            "not json",
+        ] {
+            assert_eq!(
+                ClaudeApiError::from_subagent_line(ordinary),
+                None,
+                "{ordinary}"
+            );
         }
     }
 }
