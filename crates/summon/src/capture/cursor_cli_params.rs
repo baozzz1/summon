@@ -7,9 +7,9 @@
 //!
 //! 所以轴与合法取值只能来自真实目录，而目录只有 ACP 给：后台一次性起 `cursor-agent acp`(独立临时
 //! 配置根),initialize + `session/new` 拿模型列表，再对每个模型 `session/set_config_option model=<id>`
-//! 读它的参数轴与默认值，不发 prompt。解析复用 [`CursorAcpClient`] 的严格解析。目录按账号作用域
-//! 缓存在内存并落盘到 agent 状态目录,daemon 重启后不必等下一次探测；从未探测成功时 CLI 通道保持
-//! 平铺模型列表的旧行为。
+//! 读它的参数轴与默认值，不发 prompt。解析复用 [`CursorAcpClient`] 的严格解析。目录缓存在内存并
+//! 落盘到 agent 状态目录，读路径只读这份缓存，不算环境、不起进程；只有探测成功才替换它。这个 agent
+//! 从没探测成功过时，面板列平铺模型，每轮按平铺模型启动。
 //!
 //! 意图存储复用 [`super::cursor_config`] 的两层 bundle。一轮的模型按这个顺序取：本群 bundle 模型 >
 //! 本群平铺模型(`threads/<tag>/model`) > 默认 bundle 模型 > agent.yaml `model`;取到 bundle 模型时
@@ -17,7 +17,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -62,12 +61,45 @@ struct StoredCatalog {
     catalog: CursorParameterCatalog,
 }
 
-/// 账号作用域：同一 agent 换了 `cli_cmd` 或环境(可能是另一个 Cursor 账号)时旧目录作废。只存摘要。
+/// 决定 cursor-agent 连哪个账号、哪个服务端的环境变量(cursor-agent 2026.11.22 的读取点):认证文件在
+/// `$XDG_CONFIG_HOME/cursor` 或 `$HOME/.config/cursor`,另有令牌与服务端地址覆盖。PATH、语言、代理等
+/// 与账号无关，不进账号作用域。
+const ACCOUNT_ENV_KEYS: [&str; 5] = [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "CURSOR_API_KEY",
+    "CURSOR_AUTH_TOKEN",
+    "CURSOR_API_ENDPOINT",
+];
+
+/// 账号作用域摘要：程序路径 + [`ACCOUNT_ENV_KEYS`] 的取值，SHA-256 前 16 字节的十六进制。
+/// 跨进程、跨 Rust 版本稳定，只落摘要不落令牌原文。
 pub(crate) fn account_key(program: &str, env: &[(String, String)]) -> String {
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    program.hash(&mut hash);
-    env.hash(&mut hash);
-    format!("{:016x}", hash.finish())
+    let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut field = |value: &str| {
+        context.update(&(value.len() as u64).to_le_bytes());
+        context.update(value.as_bytes());
+    };
+    field(program);
+    for key in ACCOUNT_ENV_KEYS {
+        let value = env
+            .iter()
+            .rev()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str());
+        field(key);
+        match value {
+            Some(value) => field(value),
+            None => field("\0unset"),
+        }
+    }
+    context
+        .finish()
+        .as_ref()
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 type Store = Mutex<HashMap<PathBuf, (String, CursorParameterCatalog)>>;
@@ -81,32 +113,33 @@ fn catalog_path(agent: &Agent) -> PathBuf {
     agent.state_dir().join(CATALOG_FILE)
 }
 
-/// 这个 agent 当前账号下的参数目录。内存没有就读盘；从未探测成功 → `None`。
+/// 这个 agent 最近一次探测成功的参数目录。内存没有就读盘；从未探测成功 → `None`。
+///
+/// 跑在 chat 线程上(面板渲染、每轮启动),所以只读缓存，不解析环境。账号作用域只在探测线程里比对：
+/// 账号变了也沿用旧目录，直到新探测成功替换它 —— 目录只决定参数轴与默认值，旧目录拼出的值不合法时
+/// CLI 会当场拒绝；丢掉它却会让用户存的参数悄悄失效，换成平铺模型跑。
 pub fn cached(agent: &Agent) -> Option<CursorParameterCatalog> {
-    let (program, env) = crate::codex::model_catalog::cursor_cli_identity(agent);
-    cached_for_account(agent, &account_key(&program, &env))
+    stored(agent).map(|(_, catalog)| catalog)
 }
 
-fn cached_for_account(agent: &Agent, account: &str) -> Option<CursorParameterCatalog> {
+fn stored(agent: &Agent) -> Option<(String, CursorParameterCatalog)> {
     let key = agent.state_dir();
-    if let Some((stored, catalog)) = store()
+    if let Some(entry) = store()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(&key)
     {
-        if stored == account {
-            return Some(catalog.clone());
-        }
+        return Some(entry.clone());
     }
-    let loaded = load_from_disk(agent, account)?;
+    let loaded = load_from_disk(agent)?;
     store()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .insert(key, (account.to_string(), loaded.clone()));
+        .insert(key, loaded.clone());
     Some(loaded)
 }
 
-fn load_from_disk(agent: &Agent, account: &str) -> Option<CursorParameterCatalog> {
+fn load_from_disk(agent: &Agent) -> Option<(String, CursorParameterCatalog)> {
     use std::io::Read as _;
     let path = catalog_path(agent);
     let metadata = std::fs::symlink_metadata(&path).ok()?;
@@ -120,10 +153,8 @@ fn load_from_disk(agent: &Agent, account: &str) -> Option<CursorParameterCatalog
         .read_to_end(&mut bytes)
         .ok()?;
     let stored: StoredCatalog = serde_json::from_slice(&bytes).ok()?;
-    (stored.version == CATALOG_VERSION
-        && stored.account == account
-        && catalog_is_usable(&stored.catalog))
-    .then_some(stored.catalog)
+    (stored.version == CATALOG_VERSION && catalog_is_usable(&stored.catalog))
+        .then_some((stored.account, stored.catalog))
 }
 
 fn catalog_is_usable(catalog: &CursorParameterCatalog) -> bool {
@@ -147,7 +178,8 @@ pub(crate) fn record(agent: &Agent, account: &str, catalog: CursorParameterCatal
             {
                 log(&summon_i18n::format!(
                     "cursor_cli_params.store_failed",
-                    agent.name
+                    agent.name,
+                    error = error
                 ));
             }
         }
@@ -172,6 +204,12 @@ pub(crate) fn refresh(
     publish_killer: &mut dyn FnMut(Option<ChildKiller>),
 ) -> Result<bool, String> {
     let account = account_key(program, env);
+    if stored(agent).is_some_and(|(previous, _)| previous != account) {
+        log(&summon_i18n::format!(
+            "cursor_cli_params.account_changed",
+            agent.name
+        ));
+    }
     match probe(agent, program, env, stopped, publish_killer)? {
         Some(catalog) => {
             let models = catalog.models.len();
@@ -271,7 +309,8 @@ fn probe_with(
             Err(error) => log(&summon_i18n::format!(
                 "cursor_cli_params.probe_axes_skipped",
                 agent_name,
-                model
+                model,
+                error = error
             )),
         }
     }
@@ -489,8 +528,7 @@ pub(crate) fn clear_memory_for_test(agent: &Agent) {
 
 #[cfg(test)]
 pub(crate) fn record_for_test(agent: &Agent, catalog: CursorParameterCatalog) {
-    let (program, env) = crate::codex::model_catalog::cursor_cli_identity(agent);
-    record(agent, &account_key(&program, &env), catalog);
+    record(agent, "test-account", catalog);
 }
 
 #[cfg(test)]
@@ -742,16 +780,71 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_recorded_catalog_survives_a_restart_and_is_scoped_to_the_account() {
+    fn a_recorded_catalog_survives_a_restart_and_an_account_change() {
         let (agent, _tmp) = cli_agent();
-        record_for_test(&agent, sample_catalog());
+        record(&agent, "old-account", sample_catalog());
         clear_memory_for_test(&agent);
         assert_eq!(cached(&agent), Some(sample_catalog()), "盘上那份要读得回来");
+        assert_eq!(stored(&agent).unwrap().0, "old-account");
+        // 读路径不比账号：盘上目录一直沿用到新探测成功。
+        cursor_config::set_chat_selected_model(&agent, "g-a", 0, Some("gpt-5.6-sol")).unwrap();
         clear_memory_for_test(&agent);
-        assert_eq!(cached_for_account(&agent, "another-account"), None);
+        assert_eq!(
+            model_for_turn(&agent, "g-a").unwrap().as_deref(),
+            Some("gpt-5.6-sol[context=272k,reasoning=medium,fast=false]")
+        );
         // 空目录不覆盖好目录。
-        record_for_test(&agent, CursorParameterCatalog::default());
+        record(&agent, "new-account", CursorParameterCatalog::default());
         assert_eq!(cached(&agent), Some(sample_catalog()));
+    }
+
+    fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_account_key_ignores_launch_environment_noise_but_tracks_the_account() {
+        let base = env(&[
+            ("PATH", "/usr/bin"),
+            ("HOME", "/srv/account-a"),
+            ("LANG", "C"),
+            ("TMPDIR", "/tmp/a"),
+        ]);
+        let key = account_key("/bin/cursor-agent", &base);
+        assert_eq!(key.len(), 32);
+        assert_eq!(
+            key,
+            account_key(
+                "/bin/cursor-agent",
+                &env(&[
+                    ("HOME", "/srv/account-a"),
+                    ("PATH", "/opt/homebrew/bin:/usr/bin"),
+                    ("TERM", "xterm"),
+                    ("HTTPS_PROXY", "http://proxy"),
+                    ("XDG_CACHE_HOME", "/c"),
+                ])
+            ),
+            "launchd / systemd / shell 起的 daemon 只在这些变量上不同，账号是同一个"
+        );
+        // 固定值：跨进程、跨 Rust 版本都不能变。
+        assert_eq!(key, "9ae93c8d5b00d344654efe7494e0ee2b");
+        for changed in [
+            account_key("/other/cursor-agent", &base),
+            account_key("/bin/cursor-agent", &env(&[("HOME", "/srv/account-b")])),
+            account_key(
+                "/bin/cursor-agent",
+                &env(&[("HOME", "/srv/account-a"), ("CURSOR_API_KEY", "k")]),
+            ),
+            account_key(
+                "/bin/cursor-agent",
+                &env(&[("HOME", "/srv/account-a"), ("XDG_CONFIG_HOME", "/cfg")]),
+            ),
+        ] {
+            assert_ne!(changed, key);
+        }
     }
 
     #[test]

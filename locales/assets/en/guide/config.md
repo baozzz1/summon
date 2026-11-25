@@ -157,7 +157,7 @@ the catalog use local `summon agents model <agent> <id>`.
   only changed axes. With capture: cli, a background one-shot ACP probe supplies the
   parameter catalog (state/cursor-cli-parameter-catalog.json) and each turn passes the
   model with every axis as --model 'base[k=v,...]', refusing the turn if that is invalid;
-  until a probe succeeds the panel keeps the flat model list. Claude /model and /effort also update local user settings
+  before any probe succeeds the panel lists flat models. Claude /model and /effort also update local user settings
   (~/.claude/settings.json model and modelSettings.<model>.effortLevel), affecting later
   unparameterized Claude launches. Summon explicitly passes configured values.
 - `reasoning_summary`: Codex none / concise / auto / detailed.

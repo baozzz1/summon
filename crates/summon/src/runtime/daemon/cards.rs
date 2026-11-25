@@ -2397,7 +2397,7 @@ pub(super) fn uses_rpc_model(agent: &Agent) -> bool {
 }
 
 /// 面板与 `/model` 是否走 Cursor 参数 bundle:ACP 恒走；CLI 通道拿到过参数目录才走，
-/// 从没探测成功时保持平铺模型列表。
+/// 从没探测成功时面板列平铺模型。
 pub(super) fn uses_cursor_parameters(agent: &Agent) -> bool {
     uses_rpc_model(agent) || cursor_cli_parameter_catalog(agent).is_some()
 }

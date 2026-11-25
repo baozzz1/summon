@@ -125,7 +125,7 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
   Cursor 参数化 ACP 的默认是 `state/cursor-parameters.json`,本群覆盖在 `state/threads/<tag>/` 下的同名
   文件,只记本群改过的轴。CLI 通道(`capture: cli`)的参数目录由后台一次性 ACP 探测取得(缓存在
   `state/cursor-cli-parameter-catalog.json`),每轮把选中的模型与全部参数拼成 `--model 'base[k=v,...]'`,
-  拼不出合法值时拒绝这一轮;探测从未成功前面板保持平铺模型列表。claude 会话里注入 `/model`、`/effort` 会顺带改写本机用户设置
+  拼不出合法值时拒绝这一轮;这个 agent 从未探测成功时面板列平铺模型。claude 会话里注入 `/model`、`/effort` 会顺带改写本机用户设置
   (`~/.claude/settings.json` 的 `model` 与 `modelSettings.<模型>.effortLevel`),影响之后不带参数新起的
   claude;summon 起的会话任一层有值就显式带参数,不受它影响。
   `reasoning_summary` 控制 Codex 思考摘要（`none` / `concise` / `auto` / `detailed`）。
