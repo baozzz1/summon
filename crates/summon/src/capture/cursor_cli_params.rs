@@ -910,7 +910,13 @@ done
         assert_eq!(requests.matches("session/set_config_option").count(), 1);
         let config_dir = std::fs::read_to_string(tmp.path().join("config-dirs")).unwrap();
         let config_dir = std::path::Path::new(config_dir.trim());
-        assert!(config_dir.starts_with(agent.state_dir().join("cursor-config")));
+        // 探测在规范化后的 agent 根下建配置目录；macOS 的临时目录经 /var → /private/var 软链。
+        let expected_root = agent
+            .state_dir()
+            .join("cursor-config")
+            .canonicalize()
+            .unwrap();
+        assert!(config_dir.starts_with(&expected_root));
         assert!(!config_dir.exists(), "探测用的配置根用完即删");
     }
 
