@@ -4156,6 +4156,9 @@ fn promote_cursor_chat_to_default(agent: &Agent, tag: &str) -> anyhow::Result<()
     if !uses_cursor_parameters(agent) {
         anyhow::bail!(summon_i18n::format!("r1c73433aa3"));
     }
+    if let Some(catalog) = cursor_cli_parameter_catalog(agent) {
+        return promote_cursor_cli_chat_to_default(agent, tag, &catalog);
+    }
     let fresh = fresh_cursor_agent(agent);
     crate::capture::cursor_config::promote_chat_target_to_default(&fresh, tag).map_err(
         |error| {
@@ -4174,6 +4177,57 @@ fn promote_cursor_chat_to_default(agent: &Agent, tag: &str) -> anyhow::Result<()
             }
         },
     )?;
+    Ok(())
+}
+
+/// CLI 通道的「本群这套设为默认」:按每轮取模型的优先级(本群参数化 > 本群平铺 > 默认参数化 >
+/// agent.yaml)得到本群此刻生效的模型与参数，整组写成默认 bundle。平铺模型不在参数目录里时没法写成
+/// 参数化默认，明确拒绝。
+fn promote_cursor_cli_chat_to_default(
+    agent: &Agent,
+    tag: &str,
+    catalog: &crate::capture::cursor_cli_params::CursorParameterCatalog,
+) -> anyhow::Result<()> {
+    let fresh = fresh_cursor_agent(agent);
+    let read_error = |error: crate::capture::cursor_config::CursorConfigError| {
+        log(&summon_i18n::format!(
+            "reb525e5dc8",
+            agent.name,
+            error.diagnostic()
+        ));
+        anyhow::anyhow!(error.to_string())
+    };
+    let generation = crate::capture::cursor_config::load(&fresh)
+        .map_err(read_error)?
+        .bundle
+        .generation;
+    let (model, options) =
+        match crate::capture::cursor_cli_params::selection(&fresh, tag).map_err(read_error)? {
+            Some(selection) => (selection.model, selection.options),
+            None => {
+                let flat = crate::runtime::chat_model::effective(&fresh, Some(tag))
+                    .model
+                    .ok_or_else(|| anyhow::anyhow!(summon_i18n::format!("rb10bb5c31a")))?;
+                if !catalog.models.contains(&flat) {
+                    anyhow::bail!(summon_i18n::format!(
+                        "cursor_cli_params.promote_flat_model",
+                        model = summon_core::feishu::escape_lark_md(&flat)
+                    ));
+                }
+                (flat, Default::default())
+            }
+        };
+    crate::capture::cursor_config::set_default_target(&fresh, generation, &model, options)
+        .map_err(|error| {
+            log(&summon_i18n::format!(
+                "reb525e5dc8",
+                agent.name,
+                error.diagnostic()
+            ));
+            anyhow::anyhow!(::summon_core::i18n::label(
+                CURSOR_PARAMETER_PERSISTENCE_PUBLIC_ERROR
+            ))
+        })?;
     Ok(())
 }
 
@@ -9027,6 +9081,64 @@ mod cursor_cli_parameter_tests {
             summon_i18n::text!("cursor_cli_params.catalog_unavailable")
         );
         assert_eq!(cursor_cli_params::model_for_turn(&agent, &tag), Ok(None));
+    }
+
+    /// 「本群这套设为默认」与每轮取模型同一优先级：默认 bundle 是 A、本群平铺是 B 时，本群实际跑 B,
+    /// 提升后默认就是 B。
+    #[test]
+    fn promoting_follows_the_cli_turn_priority() {
+        let (agent, _tmp) = cli_agent("model: claude-opus-5\n");
+        cursor_cli_params::record_for_test(&agent, sample_catalog());
+        let tag = chat_tag("p2p", "oc_cli_promote");
+        let other = chat_tag("p2p", "oc_cli_other");
+        let view = cursor_config::load(&agent).unwrap();
+        cursor_config::set_selected_model(&agent, view.bundle.generation, "gemini-3.1-pro")
+            .unwrap();
+        crate::runtime::chat_model::set_chat_model(&agent, &tag, Some("gpt-5.6-sol")).unwrap();
+        assert_eq!(
+            resolve_panel_model(&agent, &tag, &resolve_messaging(&agent))
+                .value
+                .as_deref(),
+            Some("gpt-5.6-sol")
+        );
+        promote_cursor_chat_to_default(&agent, &tag).unwrap();
+        assert_eq!(
+            cursor_config::load(&agent).unwrap().selected_model(),
+            Some("gpt-5.6-sol")
+        );
+        assert_eq!(
+            cursor_cli_params::model_for_turn(&agent, &other)
+                .unwrap()
+                .as_deref(),
+            Some("gpt-5.6-sol[context=272k,reasoning=medium,fast=false]")
+        );
+
+        // 本群参数化选择带参数：提升后默认层的生效值与本群一致。
+        apply_cursor_selected_model(&agent, &tag, Some("claude-opus-5"), LayerTarget::Chat)
+            .unwrap();
+        apply_cursor_config_option(&agent, &tag, "effort", Some("low")).unwrap();
+        let chat_turn = cursor_cli_params::model_for_turn(&agent, &tag).unwrap();
+        promote_cursor_chat_to_default(&agent, &tag).unwrap();
+        assert_eq!(
+            cursor_cli_params::model_for_turn(&agent, &other).unwrap(),
+            chat_turn
+        );
+    }
+
+    #[test]
+    fn promoting_without_bundles_uses_agent_yaml_and_refuses_flat_ids_outside_the_catalog() {
+        let (agent, _tmp) = cli_agent("model: claude-opus-5\n");
+        cursor_cli_params::record_for_test(&agent, sample_catalog());
+        let tag = chat_tag("p2p", "oc_cli_promote_yaml");
+        promote_cursor_chat_to_default(&agent, &tag).unwrap();
+        assert_eq!(
+            cursor_config::load(&agent).unwrap().selected_model(),
+            Some("claude-opus-5")
+        );
+        crate::runtime::chat_model::set_chat_model(&agent, &tag, Some("gpt-5.6-sol-high")).unwrap();
+        let before = cursor_config::load(&agent).unwrap();
+        assert!(promote_cursor_chat_to_default(&agent, &tag).is_err());
+        assert_eq!(cursor_config::load(&agent).unwrap(), before);
     }
 
     /// 每轮起进程的接线：参数化选择拼出的值优先进 `TurnCtx.model`(→ `--model`),拼不出就不起这一轮。

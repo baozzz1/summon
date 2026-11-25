@@ -6993,5 +6993,6 @@
   "cursor_cli_params.catalog_unavailable": "The Cursor parameter catalog is not ready yet (background probe has not succeeded); only flat models can be switched for now. Retry later.",
   "cursor_cli_params.no_model": "This chat has no parameterized model yet; pick one in the `/session` panel or with `/model` before changing parameters.",
   "cursor_cli_params.notice_failed": "[{}] Failed to deliver the Cursor parameter error notice (ignored): {send_error}",
-  "cursor_cli_params.account_changed": "[{}] Cursor account scope changed; keeping the previous parameter catalog until this probe succeeds"
+  "cursor_cli_params.account_changed": "[{}] Cursor account scope changed; keeping the previous parameter catalog until this probe succeeds",
+  "cursor_cli_params.promote_flat_model": "This chat's flat model `{model}` is not in the Cursor parameter catalog, so it cannot become the parameterized default; use `/model default <id>` to change the bot default model."
 }

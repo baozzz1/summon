@@ -368,6 +368,34 @@ pub fn promote_chat_target_to_default(
     })?
 }
 
+/// 默认 bundle 选中 `model`,该模型的 profile 整组换成 `options`(generation-CAS)。CLI 通道的
+/// 「本群这套设为默认」按每轮取模型的优先级算好目标后经这里写入。
+pub fn set_default_target(
+    agent: &Agent,
+    expected_generation: u64,
+    model: &str,
+    options: BTreeMap<String, String>,
+) -> Result<CursorConfigView, CursorConfigError> {
+    let model = normalize_input(model, "model", MAX_MODEL_BYTES)?;
+    let mut normalized = BTreeMap::new();
+    for (id, value) in options {
+        normalized.insert(
+            normalize_input(&id, "option id", MAX_OPTION_ID_BYTES)?,
+            normalize_input(&value, "option value", MAX_OPTION_VALUE_BYTES)?,
+        );
+    }
+    mutate(agent, expected_generation, move |bundle| {
+        bundle.selected_model = Some(model.clone());
+        bundle.profiles.insert(
+            model,
+            CursorModelProfile {
+                options: normalized,
+            },
+        );
+        Ok(())
+    })
+}
+
 /// 本群覆盖只记改过的轴:空 profile 只在它是本群选中模型时保留(校验要求选中模型有 profile)。
 fn prune_empty_profiles(bundle: &mut CursorConfigBundle) {
     let selected = bundle.selected_model.clone();

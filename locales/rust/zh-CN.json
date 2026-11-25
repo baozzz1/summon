@@ -6993,5 +6993,6 @@
   "cursor_cli_params.catalog_unavailable": "Cursor 参数目录尚未就绪(后台探测还没成功),暂时只能切换平铺模型；请稍后再试。",
   "cursor_cli_params.no_model": "本群还没有选参数化模型；先在 `/session` 面板或 `/model` 里选一个模型，再调参数。",
   "cursor_cli_params.notice_failed": "[{}] Cursor 参数错误提示派发失败(忽略): {send_error}",
-  "cursor_cli_params.account_changed": "[{}] Cursor 账号作用域变了，沿用旧参数目录直到这次探测成功"
+  "cursor_cli_params.account_changed": "[{}] Cursor 账号作用域变了，沿用旧参数目录直到这次探测成功",
+  "cursor_cli_params.promote_flat_model": "本群当前用的平铺模型 `{model}` 不在 Cursor 参数目录里，不能写成参数化默认；改 bot 默认模型请用 `/model default <id>`。"
 }
