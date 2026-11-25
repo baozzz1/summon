@@ -1108,8 +1108,24 @@ pub(super) fn handle_tui_inject(
             finalize_card(agent, fc, chats, card, &done);
         }
         _ => {
-            finalize_card(agent, fc, chats, card, summon_i18n::text!("r9868d6b169"));
+            finalize_card(
+                agent,
+                fc,
+                chats,
+                card,
+                injection_receipt(action, resume_idle),
+            );
         }
+    }
+}
+
+/// 简单注入成功后写回原卡的确认行，按实际送出的按键写：「继续」按钮在流中断卡上只送「继续」，
+/// 在等 API 重试的 live 卡上送「继续」+ Esc；单独一个 Esc 只属于取消菜单。
+fn injection_receipt(action: &str, resume_idle: bool) -> &'static str {
+    match action {
+        "retry_now" if resume_idle => summon_i18n::text!("r4e1c7a2b90"),
+        "retry_now" => summon_i18n::text!("r6b3d9f0e57"),
+        _ => summon_i18n::text!("r9868d6b169"),
     }
 }
 
@@ -5464,6 +5480,19 @@ mod model_candidates_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn injection_receipt_names_the_keys_actually_sent() {
+        let resume = super::injection_receipt("retry_now", true);
+        let retry = super::injection_receipt("retry_now", false);
+        let esc = super::injection_receipt("tui_esc", false);
+        assert_eq!(esc, summon_i18n::text!("r9868d6b169"));
+        assert_eq!(resume, summon_i18n::text!("r4e1c7a2b90"));
+        assert_eq!(retry, summon_i18n::text!("r6b3d9f0e57"));
+        assert_ne!(resume, esc);
+        assert_ne!(retry, esc);
+        assert_ne!(resume, retry);
+    }
+
     #[test]
     fn ended_archive_delivery_failures_report_committed_archive_state() {
         let (agent, _tmp) = crate::test_support::agent_dir("codex", "");

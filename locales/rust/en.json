@@ -3809,6 +3809,8 @@
   "r5ff11257de": "[{}] Interactive choice terminal card replacement failed; ordinary receipt fallback: {e}",
   "r3bd8d49982": "✅ Entered and submitted: `{}`",
   "r9868d6b169": "✅ Esc sent (cancel menu).",
+  "r4e1c7a2b90": "✅ “Continue” sent.",
+  "r6b3d9f0e57": "✅ “Continue” sent and the pending retry wait interrupted.",
   "re2614a2c60": "[{}] Keep alive chat={chat_id}",
   "ra5ce103bc8": "[{}] Card action compact → chat={chat_id}",
   "ra258c711f5": "[{}] Card action but chat offline: {chat_id}",
