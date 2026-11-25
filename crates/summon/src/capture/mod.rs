@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub(crate) mod claude_usage_limit;
 pub mod cursor_acp;
 mod cursor_cli_fallback;
+pub mod cursor_cli_params;
 pub mod cursor_config;
 pub(crate) mod cursor_context;
 pub(crate) mod program_status;

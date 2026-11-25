@@ -193,7 +193,8 @@ mod tests {
             .find("let effective = crate::runtime::chat_model::effective(agent, Some(&tag));")
             .expect("每轮请求取本群生效值")..];
         let turn_ctx = &turn_ctx[..turn_ctx.find("codex_reasoning_summary").unwrap()];
-        assert!(turn_ctx.contains("model: effective.model(),"));
+        // CLI 通道 Cursor 的参数化选择先合成(见 `cursor_cli_params`),没有时仍是本群生效值。
+        assert!(turn_ctx.contains("model: cursor_cli_model.as_deref().or(effective.model()),"));
         assert!(turn_ctx.contains("effort: effective.effort(),"));
         assert!(production(include_str!("../session/session.rs")).contains(
             "crate::runtime::chat_model::effective(self.agent, self.conversation_tag())"

@@ -6978,5 +6978,21 @@
   "export.log.os_error_only": "[未收录的日志行] {hidden} (os error {code})",
   "event_log.flush_ticker_failed": "events.jsonl 后台落盘线程起不来,合并中的增量只在下一条事件或轮结束时落盘: {e}",
   "r698939250a": "agent 以自己的身份申请隐私授权",
-  "r2cbf683bee": "仅 macOS。summon 启动的 agent CLI 及其工具申请语音识别、麦克风、文件夹访问等隐私权限时，弹窗与系统设置中的授权记在 claude、codex、cursor-agent 等各自的可执行文件上，而不是 summon。关闭后所有 agent 共用 summon 的授权。"
+  "r2cbf683bee": "仅 macOS。summon 启动的 agent CLI 及其工具申请语音识别、麦克风、文件夹访问等隐私权限时，弹窗与系统设置中的授权记在 claude、codex、cursor-agent 等各自的可执行文件上，而不是 summon。关闭后所有 agent 共用 summon 的授权。",
+  "cursor_cli_params.store_failed": "[{}] 写 Cursor 参数目录缓存失败: {error}",
+  "cursor_cli_params.probe_recorded": "[{}] Cursor 参数目录已更新：{} 个模型",
+  "cursor_cli_params.probe_axes_skipped": "[{}] Cursor 参数目录探测：读模型 {} 的参数轴失败，已跳过: {error}",
+  "cursor_cli_params.probe_failed": "[{}] Cursor 参数目录探测失败，沿用已有目录(没有则面板保持平铺模型列表): {error}",
+  "cursor_cli_params.selection_unreadable": "[{}] Cursor 参数设置不可读: {}",
+  "cursor_cli_params.turn_refused": "[{}] Cursor CLI 参数合成失败，本轮未启动: {}",
+  "cursor_cli_params.unknown_model": "Cursor 参数目录里没有模型 `{model}`,本轮未启动(不会换成别的模型)。请在 `/session` 面板或 `/model` 里重新选择。",
+  "cursor_cli_params.missing_axes": "Cursor 参数目录没有读到模型 `{model}` 的参数轴，带参数启动不了，本轮未启动。请稍后重试，或在 `/session` 面板把本群参数恢复为默认。",
+  "cursor_cli_params.unsupported_option": "当前模型不支持参数 `{axis}={value}`,本轮未启动(不会换成别的档位)。请在 `/session` 面板里重新选择。",
+  "cursor_cli_params.missing_default": "Cursor 参数目录没有给出参数 `{axis}` 的默认值，拼不出完整参数，本轮未启动。请在 `/session` 面板里为它选一个值。",
+  "cursor_cli_params.unsafe_token": "Cursor 参数里有不能放进 `--model` 的字符，本轮未启动。",
+  "cursor_cli_params.catalog_unavailable": "Cursor 参数目录尚未就绪(后台探测还没成功),暂时只能切换平铺模型；请稍后再试。",
+  "cursor_cli_params.no_model": "本群还没有选参数化模型；先在 `/session` 面板或 `/model` 里选一个模型，再调参数。",
+  "cursor_cli_params.notice_failed": "[{}] Cursor 参数错误提示派发失败(忽略): {send_error}",
+  "cursor_cli_params.account_changed": "[{}] Cursor 账号作用域变了，沿用旧参数目录直到这次探测成功",
+  "cursor_cli_params.promote_flat_model": "本群当前用的平铺模型 `{model}` 不在 Cursor 参数目录里，不能写成参数化默认；改 bot 默认模型请用 `/model default <id>`。"
 }

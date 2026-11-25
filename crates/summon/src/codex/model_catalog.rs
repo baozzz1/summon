@@ -39,6 +39,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 /// `cursor-agent models` 要联网问账号目录,本机实测约 2s;后台线程里跑,给足余量。
 const CURSOR_MODELS_TIMEOUT: Duration = Duration::from_secs(20);
+/// CLI 通道 Cursor 参数目录的刷新间隔是平铺目录的这么多倍:一次探测要对每个模型切一次
+/// (真机 46 个模型约 70s),跟平铺目录同频会让 cursor-agent acp 几乎常驻。
+const PARAMETER_REFRESH_FACTOR: u32 = 10;
 
 /// 这个 CLI 的模型目录是否由 backend 自报。traex 是 codex 的 fork,协议同构,走同一条路。
 pub fn reports_catalog(cli: &str) -> bool {
@@ -172,6 +175,10 @@ struct RefreshMailbox {
     tx: mpsc::SyncSender<Agent>,
     stopped: AtomicBool,
     active: Mutex<Option<crate::runtime::executor::ChildKiller>>,
+    /// CLI 通道 Cursor 参数目录探测的独立线程与它正在跑的进程。一次探测几十秒，放在自己的线程里，
+    /// 平铺目录照常按 `interval` 刷新。
+    parameter_worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    parameter_active: Mutex<Option<crate::runtime::executor::ChildKiller>>,
 }
 
 fn refreshers() -> &'static Mutex<HashMap<String, Arc<RefreshMailbox>>> {
@@ -205,7 +212,25 @@ impl Drop for CatalogRefresher {
         {
             killer.kill();
         }
+        if let Some(killer) = self
+            .mailbox
+            .parameter_active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            killer.kill();
+        }
         if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+        let parameter_worker = self
+            .mailbox
+            .parameter_worker
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(worker) = parameter_worker {
             let _ = worker.join();
         }
     }
@@ -224,6 +249,8 @@ fn start_refreshing_with_interval(agent: &Agent, interval: Duration) -> Option<C
         tx,
         stopped: AtomicBool::new(false),
         active: Mutex::new(None),
+        parameter_worker: Mutex::new(None),
+        parameter_active: Mutex::new(None),
     });
     let worker_mailbox = Arc::clone(&mailbox);
     let worker = std::thread::Builder::new()
@@ -243,8 +270,10 @@ fn start_refreshing_with_interval(agent: &Agent, interval: Duration) -> Option<C
     })
 }
 
-fn refresh_loop(rx: mpsc::Receiver<Agent>, mailbox: &RefreshMailbox, interval: Duration) {
+fn refresh_loop(rx: mpsc::Receiver<Agent>, mailbox: &Arc<RefreshMailbox>, interval: Duration) {
     let mut last_attempt: Option<(String, Instant)> = None;
+    let mut last_parameter_attempt: Option<(String, Instant)> = None;
+    let parameter_interval = interval.saturating_mul(PARAMETER_REFRESH_FACTOR);
     while !mailbox.stopped.load(Ordering::Acquire) {
         let agent = match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(agent) => agent,
@@ -268,6 +297,17 @@ fn refresh_loop(rx: mpsc::Receiver<Agent>, mailbox: &RefreshMailbox, interval: D
                 Ok(Some(catalog)) => record(format!("refresh:{scope}"), catalog),
                 Ok(None) => break,
                 Err(error) => log(&summon_i18n::format!("rc7a1e0d93d", agent.name)),
+            }
+            if last_parameter_attempt
+                .as_ref()
+                .is_some_and(|(previous, time)| {
+                    previous == &scope && time.elapsed() < parameter_interval
+                })
+            {
+                continue;
+            }
+            if spawn_parameter_probe(mailbox, &agent, config.program, config.env) {
+                last_parameter_attempt = Some((scope.clone(), Instant::now()));
             }
             continue;
         }
@@ -296,6 +336,74 @@ fn refresh_loop(rx: mpsc::Receiver<Agent>, mailbox: &RefreshMailbox, interval: D
         match outcome {
             Ok(catalog) => record(format!("refresh:{scope}"), catalog),
             Err(error) => log(&summon_i18n::format!("r02c0d61a86", agent.name)),
+        }
+    }
+}
+
+/// 在独立线程里探测 CLI 通道的 Cursor 参数目录。上一次探测还在跑时不再起新的，返回 false。
+/// 失败只记日志：已有目录(内存或盘上)照用。
+fn spawn_parameter_probe(
+    mailbox: &Arc<RefreshMailbox>,
+    agent: &Agent,
+    program: String,
+    env: Vec<(String, String)>,
+) -> bool {
+    let mut slot = mailbox
+        .parameter_worker
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if slot.as_ref().is_some_and(|worker| !worker.is_finished()) {
+        return false;
+    }
+    if let Some(finished) = slot.take() {
+        let _ = finished.join();
+    }
+    let worker_mailbox = Arc::clone(mailbox);
+    let name = agent.name.clone();
+    let agent = agent.clone();
+    let spawned = std::thread::Builder::new()
+        .name(format!("cursor-params-{}", agent.name))
+        .spawn(move || {
+            let mailbox = worker_mailbox;
+            let outcome = crate::capture::cursor_cli_params::refresh(
+                &agent,
+                &program,
+                &env,
+                &mailbox.stopped,
+                &mut |killer| {
+                    let mut active = mailbox
+                        .parameter_active
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    // 停机已经扫过这个槽的话，新登记的进程没人杀，自己动手。
+                    if mailbox.stopped.load(Ordering::Acquire) {
+                        if let Some(killer) = &killer {
+                            killer.kill();
+                        }
+                    }
+                    *active = killer;
+                },
+            );
+            if let Err(error) = outcome {
+                log(&summon_i18n::format!(
+                    "cursor_cli_params.probe_failed",
+                    agent.name,
+                    error = error
+                ));
+            }
+        });
+    match spawned {
+        Ok(worker) => {
+            *slot = Some(worker);
+            true
+        }
+        Err(error) => {
+            log(&summon_i18n::format!(
+                "cursor_cli_params.probe_failed",
+                name,
+                error = error
+            ));
+            false
         }
     }
 }
@@ -490,6 +598,64 @@ also accept quoted overrides, e.g. --model 'claude-opus-4-8[context=1m,effort=hi
         );
         assert_eq!(catalog.default_model.as_deref(), Some("auto"));
         drop(refresher);
+    }
+
+    /// 参数目录探测在自己的线程里跑：探测卡住时平铺目录照常刷新，停机也能把卡住的探测杀掉。
+    #[test]
+    fn a_slow_parameter_probe_neither_blocks_flat_refresh_nor_shutdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = tmp.path().join("fake-cursor-agent");
+        crate::test_support::write_test_executable(
+            &script,
+            r#"#!/bin/sh
+cd "$(dirname "$0")"
+if [ "$1" = models ]; then cat models.txt; exit 0; fi
+IFS= read -r line
+id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1}}\n' "$id"
+touch probe-started
+sleep 30
+"#,
+        );
+        std::fs::write(
+            tmp.path().join("models.txt"),
+            "first-model - First (default)\n",
+        )
+        .unwrap();
+        let yaml = format!(
+            "name: cursor-slow-probe\nstatus: active\nruntime:\n  cli: cursor\n  cli_cmd: {}\n  capture: cli\n",
+            script.display()
+        );
+        let mut agent: Agent = serde_yaml::from_str(&yaml).unwrap();
+        agent.dir = tmp.path().join("agents").join(&agent.name);
+        std::fs::create_dir_all(agent.state_dir()).unwrap();
+        let refresher = start_refreshing_with_interval(&agent, Duration::ZERO).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !tmp.path().join("probe-started").exists() {
+            assert!(Instant::now() < deadline, "参数探测应已起来");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::write(
+            tmp.path().join("models.txt"),
+            "second-model - Second (default)\n",
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let _ = models_for_agent(&agent);
+            if cached_for_agent(&agent).is_some_and(|catalog| catalog.models == ["second-model"]) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "探测卡住时平铺目录也要刷新");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let started = Instant::now();
+        drop(refresher);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "停机要杀掉卡住的探测: {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
