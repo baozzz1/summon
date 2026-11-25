@@ -196,21 +196,24 @@ pub(super) fn mark_session_card_closed(
     // A(隐私):终态卡与面板一致,**不带工作目录路径**(它同样是群可见面,路径不进群)。
     let tag = chat_tag(chat_type, chat_id);
     let effective = crate::runtime::chat_model::effective(agent, Some(&tag));
-    let (agent_model, model_overridden) = if cards::uses_rpc_model(agent) {
-        let target = crate::capture::cursor_config::load_target(agent, &tag).ok();
-        let overridden = target
-            .as_ref()
-            .is_some_and(|target| target.chat.selected_model().is_some());
-        let model = target
-            .and_then(|target| target.model().map(str::to_string))
-            .or_else(|| agent.rpc_model().map(str::to_string));
-        (model, overridden)
-    } else {
-        (
-            effective.model.clone(),
-            effective.model_layer == crate::runtime::chat_model::Layer::Chat,
-        )
-    };
+    let (agent_model, model_overridden) =
+        if let Some(cli) = cards::cursor_cli_teardown_model(agent, &tag) {
+            cli
+        } else if cards::uses_rpc_model(agent) {
+            let target = crate::capture::cursor_config::load_target(agent, &tag).ok();
+            let overridden = target
+                .as_ref()
+                .is_some_and(|target| target.chat.selected_model().is_some());
+            let model = target
+                .and_then(|target| target.model().map(str::to_string))
+                .or_else(|| agent.rpc_model().map(str::to_string));
+            (model, overridden)
+        } else {
+            (
+                effective.model.clone(),
+                effective.model_layer == crate::runtime::chat_model::Layer::Chat,
+            )
+        };
     let resolved_model = if model_overridden {
         summon_core::model_effort::ResolvedModel {
             value: agent_model,

@@ -3943,7 +3943,7 @@ pub(super) fn agent_dispatcher_with_stores(
                     )
                     .efforts;
                     if efforts.is_empty() {
-                        reply(if cards::uses_rpc_model(&agent) {
+                        reply(if cards::uses_cursor_parameters(&agent) {
                             summon_i18n::text!("rcdfaa1db11")
                         } else {
                             summon_i18n::text!("r7c95396730")

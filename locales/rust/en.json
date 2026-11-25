@@ -6978,5 +6978,19 @@
   "export.log.os_error_only": "[unlisted log line] {hidden} (os error {code})",
   "event_log.flush_ticker_failed": "events.jsonl flush thread failed to start; merged deltas are written only on the next event or at turn end: {e}",
   "r698939250a": "Agents request privacy access as themselves",
-  "r2cbf683bee": "macOS only. When agent CLIs started by summon, or the tools they run, request privacy access such as speech recognition, microphone, or folder access, the prompt and the grant in System Settings belong to each CLI executable (claude, codex, cursor-agent, and so on) instead of summon. Turn off to have all agents share summon's grants."
+  "r2cbf683bee": "macOS only. When agent CLIs started by summon, or the tools they run, request privacy access such as speech recognition, microphone, or folder access, the prompt and the grant in System Settings belong to each CLI executable (claude, codex, cursor-agent, and so on) instead of summon. Turn off to have all agents share summon's grants.",
+  "cursor_cli_params.store_failed": "[{}] Failed to store the Cursor parameter catalog: {error}",
+  "cursor_cli_params.probe_recorded": "[{}] Cursor parameter catalog updated: {} models",
+  "cursor_cli_params.probe_axes_skipped": "[{}] Cursor parameter probe skipped model {}: {error}",
+  "cursor_cli_params.probe_failed": "[{}] Cursor parameter probe failed; keeping the existing catalog (the panel keeps the flat model list if none): {error}",
+  "cursor_cli_params.selection_unreadable": "[{}] Cursor parameter settings unreadable: {}",
+  "cursor_cli_params.turn_refused": "[{}] Cursor CLI parameters could not be composed; turn not started: {}",
+  "cursor_cli_params.unknown_model": "Model `{model}` is not in the Cursor parameter catalog; turn not started (no other model is substituted). Pick again in the `/session` panel or with `/model`.",
+  "cursor_cli_params.missing_axes": "The Cursor parameter catalog has no parameters for model `{model}`, so it cannot start with parameters; turn not started. Retry later, or reset this chat's parameters to default in the `/session` panel.",
+  "cursor_cli_params.unsupported_option": "The current model does not support `{axis}={value}`; turn not started (no other level is substituted). Pick again in the `/session` panel.",
+  "cursor_cli_params.missing_default": "The Cursor parameter catalog gives no default for `{axis}`, so the full parameter set cannot be built; turn not started. Pick a value for it in the `/session` panel.",
+  "cursor_cli_params.unsafe_token": "Cursor parameters contain characters that cannot go into `--model`; turn not started.",
+  "cursor_cli_params.catalog_unavailable": "The Cursor parameter catalog is not ready yet (background probe has not succeeded); only flat models can be switched for now. Retry later.",
+  "cursor_cli_params.no_model": "This chat has no parameterized model yet; pick one in the `/session` panel or with `/model` before changing parameters.",
+  "cursor_cli_params.notice_failed": "[{}] Failed to deliver the Cursor parameter error notice (ignored): {send_error}"
 }

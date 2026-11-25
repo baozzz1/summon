@@ -190,7 +190,8 @@ pub struct CursorAcpMode {
 }
 
 /// 一个动态配置项里的可选值。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CursorAcpConfigValue {
     pub value: String,
     pub name: String,
@@ -204,7 +205,10 @@ pub struct CursorAcpConfigValue {
 ///
 /// `id` / `category` / `option_type` 都由 server 决定。这里不枚举 fast/context 等 Cursor
 /// 扩展，避免 server 新增轴时客户端静默丢能力；写入也只接受这份动态目录里的原始 id/value。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 可序列化只为 CLI 通道把探测到的参数目录落盘(见 `cursor_cli_params`),与 wire 格式无关。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CursorAcpConfigOption {
     pub id: String,
     pub name: String,

@@ -13727,6 +13727,31 @@ pub(super) fn stream_turn_headless(
     };
     // model / effort 取本群生效值(本群覆盖 > agent.yaml),生效路径不变。
     let effective = crate::runtime::chat_model::effective(agent, Some(&tag));
+    // CLI 通道的 Cursor 参数化选择拼成完整 `base[k=v,...]`;拼不出合法值就不起这一轮，
+    // 不悄悄换成平铺模型。没有参数目录或参数化选择时为 None,照旧用上面的生效模型。
+    let cursor_cli_model = if super::cards::is_cursor_cli_session(agent) {
+        match crate::capture::cursor_cli_params::model_for_turn(agent, &tag) {
+            Ok(model) => model,
+            Err(message) => {
+                log(&summon_i18n::format!(
+                    "cursor_cli_params.turn_refused",
+                    agent.name,
+                    message
+                ));
+                let notice =
+                    agent_error_notice(agent.name.as_str(), agent.capture_mode(), &tag, &message);
+                if let Err(send_error) = frontend.send_message(&chat_ref, &notice) {
+                    log(&summon_i18n::format!(
+                        "cursor_cli_params.notice_failed",
+                        agent.name
+                    ));
+                }
+                return TurnResult::Failed;
+            }
+        }
+    } else {
+        None
+    };
     let ctx = crate::capture::TurnCtx {
         session_id: resume.as_deref(),
         work_dir: work_dir.as_deref(),
@@ -13746,7 +13771,7 @@ pub(super) fn stream_turn_headless(
             }
             env
         },
-        model: effective.model(),
+        model: cursor_cli_model.as_deref().or(effective.model()),
         effort: effective.effort(),
         codex_reasoning_summary: codex_summary.as_deref(),
         codex_service_tier,

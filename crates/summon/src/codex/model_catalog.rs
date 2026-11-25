@@ -39,6 +39,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 /// `cursor-agent models` 要联网问账号目录,本机实测约 2s;后台线程里跑,给足余量。
 const CURSOR_MODELS_TIMEOUT: Duration = Duration::from_secs(20);
+/// CLI 通道 Cursor 参数目录的刷新间隔是平铺目录的这么多倍:一次探测要对每个模型切一次
+/// (真机 46 个模型约 70s),跟平铺目录同频会让 cursor-agent acp 几乎常驻。
+const PARAMETER_REFRESH_FACTOR: u32 = 10;
 
 /// 这个 CLI 的模型目录是否由 backend 自报。traex 是 codex 的 fork,协议同构,走同一条路。
 pub fn reports_catalog(cli: &str) -> bool {
@@ -147,6 +150,12 @@ pub fn cached_for_agent(agent: &Agent) -> Option<CodexModelCatalog> {
     cached(&format!("refresh:{scope}")).or_else(|| cached(&scope))
 }
 
+/// CLI 通道 Cursor 的程序与环境(与 `cursor-agent models` 刷新同一份),参数目录按它分账号作用域。
+pub(crate) fn cursor_cli_identity(agent: &Agent) -> (String, Vec<(String, String)>) {
+    let config = agent_probe_config(agent);
+    (config.program, config.env)
+}
+
 fn agent_probe_config(agent: &Agent) -> CodexAppServerConfig {
     let mut env: std::collections::BTreeMap<_, _> = crate::runtime::daemon::essential_system_env()
         .into_iter()
@@ -245,6 +254,8 @@ fn start_refreshing_with_interval(agent: &Agent, interval: Duration) -> Option<C
 
 fn refresh_loop(rx: mpsc::Receiver<Agent>, mailbox: &RefreshMailbox, interval: Duration) {
     let mut last_attempt: Option<(String, Instant)> = None;
+    let mut last_parameter_attempt: Option<(String, Instant)> = None;
+    let parameter_interval = interval.saturating_mul(PARAMETER_REFRESH_FACTOR);
     while !mailbox.stopped.load(Ordering::Acquire) {
         let agent = match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(agent) => agent,
@@ -268,6 +279,45 @@ fn refresh_loop(rx: mpsc::Receiver<Agent>, mailbox: &RefreshMailbox, interval: D
                 Ok(Some(catalog)) => record(format!("refresh:{scope}"), catalog),
                 Ok(None) => break,
                 Err(error) => log(&summon_i18n::format!("rc7a1e0d93d", agent.name)),
+            }
+            if last_parameter_attempt
+                .as_ref()
+                .is_some_and(|(previous, time)| {
+                    previous == &scope && time.elapsed() < parameter_interval
+                })
+            {
+                continue;
+            }
+            last_parameter_attempt = Some((scope.clone(), Instant::now()));
+            // 失败只记日志:已有目录(内存或盘上)照用，从没成功过就保持平铺模型列表。
+            match crate::capture::cursor_cli_params::refresh(
+                &agent,
+                &config.program,
+                &config.env,
+                &mailbox.stopped,
+                &mut |killer| {
+                    let mut active = mailbox
+                        .active
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    // 停机已经扫过 active 的话，新登记的进程没人杀，自己动手。
+                    if mailbox.stopped.load(Ordering::Acquire) {
+                        if let Some(killer) = &killer {
+                            killer.kill();
+                        }
+                    }
+                    *active = killer;
+                },
+            ) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => log(&summon_i18n::format!(
+                    "cursor_cli_params.probe_failed",
+                    agent.name
+                )),
+            }
+            if mailbox.stopped.load(Ordering::Acquire) {
+                break;
             }
             continue;
         }

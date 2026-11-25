@@ -262,6 +262,19 @@ pub fn load_target(agent: &Agent, tag: &str) -> Result<CursorTarget, CursorConfi
     })
 }
 
+/// 本群两层目标，只认盘上已有的文件：默认 bundle 缺失时是空层，不读 `runtime.rpc_model` 迁移 seed。
+/// CLI 通道(`runtime.capture: cli`)从不消费那份 ACP seed;文件存在时与 [`load_target`] 同样严格。
+pub fn load_persisted_target(agent: &Agent, tag: &str) -> Result<CursorTarget, CursorConfigError> {
+    let default = match existing_store_path(agent, CursorConfigLayer::Default)? {
+        Some(_) => load_store(agent, CursorConfigLayer::Default)?,
+        None => empty_view(),
+    };
+    Ok(CursorTarget {
+        default,
+        chat: load_store(agent, CursorConfigLayer::Chat(tag))?,
+    })
+}
+
 /// 设置或清除本群的模型覆盖(`None` 回到默认)。本群改过的 option 按模型保留:换回那个模型时
 /// 照样生效。
 pub fn set_chat_selected_model(
@@ -451,12 +464,35 @@ pub fn set_model_option_for_model(
 /// 软链到跨进程持久化的 `<state_dir>/cursor-acp-sessions`，使进程重开后 `session/load` 与上下文采集仍能读回同一份会话库。
 pub fn process_config_dir(agent: &Agent) -> Result<CursorProcessConfigDir, CursorConfigError> {
     let root = canonical_agent_root(agent)?;
-    let canonical_target =
-        ensure_private_agent_subdir(&root, &agent.state_dir().join(CURSOR_CONFIG_DIR_NAME))?;
     let canonical_sessions =
         ensure_private_agent_subdir(&root, &agent.state_dir().join(CURSOR_ACP_SESSIONS_DIR_NAME))?;
+    let directory = private_config_dir(agent, &root, "acp-")?;
+    std::os::unix::fs::symlink(&canonical_sessions, directory.path().join("acp-sessions"))
+        .map_err(|error| {
+            CursorConfigError::new(
+                CursorConfigErrorKind::UnsafePath,
+                summon_i18n::format!("rc46e1ac775"),
+            )
+        })?;
+    Ok(directory)
+}
+
+/// 参数目录探测用的一次性配置根 `<state_dir>/cursor-config/probe-<random>`。不链接持久会话库：
+/// 探测建的空会话随目录一起回收，不进 agent 的 `cursor-acp-sessions`。
+pub fn probe_config_dir(agent: &Agent) -> Result<CursorProcessConfigDir, CursorConfigError> {
+    let root = canonical_agent_root(agent)?;
+    private_config_dir(agent, &root, "probe-")
+}
+
+fn private_config_dir(
+    agent: &Agent,
+    root: &Path,
+    prefix: &str,
+) -> Result<CursorProcessConfigDir, CursorConfigError> {
+    let canonical_target =
+        ensure_private_agent_subdir(root, &agent.state_dir().join(CURSOR_CONFIG_DIR_NAME))?;
     let directory = tempfile::Builder::new()
-        .prefix("acp-")
+        .prefix(prefix)
         .tempdir_in(&canonical_target)
         .map_err(|error| {
             CursorConfigError::new(
@@ -484,13 +520,6 @@ pub fn process_config_dir(agent: &Agent) -> Result<CursorProcessConfigDir, Curso
             summon_i18n::text!("r042e3aa7d1"),
         ));
     }
-    std::os::unix::fs::symlink(&canonical_sessions, directory.path().join("acp-sessions"))
-        .map_err(|error| {
-            CursorConfigError::new(
-                CursorConfigErrorKind::UnsafePath,
-                summon_i18n::format!("rc46e1ac775"),
-            )
-        })?;
     Ok(CursorProcessConfigDir { directory })
 }
 

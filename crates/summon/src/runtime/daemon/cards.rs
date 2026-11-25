@@ -2396,12 +2396,99 @@ pub(super) fn uses_rpc_model(agent: &Agent) -> bool {
         && agent.capture_mode() == summon_core::registry::CaptureMode::Rpc
 }
 
+/// 面板与 `/model` 是否走 Cursor 参数 bundle:ACP 恒走；CLI 通道拿到过参数目录才走，
+/// 从没探测成功时保持平铺模型列表。
+pub(super) fn uses_cursor_parameters(agent: &Agent) -> bool {
+    uses_rpc_model(agent) || cursor_cli_parameter_catalog(agent).is_some()
+}
+
+fn cursor_cli_parameter_catalog(
+    agent: &Agent,
+) -> Option<crate::capture::cursor_cli_params::CursorParameterCatalog> {
+    if is_cursor_cli_session(agent) {
+        crate::capture::cursor_cli_params::cached(agent)
+    } else {
+        None
+    }
+}
+
+/// 终态卡的模型与「是不是本群覆盖」:CLI 通道拿到参数目录后，按每轮 `--model` 的取法算。
+/// 其余通道返回 None,沿用原来的算法。
+pub(super) fn cursor_cli_teardown_model(
+    agent: &Agent,
+    tag: &str,
+) -> Option<(Option<String>, bool)> {
+    let catalog = cursor_cli_parameter_catalog(agent)?;
+    let model = cursor_cli_parameter_view(agent, tag, &catalog)
+        .current_model
+        .or_else(|| crate::runtime::chat_model::effective(agent, Some(tag)).model);
+    let overridden = crate::capture::cursor_config::load_persisted_target(agent, tag)
+        .is_ok_and(|target| target.chat.selected_model().is_some())
+        || crate::runtime::chat_model::chat_model(agent, tag).is_some();
+    Some((model, overridden))
+}
+
+/// 参数面板与校验读的目录。ACP 是这条会话 live 下发的；CLI 通道是参数目录，`options` 的当前值是
+/// 下一轮 `--model` 会带上的那组。
+struct CursorParameterView {
+    models: Vec<String>,
+    options: Vec<crate::capture::cursor_acp::CursorAcpConfigOption>,
+    current_model: Option<String>,
+}
+
+fn cursor_parameter_view(agent: &Agent, tag: &str) -> CursorParameterView {
+    if let Some(catalog) = cursor_cli_parameter_catalog(agent) {
+        return cursor_cli_parameter_view(&fresh_cursor_agent(agent), tag, &catalog);
+    }
+    let options = crate::capture::rpc_pool::cursor_config_options_shared(&agent.name, tag);
+    let current_model = options
+        .iter()
+        .find(|option| option.id == "model")
+        .and_then(|option| option.current_value.clone())
+        // 旧 server 可能只在 models 块报 currentModelId。
+        .or_else(|| crate::capture::rpc_pool::current_model_shared(&agent.name, tag));
+    CursorParameterView {
+        models: crate::capture::rpc_pool::available_models_shared(&agent.name, tag),
+        options,
+        current_model,
+    }
+}
+
+/// CLI 通道的当前模型：参数化选择优先；没有时平铺模型恰在参数目录里也算(面板能直接调它的参数)。
+fn cursor_cli_parameter_view(
+    agent: &Agent,
+    tag: &str,
+    catalog: &crate::capture::cursor_cli_params::CursorParameterCatalog,
+) -> CursorParameterView {
+    let selection = crate::capture::cursor_cli_params::selection(agent, tag)
+        .ok()
+        .flatten();
+    let (model, chosen) = match selection {
+        Some(selection) => (Some(selection.model), selection.options),
+        None => (
+            crate::runtime::chat_model::effective(agent, Some(tag))
+                .model
+                .filter(|model| catalog.models.contains(model)),
+            Default::default(),
+        ),
+    };
+    let options = model
+        .as_deref()
+        .map(|model| crate::capture::cursor_cli_params::session_options(catalog, model, &chosen))
+        .unwrap_or_default();
+    CursorParameterView {
+        models: catalog.models.clone(),
+        options,
+        current_model: model,
+    }
+}
+
 /// `/model` 面板的候选模型:一律以 backend 自报的目录为准,配置桶只剩冷启兜底。
 ///
 /// backend 报目录的方式不同,所以取数分两路 ——
 /// 走 ACP 的 cursor 目录随会话下发(`configOptions` 的 `model` 轴),只对**这条会话**有效;
 /// codex/traex 与走 CLI 的 cursor 的目录按账号作用域共享，由后台按需刷新
-/// (后者跑 `cursor-agent models`)。
+/// (后者跑 `cursor-agent models`;拿到过参数目录后改列参数化 base model)。
 /// claude 没有列模型的接口,只能留在配置桶里。
 ///
 /// cursor 的目录上百项且服务端顺序把各档位、新旧版本混在一起,两条通道都按
@@ -2414,10 +2501,12 @@ pub(crate) fn model_candidates(agent: &Agent, tag: &str, from_config: Vec<String
             from_config,
         )
     } else {
-        prefer_dynamic_catalog(
-            crate::codex::model_catalog::models_for_agent(agent),
-            from_config,
-        )
+        // 读平铺目录同时会催一次后台刷新(CLI 通道的参数目录跟着刷新),所以参数模式也先读它。
+        let flat = crate::codex::model_catalog::models_for_agent(agent);
+        match cursor_cli_parameter_catalog(agent) {
+            Some(catalog) => catalog.models,
+            None => prefer_dynamic_catalog(flat, from_config),
+        }
     };
     if CliDriver::from_kind(agent.cli_kind()) == CliDriver::Cursor {
         summon_core::model_order::order_cursor_models(&candidates)
@@ -2453,6 +2542,10 @@ pub(super) fn panel_model(agent: &Agent, tag: &str) -> Option<String> {
                 .ok()
                 .and_then(|target| target.model().map(str::to_string))
         })
+    } else if let Some(catalog) = cursor_cli_parameter_catalog(agent) {
+        cursor_cli_parameter_view(&fresh_cursor_agent(agent), tag, &catalog)
+            .current_model
+            .or_else(|| crate::runtime::chat_model::effective(agent, Some(tag)).model)
     } else {
         crate::runtime::chat_model::effective(agent, Some(tag)).model
     }
@@ -2490,7 +2583,14 @@ pub(super) fn resolve_panel_model(
 ) -> summon_core::model_effort::ResolvedModel {
     use summon_core::model_effort::{ModelSource, ResolvedModel};
     let rpc = uses_rpc_model(agent);
-    let chat_model = if rpc {
+    let chat_model = if !rpc && cursor_cli_parameter_catalog(agent).is_some() {
+        // CLI 通道：本群 bundle 模型 > 本群平铺模型，与每轮 `--model` 的取法一致。
+        let fresh = fresh_cursor_agent(agent);
+        crate::capture::cursor_config::load_persisted_target(&fresh, tag)
+            .ok()
+            .and_then(|target| target.chat.selected_model().map(str::to_string))
+            .or_else(|| crate::runtime::chat_model::chat_model(agent, tag))
+    } else if rpc {
         let fresh = fresh_cursor_agent(agent);
         crate::capture::cursor_config::load_layer(
             &fresh,
@@ -2534,11 +2634,24 @@ pub(super) fn resolve_default_model(
             .ok()
             .and_then(|view| view.selected_model().map(str::to_string))
     });
+    // CLI 通道的默认 bundle 只认盘上文件；没有时回到 agent.yaml 的平铺模型。
+    let cli_configured = (!rpc && cursor_cli_parameter_catalog(agent).is_some())
+        .then(|| {
+            let fresh = fresh_cursor_agent(agent);
+            crate::capture::cursor_config::load_layer(
+                &fresh,
+                crate::capture::cursor_config::CursorConfigLayer::Default,
+            )
+            .ok()
+            .filter(|view| view.persisted)
+            .and_then(|view| view.selected_model().map(str::to_string))
+        })
+        .flatten();
     let default = crate::runtime::chat_model::effective(agent, None);
     let agent_model = if rpc {
         configured.as_ref().and_then(|model| model.as_deref())
     } else {
-        default.model()
+        cli_configured.as_deref().or(default.model())
     };
     // daemon 里只读缓存,不起进程探测:卡片渲染跑在 chat 线程上,起一个 app-server 问目录
     // 会把面板挂在那里。缓存由会话建立时填,没填过就退回配置桶。
@@ -2560,7 +2673,7 @@ pub(super) fn panel_summary_inputs(
     let model = resolve_panel_model(agent, tag, msg);
     // cursor 参数化 ACP 没有独立 effort 轴,摘要指向 Cursor 参数里的思考档位轴;其余本群有覆盖
     // 就显示覆盖值(来源标「本群覆盖」),否则走 agent.yaml 解析。
-    let effort = if uses_rpc_model(agent) {
+    let effort = if uses_cursor_parameters(agent) {
         cursor_effort_summary(agent, tag)
     } else {
         match crate::runtime::chat_model::chat_effort(agent, tag) {
@@ -2584,7 +2697,7 @@ pub(super) fn panel_summary_inputs(
 /// Cursor 参数化 ACP 的思考档位摘要:reasoning / effort / thinking 里第一个出现的轴此刻的值。
 fn cursor_effort_summary(agent: &Agent, tag: &str) -> summon_core::model_effort::ResolvedEffort {
     use summon_core::model_effort::{EffortSource, ResolvedEffort};
-    let live = crate::capture::rpc_pool::cursor_config_options_shared(&agent.name, tag);
+    let live = cursor_parameter_view(agent, tag).options;
     if live.is_empty() {
         return ResolvedEffort {
             value: None,
@@ -2986,90 +3099,51 @@ pub(super) fn session_panel_controls(
             catalog_live,
         }
     });
-    let cursor_config = uses_rpc_model(agent).then(|| {
-        let live = crate::capture::rpc_pool::cursor_config_options_shared(&agent.name, tag);
-        let catalog_live = !live.is_empty();
-        let live_model = live
-            .iter()
-            .find(|option| option.id == "model")
-            .and_then(|option| option.current_value.clone())
-            .or_else(|| crate::capture::rpc_pool::current_model_shared(&agent.name, tag));
-        let fresh = agent.reread().unwrap_or_else(|| agent.clone());
-        let loaded = crate::capture::cursor_config::load_target(&fresh, tag);
-        if let Err(error) = &loaded {
-            log(&summon_i18n::format!(
-                "r7160663eb6",
-                agent.name,
-                error.diagnostic()
-            ));
-        }
-        let desired_model = loaded
-            .as_ref()
-            .ok()
-            .and_then(|target| target.model().map(str::to_string));
-        let model_pending = desired_model.is_some() && desired_model != live_model;
-        let desired_options = loaded.as_ref().ok().map(|target| target.options());
-        // 只开放本轮需求里的模型参数轴。未来 server 即使新增权限/网络类 config，也不能因为
-        // “动态目录”四个字就自动出现在 operate 卡片上。
-        let controls = live
-            .into_iter()
-            .filter(|option| {
-                matches!(
-                    option.id.as_str(),
-                    "context" | "reasoning" | "effort" | "thinking" | "fast"
-                ) && option
-                    .option_type
-                    .as_deref()
-                    .is_none_or(|kind| kind == "select")
-            })
-            .map(|option| {
-                let pending = desired_options
-                    .as_ref()
-                    .and_then(|options| options.get(&option.id))
-                    .filter(|wanted| option.current_value.as_ref() != Some(*wanted))
-                    .cloned();
-                let overridden = loaded
-                    .as_ref()
-                    .is_ok_and(|target| target.overridden_option(&option.id));
-                let default_value = loaded
-                    .as_ref()
-                    .ok()
-                    .and_then(|target| target.default_option(&option.id).map(str::to_string));
-                summon_core::feishu::CursorConfigControl {
-                    overridden,
-                    default_value,
-                    id: option.id,
-                    name: option.name,
-                    description: option.description,
-                    current: option.current_value,
-                    pending,
-                    options: option
-                        .options
-                        .into_iter()
-                        .map(|value| summon_core::feishu::CursorConfigOption {
-                            value: value.value,
-                            name: value.name,
-                            description: value.description,
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
-        let model_pending_note = model_pending.then(|| {
-            cursor_model_pending_note(
-                desired_model.as_deref().unwrap_or_default(),
-                live_model.as_deref(),
-                &crate::capture::rpc_pool::available_models_shared(&agent.name, tag),
-            )
-        });
-        summon_core::feishu::CursorConfigPanel {
-            controls,
-            preference_error: loaded.is_err(),
-            catalog_live,
-            model_pending,
-            model_pending_note,
-        }
-    });
+    let cursor_config = if !uses_rpc_model(agent) {
+        cursor_cli_parameter_catalog(agent)
+            .map(|catalog| cursor_cli_config_panel(agent, tag, &catalog))
+    } else {
+        Some({
+            let live = crate::capture::rpc_pool::cursor_config_options_shared(&agent.name, tag);
+            let catalog_live = !live.is_empty();
+            let live_model = live
+                .iter()
+                .find(|option| option.id == "model")
+                .and_then(|option| option.current_value.clone())
+                .or_else(|| crate::capture::rpc_pool::current_model_shared(&agent.name, tag));
+            let fresh = agent.reread().unwrap_or_else(|| agent.clone());
+            let loaded = crate::capture::cursor_config::load_target(&fresh, tag);
+            if let Err(error) = &loaded {
+                log(&summon_i18n::format!(
+                    "r7160663eb6",
+                    agent.name,
+                    error.diagnostic()
+                ));
+            }
+            let desired_model = loaded
+                .as_ref()
+                .ok()
+                .and_then(|target| target.model().map(str::to_string));
+            let model_pending = desired_model.is_some() && desired_model != live_model;
+            let desired_options = loaded.as_ref().ok().map(|target| target.options());
+            let controls =
+                cursor_config_controls(live, desired_options.as_ref(), loaded.as_ref().ok());
+            let model_pending_note = model_pending.then(|| {
+                cursor_model_pending_note(
+                    desired_model.as_deref().unwrap_or_default(),
+                    live_model.as_deref(),
+                    &crate::capture::rpc_pool::available_models_shared(&agent.name, tag),
+                )
+            });
+            summon_core::feishu::CursorConfigPanel {
+                controls,
+                preference_error: loaded.is_err(),
+                catalog_live,
+                model_pending,
+                model_pending_note,
+            }
+        })
+    };
     // 周额度那条读取路径会把 claude 快照记进账号缓存,5 小时额度要排在它之后读。
     let quota_left_pct = current_session_quota(agent, tag, session);
     summon_core::feishu::SessionPanelControls {
@@ -3108,6 +3182,91 @@ fn cursor_model_pending_note(desired: &str, live: Option<&str>, available: &[Str
         summon_i18n::format!("recf4124a6e", quoted(desired))
     } else {
         summon_i18n::format!("rd3ce849db9", quoted(desired))
+    }
+}
+
+/// 只开放本轮需求里的模型参数轴。未来 server 即使新增权限/网络类 config，也不能因为
+/// “动态目录”四个字就自动出现在 operate 卡片上。`desired` 是尚未收敛的目标(只有 ACP 有)。
+fn cursor_config_controls(
+    live: Vec<crate::capture::cursor_acp::CursorAcpConfigOption>,
+    desired: Option<&std::collections::BTreeMap<String, String>>,
+    target: Option<&crate::capture::cursor_config::CursorTarget>,
+) -> Vec<summon_core::feishu::CursorConfigControl> {
+    live.into_iter()
+        .filter(|option| {
+            cursor_parameter_axis_is_open(&option.id)
+                && option
+                    .option_type
+                    .as_deref()
+                    .is_none_or(|kind| kind == "select")
+        })
+        .map(|option| {
+            let pending = desired
+                .and_then(|options| options.get(&option.id))
+                .filter(|wanted| option.current_value.as_ref() != Some(*wanted))
+                .cloned();
+            let overridden = target.is_some_and(|target| target.overridden_option(&option.id));
+            let default_value =
+                target.and_then(|target| target.default_option(&option.id).map(str::to_string));
+            summon_core::feishu::CursorConfigControl {
+                overridden,
+                default_value,
+                id: option.id,
+                name: option.name,
+                description: option.description,
+                current: option.current_value,
+                pending,
+                options: option
+                    .options
+                    .into_iter()
+                    .map(|value| summon_core::feishu::CursorConfigOption {
+                        value: value.value,
+                        name: value.name,
+                        description: value.description,
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// CLI 通道的参数面板。没有会话要收敛：当前值就是下一轮 `--model` 会带的值，只有选中的模型已不在
+/// 参数目录里时禁用按钮并说明(那一轮会被拒绝，不会换模型)。
+fn cursor_cli_config_panel(
+    agent: &Agent,
+    tag: &str,
+    catalog: &crate::capture::cursor_cli_params::CursorParameterCatalog,
+) -> summon_core::feishu::CursorConfigPanel {
+    let fresh = fresh_cursor_agent(agent);
+    let loaded = crate::capture::cursor_config::load_persisted_target(&fresh, tag);
+    if let Err(error) = &loaded {
+        log(&summon_i18n::format!(
+            "r7160663eb6",
+            agent.name,
+            error.diagnostic()
+        ));
+    }
+    let view = cursor_cli_parameter_view(&fresh, tag, catalog);
+    let stale = crate::capture::cursor_cli_params::selection(&fresh, tag)
+        .ok()
+        .flatten()
+        .map(|selection| selection.model)
+        .filter(|model| !catalog.models.contains(model));
+    // 参数按钮写进当前模型的 profile:本群覆盖层的轴才算「覆盖」,与 ACP 一致。
+    let target = loaded.as_ref().ok().filter(|target| {
+        target.model().is_some() && target.model() == view.current_model.as_deref()
+    });
+    summon_core::feishu::CursorConfigPanel {
+        controls: cursor_config_controls(view.options, None, target),
+        preference_error: loaded.is_err(),
+        catalog_live: true,
+        model_pending: stale.is_some(),
+        model_pending_note: stale.map(|model| {
+            summon_i18n::format!(
+                "cursor_cli_params.unknown_model",
+                model = summon_core::feishu::escape_lark_md(&model)
+            )
+        }),
     }
 }
 
@@ -3237,7 +3396,8 @@ pub(super) fn set_model_for_chat(
     let tag = chat_tag(chat_type, chat_id);
     // cursor 参数化 ACP 的 model 是 base id,和 context/reasoning/fast 同属参数 bundle:本群写稀疏
     // 覆盖、默认写 per-agent bundle,每轮 prompt 前收敛,不发只刷新当前 worker 的 SwitchApply。
-    if uses_rpc_model(agent) {
+    // CLI 通道拿到参数目录后同样写 bundle,每轮起进程时拼进 `--model`。
+    if uses_cursor_parameters(agent) {
         let requested = (target != LayerTarget::ChatInherit).then_some(model);
         if let Err(error) = apply_cursor_selected_model(agent, &tag, requested, target) {
             log(&summon_i18n::format!("r5929e23cfa", agent.name));
@@ -3761,7 +3921,7 @@ fn apply_cursor_selected_model(
     requested: Option<&str>,
     target: LayerTarget,
 ) -> anyhow::Result<()> {
-    if !uses_rpc_model(agent) {
+    if !uses_cursor_parameters(agent) {
         anyhow::bail!(summon_i18n::format!("rbcd2ea0c5c"));
     }
     if let Some(requested) = requested {
@@ -3771,7 +3931,7 @@ fn apply_cursor_selected_model(
         {
             anyhow::bail!(summon_i18n::format!("rf41742a14e"));
         }
-        let available = crate::capture::rpc_pool::available_models_shared(&agent.name, tag);
+        let available = cursor_parameter_view(agent, tag).models;
         if available.is_empty() {
             anyhow::bail!(summon_i18n::format!("r0d46fb91ea"));
         }
@@ -3821,6 +3981,19 @@ fn apply_cursor_selected_model(
                 requested,
             )
             .map_err(write_error)?;
+            // CLI 通道的本群平铺模型排在默认 bundle 之前：回到默认要连它一起清，否则清不干净。
+            if requested.is_none() && is_cursor_cli_session(agent) {
+                crate::runtime::chat_model::set_chat_model(&fresh, tag, None).map_err(|error| {
+                    log(&summon_i18n::format!(
+                        "r8618791743",
+                        agent.name,
+                        error.to_string()
+                    ));
+                    anyhow::anyhow!(::summon_core::i18n::label(
+                        CURSOR_PARAMETER_PERSISTENCE_PUBLIC_ERROR
+                    ))
+                })?;
+            }
         }
         _ => anyhow::bail!(summon_i18n::format!("rf41742a14e")),
     }
@@ -3836,7 +4009,11 @@ pub(super) fn apply_cursor_config_option(
     config_id: &str,
     value: Option<&str>,
 ) -> anyhow::Result<()> {
-    if !uses_rpc_model(agent) {
+    let cli_catalog = cursor_cli_parameter_catalog(agent);
+    if !uses_rpc_model(agent) && cli_catalog.is_none() {
+        if is_cursor_cli_session(agent) {
+            anyhow::bail!(summon_i18n::text!("cursor_cli_params.catalog_unavailable"));
+        }
         anyhow::bail!(summon_i18n::format!("r1c73433aa3"));
     }
     if config_id.trim() != config_id
@@ -3849,6 +4026,9 @@ pub(super) fn apply_cursor_config_option(
         })
     {
         anyhow::bail!(summon_i18n::format!("rbe732c4663"));
+    }
+    if let Some(catalog) = cli_catalog {
+        return apply_cursor_cli_config_option(agent, tag, &catalog, config_id, value);
     }
     let live = crate::capture::rpc_pool::cursor_config_options_shared(&agent.name, tag);
     let live_model = live
@@ -3901,9 +4081,79 @@ pub(super) fn apply_cursor_config_option(
     Ok(())
 }
 
+/// CLI 通道的参数写入：取值以参数目录里当前模型的轴为准。当前模型只来自平铺选择时，先把它钉成
+/// 本群的参数化模型，参数才有落点(每轮只对 bundle 模型拼参数)。
+fn apply_cursor_cli_config_option(
+    agent: &Agent,
+    tag: &str,
+    catalog: &crate::capture::cursor_cli_params::CursorParameterCatalog,
+    config_id: &str,
+    value: Option<&str>,
+) -> anyhow::Result<()> {
+    let fresh = fresh_cursor_agent(agent);
+    let view = cursor_cli_parameter_view(&fresh, tag, catalog);
+    let model = view
+        .current_model
+        .ok_or_else(|| anyhow::anyhow!(summon_i18n::text!("cursor_cli_params.no_model")))?;
+    if let Some(value) = value {
+        let axis = view
+            .options
+            .iter()
+            .find(|option| option.id == config_id)
+            .ok_or_else(|| anyhow::anyhow!(summon_i18n::format!("r6f8b51b7ee")))?;
+        if !axis.options.iter().any(|option| option.value == value) {
+            anyhow::bail!(summon_i18n::format!("r1a441074ff"));
+        }
+    }
+    let read_error = |error: crate::capture::cursor_config::CursorConfigError| {
+        log(&summon_i18n::format!(
+            "rff172b41fb",
+            agent.name,
+            error.diagnostic()
+        ));
+        anyhow::anyhow!(error.to_string())
+    };
+    let write_error = |error: crate::capture::cursor_config::CursorConfigError| {
+        log(&summon_i18n::format!(
+            "rcd9498ecb6",
+            agent.name,
+            error.diagnostic()
+        ));
+        anyhow::anyhow!(::summon_core::i18n::label(
+            CURSOR_PARAMETER_PERSISTENCE_PUBLIC_ERROR
+        ))
+    };
+    let selected = crate::capture::cursor_cli_params::selection(&fresh, tag)
+        .map_err(read_error)?
+        .is_some();
+    let mut generation = crate::capture::cursor_config::load_layer(
+        &fresh,
+        crate::capture::cursor_config::CursorConfigLayer::Chat(tag),
+    )
+    .map_err(read_error)?
+    .bundle
+    .generation;
+    if !selected {
+        generation = crate::capture::cursor_config::set_chat_selected_model(
+            &fresh,
+            tag,
+            generation,
+            Some(&model),
+        )
+        .map_err(write_error)?
+        .bundle
+        .generation;
+    }
+    crate::capture::cursor_config::set_chat_model_option(
+        &fresh, tag, generation, &model, config_id, value,
+    )
+    .map_err(write_error)?;
+    Ok(())
+}
+
 /// 「本群这套设为默认」:把本群当前的 Cursor 模型与参数写成 per-agent 默认 bundle。
 fn promote_cursor_chat_to_default(agent: &Agent, tag: &str) -> anyhow::Result<()> {
-    if !uses_rpc_model(agent) {
+    if !uses_cursor_parameters(agent) {
         anyhow::bail!(summon_i18n::format!("r1c73433aa3"));
     }
     let fresh = fresh_cursor_agent(agent);
@@ -8613,5 +8863,205 @@ mod tests {
 
         reply_model_usage(&agent, &fc, "oc_m", "group", &[], None);
         assert_eq!(outbound().matches("只认候选目录里的模型").count(), 2);
+    }
+}
+
+#[cfg(test)]
+mod cursor_cli_parameter_tests {
+    use super::*;
+    use crate::capture::cursor_cli_params::{self, tests::sample_catalog};
+    use crate::capture::cursor_config::{self, CursorConfigLayer};
+
+    fn cli_agent(extra: &str) -> (Agent, tempfile::TempDir) {
+        crate::test_support::agent_dir("cursor", &format!("  capture: cli\n{extra}"))
+    }
+
+    fn click(chat_id: &str, value: serde_json::Value) -> CardActionMsg {
+        CardActionMsg {
+            chat_id: chat_id.into(),
+            message_id: "om_cli_params".into(),
+            operator_open_id: "ou_owner".into(),
+            event_id: "evt_cli_params".into(),
+            value,
+            wal_id: None,
+            wal_replayed: false,
+        }
+    }
+
+    fn panel(agent: &Agent, tag: &str) -> Option<summon_core::feishu::CursorConfigPanel> {
+        let model = resolve_panel_model(agent, tag, &resolve_messaging(agent));
+        session_panel_controls(agent, tag, "", &model).cursor_config
+    }
+
+    fn axes(panel: &summon_core::feishu::CursorConfigPanel) -> Vec<(String, Option<String>)> {
+        panel
+            .controls
+            .iter()
+            .map(|control| (control.id.clone(), control.current.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn cli_panel_offers_parameter_axes_and_buttons_reach_the_turn_model() {
+        let (agent, _tmp) = cli_agent("");
+        cursor_cli_params::record_for_test(&agent, sample_catalog());
+        let chat_id = "oc_cli_params";
+        let tag = chat_tag("p2p", chat_id);
+        assert!(uses_cursor_parameters(&agent));
+        assert_eq!(
+            model_candidates(&agent, &tag, vec!["gpt-5.6-sol-high".into()])
+                .iter()
+                .filter(|model| *model == "gpt-5.6-sol" || *model == "gpt-5.6-sol-high")
+                .collect::<Vec<_>>(),
+            ["gpt-5.6-sol"],
+            "候选换成参数化 base model"
+        );
+        let fc = FeishuClient::new("feishu.cn", String::new(), String::new(), true);
+        let mut chats = HashMap::new();
+        handle_card_set_model(
+            &mut chats,
+            &agent,
+            &fc,
+            &click(
+                chat_id,
+                serde_json::json!({"action": "model", "model": "gpt-5.6-sol"}),
+            ),
+            false,
+        );
+        let shown = panel(&agent, &tag).expect("CLI 通道有参数目录时面板要有参数段");
+        assert!(shown.catalog_live && !shown.model_pending && !shown.preference_error);
+        assert_eq!(
+            axes(&shown),
+            [
+                ("context".to_string(), Some("272k".to_string())),
+                ("reasoning".to_string(), Some("medium".to_string())),
+                ("fast".to_string(), Some("false".to_string())),
+            ]
+        );
+
+        handle_card_cursor_config(
+            &mut chats,
+            &agent,
+            &fc,
+            &click(
+                chat_id,
+                serde_json::json!({"action": "cursor_config", "config_id": "context", "value": "1m"}),
+            ),
+        );
+        apply_cursor_config_option(&agent, &tag, "fast", Some("true")).unwrap();
+        let overlay = cursor_config::load_layer(&agent, CursorConfigLayer::Chat(&tag)).unwrap();
+        assert_eq!(
+            overlay.bundle.profiles["gpt-5.6-sol"].options,
+            [("context", "1m"), ("fast", "true")]
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        );
+        assert!(
+            cursor_config::load_layer(&agent, CursorConfigLayer::Default)
+                .unwrap()
+                .bundle
+                .profiles
+                .is_empty(),
+            "按钮只写本群覆盖"
+        );
+        let shown = panel(&agent, &tag).unwrap();
+        assert_eq!(shown.controls[0].current.as_deref(), Some("1m"));
+        assert!(shown.controls[0].overridden);
+        assert_eq!(
+            cursor_cli_params::model_for_turn(&agent, &tag)
+                .unwrap()
+                .as_deref(),
+            Some("gpt-5.6-sol[context=1m,reasoning=medium,fast=true]")
+        );
+
+        // 目录外的值与没开放的轴一律拒绝，盘上不变。
+        let before = cursor_config::load_layer(&agent, CursorConfigLayer::Chat(&tag)).unwrap();
+        assert!(apply_cursor_config_option(&agent, &tag, "context", Some("2m")).is_err());
+        assert!(apply_cursor_config_option(&agent, &tag, "optimize_for", Some("cost")).is_err());
+        assert_eq!(
+            cursor_config::load_layer(&agent, CursorConfigLayer::Chat(&tag)).unwrap(),
+            before
+        );
+
+        // 本群回到默认：bundle 与本群平铺模型一起清掉，下一轮回到 agent.yaml。
+        crate::runtime::chat_model::set_chat_model(&agent, &tag, Some("gpt-5.6-sol-high")).unwrap();
+        apply_cursor_selected_model(&agent, &tag, None, LayerTarget::ChatInherit).unwrap();
+        assert_eq!(crate::runtime::chat_model::chat_model(&agent, &tag), None);
+        assert_eq!(cursor_cli_params::model_for_turn(&agent, &tag), Ok(None));
+    }
+
+    #[test]
+    fn a_flat_model_inside_the_catalog_is_pinned_before_its_parameters_change() {
+        let (agent, _tmp) = cli_agent("model: claude-opus-5\n");
+        cursor_cli_params::record_for_test(&agent, sample_catalog());
+        let tag = chat_tag("p2p", "oc_cli_pin");
+        let shown = panel(&agent, &tag).unwrap();
+        assert_eq!(
+            shown.controls.len(),
+            4,
+            "agent.yaml 的模型就在目录里，直接给出它的轴"
+        );
+        apply_cursor_config_option(&agent, &tag, "effort", Some("low")).unwrap();
+        assert_eq!(
+            cursor_cli_params::model_for_turn(&agent, &tag)
+                .unwrap()
+                .as_deref(),
+            Some("claude-opus-5[thinking=true,context=300k,effort=low,fast=false]")
+        );
+    }
+
+    #[test]
+    fn without_a_parameter_catalog_the_cli_panel_stays_flat() {
+        let (agent, _tmp) = cli_agent("model: gpt-5.6-sol-high\n");
+        let tag = chat_tag("p2p", "oc_cli_flat");
+        assert!(!uses_cursor_parameters(&agent));
+        assert_eq!(panel(&agent, &tag), None);
+        assert_eq!(
+            model_candidates(&agent, &tag, vec!["gpt-5.6-sol-high".into()]),
+            ["gpt-5.6-sol-high"]
+        );
+        let error = apply_cursor_config_option(&agent, &tag, "fast", Some("true")).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            summon_i18n::text!("cursor_cli_params.catalog_unavailable")
+        );
+        assert_eq!(cursor_cli_params::model_for_turn(&agent, &tag), Ok(None));
+    }
+
+    /// 每轮起进程的接线：参数化选择拼出的值优先进 `TurnCtx.model`(→ `--model`),拼不出就不起这一轮。
+    /// 真起一轮要整套 chat 线程，这里钉源码形状。
+    #[test]
+    fn the_cli_turn_passes_the_composed_model_and_refuses_on_error() {
+        let source = include_str!("chat_thread.rs");
+        let hook = source
+            .find("crate::capture::cursor_cli_params::model_for_turn(agent, &tag)")
+            .expect("CLI 轮要按参数化选择合成模型");
+        let refused = source[hook..]
+            .find("return TurnResult::Failed;")
+            .expect("合成失败要拒绝这一轮");
+        let ctx = source[hook..]
+            .find("let ctx = crate::capture::TurnCtx {")
+            .expect("合成发生在 TurnCtx 之前");
+        assert!(refused < ctx);
+        assert!(source[hook + ctx..]
+            .contains("model: cursor_cli_model.as_deref().or(effective.model()),"));
+    }
+
+    #[test]
+    fn the_acp_channel_never_reads_the_cli_parameter_catalog() {
+        let (agent, _tmp) = crate::test_support::agent_dir("cursor", "  capture: rpc\n");
+        cursor_cli_params::record_for_test(&agent, sample_catalog());
+        let tag = chat_tag("p2p", "oc_acp_untouched");
+        assert!(cursor_cli_parameter_catalog(&agent).is_none());
+        assert!(
+            model_candidates(&agent, &tag, vec!["fallback".into()])
+                .iter()
+                .all(|model| model != "gpt-5.6-sol"),
+            "ACP 的候选只认会话下发的目录"
+        );
+        let shown = panel(&agent, &tag).unwrap();
+        assert!(!shown.catalog_live && shown.controls.is_empty());
+        assert!(apply_cursor_config_option(&agent, &tag, "fast", Some("true")).is_err());
     }
 }
