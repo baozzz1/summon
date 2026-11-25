@@ -3990,7 +3990,7 @@ pub(super) fn agent_dispatcher_with_stores(
                     }
                     continue;
                 }
-                // `/fast on|off`：Codex 是 per-chat service tier；Cursor(ACP 与 CLI 通道)写本群参数覆盖。都
+                // `/fast on|off`：Codex 是 per-chat service tier；Cursor(ACP 与 CLI 通道)写本群参数覆盖。两者都
                 // 涉及额外额度/成本，统一走 operate-gate，且只保存下一轮意图。
                 // Claude Code 自带同名命令，解析器对它返回 None，落到下面的 slash 透传。
                 if let Some(command) = summon_core::ipc::fast_command(
