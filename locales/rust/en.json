@@ -7013,8 +7013,8 @@
   "services.invalid_spec": "service `{service}` has invalid config: {reason}",
   "services.probe_only_unhealthy": "prerequisite service `{service}` is unhealthy ({detail}) and has no fallback `command` configured. Check your external service manager (e.g. launchd/systemd) or update config.yaml.",
   "services.start_spawn_failed": "failed to spawn prerequisite service `{service}`: {error}",
-  "services.start_exited_early": "prerequisite service `{service}` exited before becoming ready ({status}); log: {log}{tail}",
-  "services.start_timeout": "prerequisite service `{service}` did not become ready within {secs}s (last probe: {detail}); log: {log}{tail}",
+  "services.start_exited_early": "prerequisite service `{service}` exited before becoming ready ({status}); see local log: {log}",
+  "services.start_timeout": "prerequisite service `{service}` did not become ready within {secs}s (last probe: {detail}); see local log: {log}",
   "services.lock_timeout": "timed out waiting ({secs}s) for startup lock of prerequisite service `{service}`; retry or run `summon services status`",
   "services.preflight_blocked_log": "[{agent}] prerequisite service check failed; turn not started chat={tag}: {error}",
   "services.agent_env_skip_runtime_owned": "[{agent}] skipping runtime-owned key {key} from prerequisite service `{service}` agent_env",
@@ -7040,5 +7040,7 @@
   "services.cli.started": "Service `{name}` started and ready (pid={pid}, {detail}, log: {log})",
   "services.cli.stopped": "Stopped summon-started service `{name}` (pid={pid})",
   "services.cli.not_running": "Service `{name}` is not running",
-  "services.cli.external_refused": "Service `{name}` is running externally (not started by summon); refusing to stop it"
+  "services.cli.external_refused": "Service `{name}` is running externally (not started by summon); refusing to stop it",
+  "services.stop_failed": "failed to stop prerequisite service `{service}` (pid={pid}); process group is still alive and lease was kept",
+  "services.existing_still_running": "prerequisite service `{service}` already has a summon-started instance (pid={pid}) that could not be stopped (last probe: {detail}); refusing to spawn a duplicate and keeping existing lease"
 }

@@ -20,7 +20,6 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::Read as _;
 use std::net::{IpAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::process::CommandExt as _;
@@ -29,16 +28,13 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use summon_core::agent_identity::is_runtime_owned_env_key;
 use summon_core::config::Config;
-use summon_core::registry::{expand_tilde, Agent};
+use summon_core::registry::{collapse_tilde, expand_tilde, Agent};
 use summon_core::services::{
     is_valid_service_name, parse_tcp_host_port, HealthcheckKind, ServiceSpec,
 };
 
-const MAX_PROBE_OUTPUT_BYTES: u64 = 4096;
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(150);
-const LOG_TAIL_LINES: usize = 8;
-const LOG_TAIL_MAX_CHARS: usize = 600;
 
 /// 兜底拉起服务租约与日志目录：`~/.summon/run/services`。
 pub(crate) fn services_run_dir() -> PathBuf {
@@ -142,20 +138,26 @@ pub(crate) enum ServiceError {
     LockTimeout { service: String, secs: u64 },
     #[error("{}", summon_i18n::format!("services.start_spawn_failed", service = .service, error = .error))]
     SpawnFailed { service: String, error: String },
-    #[error("{}", summon_i18n::format!("services.start_exited_early", service = .service, status = .status, log = .log_path.display(), tail = .log_tail))]
+    #[error("{}", summon_i18n::format!("services.start_exited_early", service = .service, status = .status, log = collapse_tilde(&.log_path.display().to_string())))]
     ExitedEarly {
         service: String,
         status: String,
         log_path: PathBuf,
-        log_tail: String,
     },
-    #[error("{}", summon_i18n::format!("services.start_timeout", service = .service, secs = .secs, detail = .detail, log = .log_path.display(), tail = .log_tail))]
+    #[error("{}", summon_i18n::format!("services.start_timeout", service = .service, secs = .secs, detail = .detail, log = collapse_tilde(&.log_path.display().to_string())))]
     StartTimeout {
         service: String,
         secs: u64,
         detail: String,
         log_path: PathBuf,
-        log_tail: String,
+    },
+    #[error("{}", summon_i18n::format!("services.stop_failed", service = .service, pid = .pid))]
+    StopFailed { service: String, pid: u32 },
+    #[error("{}", summon_i18n::format!("services.existing_still_running", service = .service, pid = .pid, detail = .detail))]
+    ExistingInstanceStillRunning {
+        service: String,
+        pid: u32,
+        detail: String,
     },
     #[error("service `{service}` I/O error: {error}")]
     Io { service: String, error: String },
@@ -299,7 +301,16 @@ fn probe_http(url: &str, timeout: Duration) -> (bool, String) {
                 (false, format!("HTTP {}", status.as_u16()))
             }
         }
-        Err(e) => (false, format!("HTTP request failed: {e}")),
+        Err(e) => {
+            let clean = e.without_url();
+            if clean.is_timeout() {
+                (false, "HTTP request timed out".to_string())
+            } else if clean.is_connect() {
+                (false, "HTTP connect failed".to_string())
+            } else {
+                (false, format!("HTTP request failed: {clean}"))
+            }
+        }
     }
 }
 
@@ -347,12 +358,14 @@ fn probe_command(
     };
     let program = expand_tilde(program);
     let mut cmd = Command::new(&program);
+    // 探针输出可能包含由 `services.env` 传入的敏感值；不采集也不回显 stdout/stderr，
+    // 错误详情仅保留退出状态或超时分类，杜绝凭据进入 daemon 日志或群聊卡片。
     cmd.args(&argv[1..])
         .env_clear()
         .envs(build_service_env(spec, global_env))
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .process_group(0);
     if let Some(dir) = working_dir.filter(|d| !d.trim().is_empty()) {
         cmd.current_dir(expand_tilde(dir));
@@ -360,23 +373,9 @@ fn probe_command(
 
     let mut child = match retry_text_file_busy(|| cmd.spawn()) {
         Ok(c) => c,
-        Err(e) => return (false, format!("probe command spawn failed: {e}")),
+        Err(e) => return (false, format!("probe command spawn failed: {}", e.kind())),
     };
     let pgid = Pid::from_raw(child.id() as i32);
-
-    let spawn_reader = |stream: Option<Box<dyn std::io::Read + Send>>| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(s) = stream {
-                let _ = s.take(MAX_PROBE_OUTPUT_BYTES).read_to_end(&mut buf);
-            }
-            let _ = tx.send(buf);
-        });
-        rx
-    };
-    let out_rx = spawn_reader(child.stdout.take().map(|s| Box::new(s) as _));
-    let err_rx = spawn_reader(child.stderr.take().map(|s| Box::new(s) as _));
 
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -399,32 +398,15 @@ fn probe_command(
             Err(e) => {
                 let _ = killpg(pgid, Signal::SIGKILL);
                 let _ = child.wait();
-                return (false, format!("probe command wait failed: {e}"));
+                return (false, format!("probe command wait failed: {}", e.kind()));
             }
         }
     };
 
-    let rem = deadline.saturating_duration_since(Instant::now());
-    let stderr = err_rx.recv_timeout(rem).unwrap_or_default();
-    let stdout = out_rx
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .unwrap_or_default();
-
     if status.success() {
-        return (true, "command exit 0".to_string());
-    }
-    let snippet_src = if !stderr.is_empty() { stderr } else { stdout };
-    let snippet = String::from_utf8_lossy(&snippet_src)
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .take(2)
-        .collect::<Vec<_>>()
-        .join(" | ");
-    if snippet.is_empty() {
-        (false, format!("command exited with {status}"))
+        (true, "command exit 0".to_string())
     } else {
-        (false, format!("command exited with {status}: {snippet}"))
+        (false, format!("command exited with {status}"))
     }
 }
 
@@ -530,55 +512,59 @@ fn acquire_service_lock(
     }
 }
 
-fn read_log_tail(path: &Path) -> String {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return String::new();
-    };
-    let lines: Vec<&str> = text
-        .lines()
-        .rev()
-        .filter(|l| !l.trim().is_empty())
-        .take(LOG_TAIL_LINES)
-        .collect();
-    if lines.is_empty() {
-        return String::new();
-    }
-    let mut joined = lines.into_iter().rev().collect::<Vec<_>>().join(" | ");
-    if joined.chars().count() > LOG_TAIL_MAX_CHARS {
-        let truncated: String = joined.chars().take(LOG_TAIL_MAX_CHARS).collect();
-        joined = format!("{truncated}...");
-    }
-    format!("\n{joined}")
+/// 终止整个服务进程组（SIGTERM → 宽限期内探测整组存活 → 超期 SIGKILL 整组）。
+/// 返回 `true` 表示整个进程组已彻底退出（`ESRCH`），`false` 表示仍有成员存活。
+fn terminate_process_group(pgid: u32, grace: Duration) -> bool {
+    terminate_process_group_reaping(pgid, grace, None)
 }
 
-fn terminate_process_group(pgid: u32, grace: Duration) {
+fn terminate_process_group_reaping(
+    pgid: u32,
+    grace: Duration,
+    mut child: Option<&mut std::process::Child>,
+) -> bool {
     let Ok(raw) = i32::try_from(pgid) else {
-        return;
+        return true;
     };
     if raw <= 0 {
-        return;
+        return true;
     }
     let group = Pid::from_raw(raw);
     match killpg(group, Signal::SIGTERM) {
         Ok(()) => {}
-        Err(Errno::ESRCH) => return,
+        Err(Errno::ESRCH) => {
+            if let Some(c) = child.as_deref_mut() {
+                let _ = c.try_wait();
+            }
+            return true;
+        }
         Err(_) => {}
     }
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
-        if !pid_is_alive(pgid) {
-            return;
+        if let Some(c) = child.as_deref_mut() {
+            let _ = c.try_wait();
+        }
+        if !crate::runtime::inflight::group_alive(raw) {
+            return true;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     let _ = killpg(group, Signal::SIGKILL);
-    let kill_deadline = Instant::now() + Duration::from_secs(1);
+    let kill_deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < kill_deadline {
-        if !pid_is_alive(pgid) {
-            return;
+        if let Some(c) = child.as_deref_mut() {
+            let _ = c.try_wait();
+        }
+        if !crate::runtime::inflight::group_alive(raw) {
+            return true;
         }
         std::thread::sleep(Duration::from_millis(30));
     }
+    if let Some(c) = child {
+        let _ = c.try_wait();
+    }
+    !crate::runtime::inflight::group_alive(raw)
 }
 
 /// 探测单个服务并在不健康且配置了 `command` 时按需单飞拉起兜底。
@@ -619,10 +605,24 @@ pub(crate) fn ensure_service_at(
         });
     };
 
-    // 清理陈旧租约（若存在且已失效）。
+    // 已有有效租约时（summon 拉起的实例仍存活但连续探活失败）：先受控停掉旧进程组再重启，
+    // 绝不直接覆盖有效租约；若旧进程组无法停止则 fail-closed 并保留原租约，避免产生孤儿。
     let lp = lease_path(services_dir, name);
     if let Some(old_lease) = read_lease(&lp) {
-        if !lease_is_live_match(&old_lease) {
+        if lease_is_live_match(&old_lease) {
+            if !terminate_process_group(old_lease.pgid, Duration::from_secs(3)) {
+                return Err(ServiceError::ExistingInstanceStillRunning {
+                    service: name.to_string(),
+                    pid: old_lease.pid,
+                    detail: recheck.detail,
+                });
+            }
+            let _ = std::fs::remove_file(&lp);
+            log(&format!(
+                "[services] stopped unhealthy summon-managed service `{name}` pid={} before fallback restart",
+                old_lease.pid
+            ));
+        } else {
             let _ = std::fs::remove_file(&lp);
         }
     }
@@ -703,12 +703,15 @@ pub(crate) fn ensure_service_at(
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let _ = remove_lease_if_pid_matches(&lp, pid);
+                // 组长已退出，再确保进程组内无残留工作子进程后再清租约。
+                let group_gone = terminate_process_group(pid, Duration::from_millis(200));
+                if group_gone {
+                    let _ = remove_lease_if_pid_matches(&lp, pid);
+                }
                 return Err(ServiceError::ExitedEarly {
                     service: name.to_string(),
                     status: status.to_string(),
                     log_path: svc_log.clone(),
-                    log_tail: read_log_tail(&svc_log),
                 });
             }
             Ok(None) => {}
@@ -750,17 +753,17 @@ pub(crate) fn ensure_service_at(
         std::thread::sleep(sleep_for);
     }
 
-    // 超时未就绪：清理本次启动的进程组与租约，不留孤儿。
-    terminate_process_group(pid, Duration::from_secs(2));
-    let _ = child.wait();
-    let _ = remove_lease_if_pid_matches(&lp, pid);
+    // 超时未就绪：清理本次启动的整个进程组；确认全组退出后才清租约，避免留孤儿。
+    let group_gone = terminate_process_group_reaping(pid, Duration::from_secs(2), Some(&mut child));
+    if group_gone {
+        let _ = remove_lease_if_pid_matches(&lp, pid);
+    }
 
     Err(ServiceError::StartTimeout {
         service: name.to_string(),
         secs: ready_budget.as_secs(),
         detail: last_probe_detail,
         log_path: svc_log.clone(),
-        log_tail: read_log_tail(&svc_log),
     })
 }
 
@@ -788,7 +791,12 @@ pub(crate) fn stop_service_at(
     let lp = lease_path(services_dir, name);
     if let Some(lease) = read_lease(&lp) {
         if lease_is_live_match(&lease) {
-            terminate_process_group(lease.pgid, Duration::from_secs(5));
+            if !terminate_process_group(lease.pgid, Duration::from_secs(5)) {
+                return Err(ServiceError::StopFailed {
+                    service: name.to_string(),
+                    pid: lease.pid,
+                });
+            }
             let _ = std::fs::remove_file(&lp);
             log(&format!(
                 "[services] stopped summon-managed service `{name}` pid={}",
@@ -926,13 +934,21 @@ pub(crate) fn stop_non_surviving_services_at(services_dir: &Path) {
             continue;
         }
         if lease_is_live_match(&current) {
-            terminate_process_group(current.pgid, Duration::from_secs(3));
-            log(&format!(
-                "[services] stopped non-surviving service `{}` pid={} on daemon shutdown",
-                current.service, current.pid
-            ));
+            if terminate_process_group(current.pgid, Duration::from_secs(3)) {
+                log(&format!(
+                    "[services] stopped non-surviving service `{}` pid={} on daemon shutdown",
+                    current.service, current.pid
+                ));
+                let _ = std::fs::remove_file(&path);
+            } else {
+                log(&format!(
+                    "[services] failed to stop non-surviving service `{}` pid={} on daemon shutdown; keeping lease",
+                    current.service, current.pid
+                ));
+            }
+        } else {
+            let _ = std::fs::remove_file(&path);
         }
-        let _ = std::fs::remove_file(&path);
     }
 }
 
@@ -1182,11 +1198,16 @@ mod tests {
     }
 
     #[test]
-    fn early_exit_fails_fast_with_log_tail_and_cleans_lease() {
+    fn early_exit_and_probe_errors_never_leak_process_output_or_secrets() {
         let tmp = tempfile::tempdir().unwrap();
+        // 1. 启动早退时，stderr 里的敏感内容落盘在 0600 日志里，绝不进入 ServiceError 文案。
         let spec = ServiceSpec {
             healthcheck: ServiceHealthcheck {
-                command: Some(vec!["/bin/sh".into(), "-c".into(), "exit 1".into()]),
+                command: Some(vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "echo 'probe-secret-token-xyz' >&2; exit 1".into(),
+                ]),
                 timeout_secs: 2,
                 ready_timeout_secs: 10,
                 ..Default::default()
@@ -1194,7 +1215,7 @@ mod tests {
             command: Some(vec![
                 "/bin/sh".into(),
                 "-c".into(),
-                "echo 'boom-diagnostic-line' >&2; exit 42".into(),
+                "echo 'startup-secret-token-abc' >&2; exit 42".into(),
             ]),
             ..Default::default()
         };
@@ -1202,13 +1223,142 @@ mod tests {
         let started = Instant::now();
         let err = ensure_service_at("crash-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(4));
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains("startup-secret-token-abc"),
+            "ServiceError must never echo raw service stderr: {rendered}"
+        );
+        assert!(
+            !rendered.contains("probe-secret-token-xyz"),
+            "ServiceError must never echo raw probe output: {rendered}"
+        );
         match err {
-            ServiceError::ExitedEarly { log_tail, .. } => {
-                assert!(log_tail.contains("boom-diagnostic-line"), "{log_tail}");
+            ServiceError::ExitedEarly { log_path, .. } => {
+                let logged = std::fs::read_to_string(&log_path).unwrap();
+                assert!(logged.contains("startup-secret-token-abc"), "{logged}");
             }
             other => panic!("expected ExitedEarly, got {other:?}"),
         }
         assert!(!lease_path(tmp.path(), "crash-svc").exists());
+
+        // 2. 纯探活失败时，command 探针的输出也不得进入 ProbeResult / ServiceError。
+        let probe_only = ServiceSpec {
+            healthcheck: ServiceHealthcheck {
+                command: Some(vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "echo 'probe-only-secret-999' >&2; exit 1".into(),
+                ]),
+                timeout_secs: 2,
+                ready_timeout_secs: 5,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let probe_err =
+            ensure_service_at("probe-only-svc", &probe_only, tmp.path(), &HashMap::new())
+                .unwrap_err();
+        assert!(
+            !probe_err.to_string().contains("probe-only-secret-999"),
+            "probe error must not leak stdout/stderr: {probe_err}"
+        );
+    }
+
+    #[test]
+    fn ensure_service_stops_unhealthy_managed_instance_before_restarting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ready_file = tmp.path().join("rehealth.ready");
+        let start_script = format!("touch '{}'; exec sleep 60", ready_file.display());
+        let probe_script = format!("test -f '{}'", ready_file.display());
+        let spec = ServiceSpec {
+            healthcheck: ServiceHealthcheck {
+                command: Some(vec!["/bin/sh".into(), "-c".into(), probe_script]),
+                timeout_secs: 2,
+                ready_timeout_secs: 5,
+                ..Default::default()
+            },
+            command: Some(vec!["/bin/sh".into(), "-c".into(), start_script]),
+            ..Default::default()
+        };
+
+        let first_pid =
+            match ensure_service_at("restart-svc", &spec, tmp.path(), &HashMap::new()).unwrap() {
+                EnsureOutcome::Started { pid, .. } => pid,
+                other => panic!("expected Started, got {other:?}"),
+            };
+        assert!(pid_is_alive(first_pid));
+
+        // 模拟实例进程仍在运行但健康检查变为不健康。
+        std::fs::remove_file(&ready_file).unwrap();
+        assert!(pid_is_alive(first_pid));
+
+        let second_pid =
+            match ensure_service_at("restart-svc", &spec, tmp.path(), &HashMap::new()).unwrap() {
+                EnsureOutcome::Started { pid, .. } => pid,
+                other => panic!("expected Started replacement, got {other:?}"),
+            };
+        assert_ne!(first_pid, second_pid);
+        assert!(
+            !crate::runtime::inflight::group_alive(first_pid as i32),
+            "old unhealthy instance must be terminated before replacement starts"
+        );
+        assert!(pid_is_alive(second_pid));
+        let lease = read_lease(&lease_path(tmp.path(), "restart-svc")).unwrap();
+        assert_eq!(lease.pid, second_pid);
+
+        let _ = stop_service_at("restart-svc", &spec, tmp.path(), &HashMap::new());
+    }
+
+    #[test]
+    fn stop_kills_stubborn_worker_child_even_after_leader_exits_on_sigterm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ready_file = tmp.path().join("pg.ready");
+        let worker_pid_file = tmp.path().join("worker.pid");
+        // 组长收到 SIGTERM 立刻退出，但派生的子进程忽略 SIGTERM；
+        // terminate_process_group 必须等到整组退出（升级 SIGKILL 清理子进程）。
+        let start_script = format!(
+            "trap 'exit 0' TERM; (trap '' TERM; sleep 60) & echo $! > '{}'; touch '{}'; wait",
+            worker_pid_file.display(),
+            ready_file.display()
+        );
+        let probe_script = format!("test -f '{}'", ready_file.display());
+        let spec = ServiceSpec {
+            healthcheck: ServiceHealthcheck {
+                command: Some(vec!["/bin/sh".into(), "-c".into(), probe_script]),
+                timeout_secs: 2,
+                ready_timeout_secs: 5,
+                ..Default::default()
+            },
+            command: Some(vec!["/bin/sh".into(), "-c".into(), start_script]),
+            ..Default::default()
+        };
+
+        let leader_pid =
+            match ensure_service_at("pg-svc", &spec, tmp.path(), &HashMap::new()).unwrap() {
+                EnsureOutcome::Started { pid, .. } => pid,
+                other => panic!("expected Started, got {other:?}"),
+            };
+        let worker_pid: u32 = std::fs::read_to_string(&worker_pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(pid_is_alive(worker_pid), "worker child should be alive");
+
+        // 使用较短宽限验证：即使组长立刻退出，stop 也必须升级 SIGKILL 杀掉忽略 SIGTERM 的子进程。
+        assert!(terminate_process_group(
+            leader_pid,
+            Duration::from_millis(250)
+        ));
+        assert!(
+            !pid_is_alive(worker_pid),
+            "stubborn worker child pid={worker_pid} must be killed by SIGKILL"
+        );
+        assert!(
+            !crate::runtime::inflight::group_alive(leader_pid as i32),
+            "entire process group must be gone"
+        );
+        let _ = std::fs::remove_file(lease_path(tmp.path(), "pg-svc"));
     }
 
     #[test]

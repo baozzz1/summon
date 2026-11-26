@@ -7013,8 +7013,8 @@
   "services.invalid_spec": "服务 `{service}` 配置无效：{reason}",
   "services.probe_only_unhealthy": "前置服务 `{service}` 当前不可用（{detail}），且未配置兜底启动命令 `command`。请检查外部服务（如 launchd/systemd）或补全 config.yaml。",
   "services.start_spawn_failed": "启动前置服务 `{service}` 失败：{error}",
-  "services.start_exited_early": "前置服务 `{service}` 启动后提前退出（{status}），日志：{log}{tail}",
-  "services.start_timeout": "前置服务 `{service}` 在 {secs}s 内未就绪（最后探测：{detail}），日志：{log}{tail}",
+  "services.start_exited_early": "前置服务 `{service}` 启动后提前退出（{status}），详情请查本机日志：{log}",
+  "services.start_timeout": "前置服务 `{service}` 在 {secs}s 内未就绪（最后探测：{detail}），详情请查本机日志：{log}",
   "services.lock_timeout": "等待前置服务 `{service}` 启动锁超时（{secs}s），请稍后重试或运行 `summon services status` 检查",
   "services.preflight_blocked_log": "[{agent}] 前置服务准入失败，本轮未启动 chat={tag}: {error}",
   "services.agent_env_skip_runtime_owned": "[{agent}] 跳过前置服务 `{service}` agent_env 中的运行时保留键 {key}",
@@ -7040,5 +7040,7 @@
   "services.cli.started": "服务 `{name}` 已拉起并就绪（pid={pid}，{detail}，日志：{log}）",
   "services.cli.stopped": "已停止由 summon 拉起的服务 `{name}`（pid={pid}）",
   "services.cli.not_running": "服务 `{name}` 当前未运行",
-  "services.cli.external_refused": "服务 `{name}` 当前由外部托管运行（非 summon 拉起），已跳过停止操作"
+  "services.cli.external_refused": "服务 `{name}` 当前由外部托管运行（非 summon 拉起），已跳过停止操作",
+  "services.stop_failed": "停止前置服务 `{service}`（pid={pid}）失败，进程组仍存活；已保留租约文件",
+  "services.existing_still_running": "前置服务 `{service}` 已有由 summon 拉起的实例（pid={pid}）仍在运行且无法停止（最后探测：{detail}）；已拒绝重复启动并保留原租约"
 }
