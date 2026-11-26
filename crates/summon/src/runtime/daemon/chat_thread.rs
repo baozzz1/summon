@@ -277,6 +277,7 @@ fn chat_session<'a>(
 ) -> Session<'a> {
     Session::with_name(agent, tmux_name.to_string(), poll, debounce)
         .with_run_env(chat_runtime_env(agent, chat_id, conversation_tag))
+        .with_dynamic_agent_env()
         .with_mirror_watermark(mirror_watermark.clone())
         .with_chat_id(chat_id)
         .with_menu_ledger(menu_ledger.clone())
@@ -3112,6 +3113,10 @@ pub(super) fn chat_thread_run(
                             summon_i18n::format!("rdaecaf5cdb")
                         );
                     }
+                    // 恢复会话同样会冷启/重连 CLI：必须在拆除现有会话之前先完成前置依赖服务准入，
+                    // 依赖不健康时 fail-closed 保留原会话不被误拆。
+                    crate::runtime::services::ensure_agent_services(&agent)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
                     interrupt_inflight_turn(&inflight, &agent.name, &chat_type, &chat_id);
                     drop(subagent_watcher.take());
                     drop(subagent_api_errors.take());
@@ -5569,6 +5574,48 @@ pub(super) fn handle_task(
         agent_name: &agent.name,
         delivery_scope,
     };
+    // 前置依赖服务 fail-closed 准入（探活 + 按需拉起兜底）：必须在身份准入通过之后、
+    // 首次冷启 CLI (`sess.ensure_started`) 或 slash 命令注入（如 `/goal`）之前统一执行。
+    if !task.reattach {
+        if let Err(error) = crate::runtime::services::ensure_agent_services(agent) {
+            let tag = chat_tag(chat_type, chat_id);
+            log(&summon_i18n::format!(
+                "services.preflight_blocked_log",
+                agent = agent.name,
+                tag = tag,
+                error = error
+            ));
+            if task.kind.is_slash() {
+                return fail_slash_command(
+                    agent,
+                    fc,
+                    chat_id,
+                    chat_type,
+                    task,
+                    m,
+                    &error.to_string(),
+                );
+            }
+            let main_msg = MsgRef {
+                message_id: task.feishu_anchor().unwrap_or_default(),
+            };
+            let _ = frontend.react(&main_msg, error_reaction(m));
+            let notice = agent_error_notice(
+                agent.name.as_str(),
+                agent.capture_mode(),
+                &tag,
+                &error.to_string(),
+            );
+            let send_result = match attach_hint_card(agent, &notice) {
+                Some(card) => frontend.send_card(&chat_ref, &card),
+                None => frontend.send_message(&chat_ref, &notice),
+            };
+            if let Err(send_err) = send_result {
+                log(&summon_i18n::format!("rb523487fbf", agent.name));
+            }
+            return TurnResult::Failed;
+        }
+    }
     // 工程表情文件队列(slice 3):这条「真送达 claude 的飞书消息」入 working,记 OnIt id + 送达时刻。
     // 跨 daemon 重启可恢复(启动扫描据它把孤儿 OnIt 收尾,不再永远卡着);per-chat 串行,done 时按
     // message_id 精确清。`resolve_done`(FIFO 归因)留给会话镜像 pub-sub 路的「无 message 的 turn 完成」。
@@ -6109,6 +6156,7 @@ pub(super) fn handle_task(
         subagent_state,
         cot_followers,
         settings,
+        true,
     );
     message_protocol.record(
         agent,
@@ -6673,6 +6721,8 @@ pub(super) fn stream_turn(
     // 本轮生效的分级开关快照(四层已合并)。**按值传** —— 快照边界是一轮,
     // 轮中途的配置热重载/`/set` 不得让同一轮前后半段看到不同的值。
     settings: ResolvedSettings,
+    // `handle_task` 入口已完成前置依赖服务准入时传 `true`，避免同一轮对健康探针重复执行两次。
+    services_preflight_done: bool,
 ) -> TurnResult {
     let tag = chat_tag(chat_type, chat_id);
     // 接管只有 Transcript 形态(锚点认的是转录里的 marker)。无头路有自己的 pending 与续跑语义,
@@ -6684,6 +6734,30 @@ pub(super) fn stream_turn(
         if reattach {
             log(&summon_i18n::format!("r1b09a832e1", agent.name));
             return TurnResult::RecoveryDeferred;
+        }
+    }
+    // 前置依赖服务 fail-closed 准入（探活 + 按需拉起兜底）。接管轮（reattach=true）的
+    // Transcript 会话已在跑，只观测转录，不阻塞；经 `handle_task` 入口已准入的普通轮不重复探测。
+    if !reattach && !services_preflight_done {
+        if let Err(error) = crate::runtime::services::ensure_agent_services(agent) {
+            log(&summon_i18n::format!(
+                "services.preflight_blocked_log",
+                agent = agent.name,
+                tag = tag,
+                error = error
+            ));
+            let chat_ref = ChatRef {
+                thread_anchor,
+                chat_id,
+                chat_type,
+                agent_dir: &agent.state_dir(),
+                agent_name: &agent.name,
+                delivery_scope,
+            };
+            let notice =
+                agent_error_notice(&agent.name, agent.capture_mode(), &tag, &error.to_string());
+            let _ = frontend.send_message(&chat_ref, &notice);
+            return TurnResult::Failed;
         }
     }
     // 防御性清理:上一轮若因异常路径(stream_finish 查不到 stream_map 条目等)留下了 stale
@@ -14449,6 +14523,15 @@ fn resume_pending_turn_with_sources(
     // 等下次重试，不能退回盘上的旧 PRIMER 继续执行。
     if let Err(error) = (sources.prepare_prompt)(agent, chat_type, chat_id, &sess.tmux.session) {
         log(&summon_i18n::format!("rf6539b548c", agent.name));
+        return false;
+    }
+    if let Err(error) = crate::runtime::services::ensure_agent_services(agent) {
+        log(&summon_i18n::format!(
+            "services.preflight_blocked_log",
+            agent = agent.name,
+            tag = tag,
+            error = error
+        ));
         return false;
     }
 
@@ -23232,6 +23315,271 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
         fn unreact(&self, _msg: &MsgRef, _reaction_id: &str) -> anyhow::Result<()> {
             Ok(())
         }
+    }
+
+    /// agent 声明了 `runtime.requires` 但依赖服务未就绪（或未定义）时，`stream_turn` 必须
+    /// fail-closed：不启动会话、直接通过 frontend 向用户发故障提示并返回 `TurnResult::Failed`。
+    /// `handle_task` 在首次启动 CLI (`sess.ensure_started`) 与 `/goal` slash 注入之前必须先执行
+    /// 前置依赖服务准入；依赖不健康时两种入口都必须 fail-closed 且不启动 tmux 会话。
+    #[test]
+    fn handle_task_blocks_before_session_start_for_normal_and_goal_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let probe_log = dir.path().join("probe.count");
+        let cfg_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                r#"services:
+  down-dep:
+    healthcheck:
+      command: ["/bin/sh", "-c", "echo 1 >> {}; exit 1"]
+      timeout_secs: 1
+      ready_timeout_secs: 2
+"#,
+                probe_log.display()
+            ),
+        )
+        .unwrap();
+        let agent_dir = dir.path().join("agents").join("synth-claude");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            r#"name: synth-claude
+runtime:
+  cli: claude
+  requires:
+    - down-dep
+"#,
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(cfg_path);
+
+        let fc = std::sync::Arc::new(FeishuClient::new(
+            "feishu.cn",
+            String::new(),
+            String::new(),
+            true,
+        ));
+        let sess = Session::for_agent(&agent, 200, 800);
+        let core = std::sync::Arc::new(crate::runtime::core::Core::new(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            Vec::new(),
+        ));
+        let inflight = crate::runtime::inflight::InFlight::new();
+        let mirror = super::dispatcher::MirrorDeliveryTracker::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut settings = ChatOverrides::default();
+
+        let wal = crate::runtime::inbox_wal::InboxWal::new(dir.path().join("inbox"));
+        let run_via_barrier = |task: &ChatTask,
+                               primed: &mut bool,
+                               settings: &mut ChatOverrides,
+                               observed_live: &mut bool|
+         -> TurnResult {
+            wal.append(
+                &agent.name,
+                "scope",
+                &Inbound {
+                    anchor_message_id: None,
+                    chat_id: "oc_synth_chat".into(),
+                    chat_type: Some("p2p".into()),
+                    text: task.text.clone(),
+                    sender: task.who_id.clone(),
+                    sender_union_id: task.who_union_id.clone(),
+                    sender_type: "user".into(),
+                    message_id: task.message_id.clone(),
+                    parent_id: None,
+                    thread_id: None,
+                    root_id: None,
+                    mentions: Vec::new(),
+                    resources: Vec::new(),
+                    create_time_ms: 1_000,
+                    replayed: false,
+                    reattach: false,
+                },
+            )
+            .unwrap();
+            let (_, result) = run_after_durable_start(
+                &wal,
+                &agent.name,
+                "scope",
+                &task.message_id,
+                false,
+                || {
+                    handle_task(
+                        &agent,
+                        "scope",
+                        &sess,
+                        &fc,
+                        task,
+                        "合成用户",
+                        "oc_synth_chat",
+                        "p2p",
+                        primed,
+                        &core,
+                        &inflight,
+                        &mirror,
+                        &rx,
+                        &tx,
+                        1,
+                        observed_live,
+                        None,
+                        None,
+                        None,
+                        settings,
+                        None,
+                        &SessionEndEvidence::default(),
+                    )
+                },
+            )
+            .unwrap();
+            result.expect("durable start barrier must admit fresh task")
+        };
+
+        // 1. 普通冷启动消息：在 sess.ensure_started() 之前拦截，observed_live 必须仍为 false。
+        let ThreadMsg::Task(normal_task) = task_msg("om_svc_normal", "你好") else {
+            unreachable!()
+        };
+        let mut primed = false;
+        let mut observed_live = false;
+        let res = run_via_barrier(&normal_task, &mut primed, &mut settings, &mut observed_live);
+        assert_eq!(res, TurnResult::Failed);
+        assert!(
+            !observed_live,
+            "handle_task must fail before sess.ensure_started() on normal turns"
+        );
+
+        // 2. `/goal` slash 命令：同样在 ensure_started 与注入前拦截。
+        let ThreadMsg::Task(mut goal_task) = task_msg("om_svc_goal", "/goal check") else {
+            unreachable!()
+        };
+        goal_task.kind = ChatTaskKind::SlashCommand;
+        goal_task.slash_admitted = true;
+        let mut primed_goal = false;
+        let mut observed_live_goal = false;
+        let res_goal = run_via_barrier(
+            &goal_task,
+            &mut primed_goal,
+            &mut settings,
+            &mut observed_live_goal,
+        );
+        assert_eq!(res_goal, TurnResult::Failed);
+        assert!(
+            !observed_live_goal,
+            "handle_task must fail before sess.ensure_started() on /goal slash turns"
+        );
+
+        // 每次不健康入口在无锁初检+持锁复检共触发 2 次，两次入口合计 4 次（未重复进入 stream_turn 准入）。
+        let count_lines = std::fs::read_to_string(&probe_log)
+            .expect("probe must have executed")
+            .lines()
+            .count();
+        assert_eq!(
+            count_lines, 4,
+            "normal + /goal turns should each run preflight once (initial + under-lock recheck), got {count_lines}"
+        );
+
+        // 核对 `/resume` 控制分支：服务准入必须排在拆除现有会话和恢复会话之前。
+        let prod = production_source();
+        let resume_idx = prod
+            .find("ctrl: Control::Resume,")
+            .expect("Control::Resume branch");
+        let resume_body = &prod[resume_idx..];
+        let preflight_pos = resume_body
+            .find("services::ensure_agent_services(&agent)")
+            .expect("/resume must run service preflight");
+        let teardown_pos = resume_body
+            .find("do_teardown_preserving_previous(")
+            .expect("/resume teardown");
+        let start_resumed_pos = resume_body
+            .find("start_resumed_session(")
+            .expect("/resume start_resumed_session");
+        assert!(
+            preflight_pos < teardown_pos && preflight_pos < start_resumed_pos,
+            "/resume service preflight must happen before teardown and session resume"
+        );
+    }
+
+    #[test]
+    fn stream_turn_fails_closed_when_required_service_is_unhealthy() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &cfg_path,
+            r#"services:
+  local-proxy:
+    healthcheck:
+      command: ["false"]
+      timeout_secs: 2
+"#,
+        )
+        .unwrap();
+        let agent_dir = dir.path().join("agents").join("bot");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            "name: bot\nruntime:\n  cli: claude\n  requires:\n    - local-proxy\n",
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(cfg_path);
+
+        let sess = Session::for_agent(&agent, 100, 100);
+        let fe = SpyFrontend {
+            sent: std::cell::RefCell::new(Vec::new()),
+            fail_send: false,
+        };
+        let inflight = crate::runtime::inflight::InFlight::default();
+        let mirror = super::dispatcher::MirrorDeliveryTracker::default();
+        let mut delivered = false;
+        let mut on_delivered = || delivered = true;
+        let mut on_steer = |_ids: &[String]| {};
+        let settings = summon_core::settings::ResolvedSettings::resolve(
+            &resolve_messaging(&agent),
+            &summon_core::settings::ChatOverrides::default(),
+        );
+
+        let res = stream_turn(
+            &agent,
+            "test-scope",
+            &sess,
+            &fe,
+            "oc_test",
+            "p2p",
+            "hello",
+            &inflight,
+            &mirror,
+            vec![],
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &mut on_delivered,
+            &mut on_steer,
+            None,
+            None,
+            None,
+            settings,
+            false,
+        );
+
+        assert!(
+            matches!(res, TurnResult::Failed),
+            "expected TurnResult::Failed when required service is unhealthy, got {res:?}"
+        );
+        assert!(
+            !delivered,
+            "on_delivered must not fire when preflight blocks the turn"
+        );
+        let sent = fe.sent.borrow();
+        assert_eq!(sent.len(), 1, "expected exactly one error notice: {sent:?}");
+        assert!(
+            sent[0].contains("local-proxy"),
+            "error notice must name the failing service: {}",
+            sent[0]
+        );
     }
 
     fn spy_chat(dir: &tempfile::TempDir) -> ChatRef<'_> {

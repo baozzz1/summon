@@ -105,6 +105,7 @@
 - `summon session exit <TARGET>` / `summon session archive <TARGET>` —— 退出保留续聊 / 归档后新开；运行中须显式加 `--interrupt`
 - `summon comments list` —— 查看文档评论任务的状态、起草进程和完整任务 ID
 - `summon comments stop <id> --agent <别名>` —— 停止指定 agent 的本次评论起草并回收进程，任务结束后不会自动重新起草；`<id>` 使用 `comments list` 中的完整任务 ID
+- `summon services [status|check|start|stop]` —— 查看、探活、兜底拉起或停止全局 `config.yaml` 中声明的前置依赖服务；`status` / `check` 可按服务名过滤，外部托管服务只探活不误杀
 - `summon autostart on` / `off` / `status` —— 与 Menu Bar 的 Launch at login 共用设置；开启时默认保留当前 `keep_alive`，兼容 `enable` / `disable`
 
 文档评论的开关、起草超时与生命周期见 `summon guide config`；也可通过 `/dash` 打开控制台的“文档评论”页面查看、配置和停止任务。

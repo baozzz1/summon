@@ -930,7 +930,11 @@ pub(crate) enum ChildLookup {
 
 /// 列出 `path` 处那张块映射的每个键及其值的位置。
 pub(crate) fn child_values(src: &str, path: &[String]) -> Result<ChildLookup, EditError> {
-    let doc = Doc::parse(src);
+    let (bom_len, body) = match src.strip_prefix('\u{feff}') {
+        Some(rest) => ('\u{feff}'.len_utf8(), rest),
+        None => (0, src),
+    };
+    let doc = Doc::parse(body);
     let root = parse_root(&doc.lines)?;
     let mut map = &root;
     for seg in path {
@@ -952,7 +956,7 @@ pub(crate) fn child_values(src: &str, path: &[String]) -> Result<ChildLookup, Ed
         }
     }
     let mut offsets = Vec::with_capacity(doc.lines.len() + 1);
-    let mut at = 0;
+    let mut at = bom_len;
     for line in &doc.lines {
         offsets.push(at);
         at += line.text.len() + line.eol.len();

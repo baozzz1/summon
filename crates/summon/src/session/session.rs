@@ -219,6 +219,9 @@ pub struct Session<'a> {
     /// 冷启命令前缀注入的环境变量(chat 轮给 claude tmux 注入 `SUMMON_CHAT_ID` 等)。
     /// chat 会话恒空、行为不变;非空时 `augment_launch` 把它们并进冷启的一次性 env 文件。
     run_env: Vec<(String, String)>,
+    /// 为 true 时每次冷启/重连拉起 CLI 都会重算 `resolve_extra_env(self.agent)`，
+    /// 使 `config.yaml` 中 `services.<name>.agent_env` 与 `runtime.env` 变更在下次拉起 CLI 时立即生效。
+    refresh_agent_env: bool,
     /// R6:run_turn 已消费到的转录**绝对 offset**,与会话镜像共享同一 `Arc`。run_turn 每读一块就写,
     /// mirror 的 `tail_forward_turns` 据此跳过「watermark 之下」的 turn(那是飞书触发轮、run_turn 自己
     /// 发过的)。这是 mirror 防双发的唯一机制(不再用 turn_active 布尔)。None = 非镜像会话
@@ -255,6 +258,7 @@ impl<'a> Session<'a> {
             poll: Duration::from_millis(poll_ms),
             debounce: Duration::from_millis(debounce_ms),
             run_env: Vec::new(),
+            refresh_agent_env: false,
             mirror_watermark: None,
             chat_id: None,
             work_dir_override: None,
@@ -578,9 +582,26 @@ impl<'a> Session<'a> {
     fn launch_env_pairs(&self) -> Vec<(String, String)> {
         let essentials = crate::runtime::daemon::essential_system_env();
         let (_, inject) = crate::runtime::daemon::agent_feishu_isolation_tmux(self.agent);
+        let effective_run_env: Vec<(String, String)> = if self.refresh_agent_env {
+            let mut refreshed: Vec<_> = crate::runtime::daemon::resolve_extra_env(self.agent)
+                .into_iter()
+                .filter(|(k, _)| !summon_core::config::agent_identity::is_runtime_owned_env_key(k))
+                .collect();
+            refreshed.extend(
+                self.run_env
+                    .iter()
+                    .filter(|(k, _)| {
+                        summon_core::config::agent_identity::is_runtime_owned_env_key(k)
+                    })
+                    .cloned(),
+            );
+            refreshed
+        } else {
+            self.run_env.clone()
+        };
         let mut pairs: Vec<(String, String)> = essentials
             .into_iter()
-            .chain(self.run_env.iter().cloned())
+            .chain(effective_run_env)
             .chain(inject)
             .collect();
         // summon-owned Claude 仍会命中用户级 Hook；保留 marker 必须最后赋值，禁止 agent/run env
@@ -651,6 +672,12 @@ impl<'a> Session<'a> {
     /// 给本会话挂上 task run 的环境注入(并进冷启的一次性 env 文件)。链式构造,chat 路径不调用。
     pub fn with_run_env(mut self, env: Vec<(String, String)>) -> Self {
         self.run_env = env;
+        self
+    }
+
+    /// 启用启动前动态重算 `resolve_extra_env`，让 `services.<name>.agent_env` 变更在重启 tmux 会话时生效。
+    pub fn with_dynamic_agent_env(mut self) -> Self {
+        self.refresh_agent_env = true;
         self
     }
 
@@ -2893,5 +2920,69 @@ mod inject_latency_tests {
                 "两次补发是防竞态的冗余,不能删"
             );
         }
+    }
+
+    #[test]
+    fn dynamic_agent_env_picks_up_updated_service_agent_env_on_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &cfg_path,
+            "services:
+  proxy:
+    healthcheck:
+      tcp: 127.0.0.1:18999
+    agent_env:
+      PROXY_URL: http://127.0.0.1:8081
+",
+        )
+        .unwrap();
+        let agent_dir = dir.path().join("agents").join("synth-dyn");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            "name: synth-dyn
+runtime:
+  cli: claude
+  requires:
+    - proxy
+",
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(cfg_path.clone());
+
+        let sess = Session::for_agent(&agent, 200, 800)
+            .with_run_env(vec![("SUMMON_CHAT_ID".into(), "oc_dyn".into())])
+            .with_dynamic_agent_env();
+        let first: std::collections::HashMap<_, _> = sess.launch_env_pairs().into_iter().collect();
+        assert_eq!(
+            first.get("PROXY_URL").map(String::as_str),
+            Some("http://127.0.0.1:8081")
+        );
+        assert_eq!(
+            first.get("SUMMON_CHAT_ID").map(String::as_str),
+            Some("oc_dyn")
+        );
+
+        std::fs::write(
+            &cfg_path,
+            "services:
+  proxy:
+    healthcheck:
+      tcp: 127.0.0.1:18999
+    agent_env:
+      PROXY_URL: http://127.0.0.1:9092
+",
+        )
+        .unwrap();
+        let second: std::collections::HashMap<_, _> = sess.launch_env_pairs().into_iter().collect();
+        assert_eq!(
+            second.get("PROXY_URL").map(String::as_str),
+            Some("http://127.0.0.1:9092")
+        );
+        assert_eq!(
+            second.get("SUMMON_CHAT_ID").map(String::as_str),
+            Some("oc_dyn")
+        );
     }
 }

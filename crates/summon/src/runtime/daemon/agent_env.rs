@@ -282,7 +282,7 @@ pub(super) fn append_reply_transcript(
 }
 
 /// 读 agent.dir/.env(简单 dotenv:KEY=VALUE,# 注释)。
-pub(super) fn env_from_file(path: &std::path::Path) -> HashMap<String, String> {
+pub(crate) fn env_from_file(path: &std::path::Path) -> HashMap<String, String> {
     let mut m = HashMap::new();
     if let Ok(s) = std::fs::read_to_string(path) {
         for line in s.lines() {
@@ -320,7 +320,10 @@ pub fn resolve_creds(agent: &Agent) -> (Option<String>, Option<String>) {
 /// 任一引用解析不到 → 返回 `None`,由调用方**整条丢弃**。不回退成空串:空值会
 /// 覆盖上游同名变量(如 CLI 自己从登录态读到的 token),表现为「配了反而更坏」,
 /// 比缺失更难查。未闭合的 `${` 不当引用,原样保留。
-fn expand_env_value(raw: &str, lookup: &impl Fn(&str) -> Option<String>) -> Option<String> {
+pub(crate) fn expand_env_value(
+    raw: &str,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Option<String> {
     if !raw.contains("${") {
         return Some(raw.to_string());
     }
@@ -349,6 +352,89 @@ fn expand_env_value(raw: &str, lookup: &impl Fn(&str) -> Option<String>) -> Opti
 /// 走本函数,不要直接用 `Agent::extra_env()`(那是未展开的原始配置)。
 pub fn resolve_extra_env(agent: &Agent) -> Vec<(String, String)> {
     let envfile = env_from_file(&agent.dir.join(".env"));
+    let mut merged: Vec<(String, String)> = Vec::new();
+    let upsert = |list: &mut Vec<(String, String)>, key: String, val: String| {
+        if let Some((_, existing)) = list.iter_mut().find(|(k, _)| *k == key) {
+            *existing = val;
+        } else {
+            list.push((key, val));
+        }
+    };
+
+    // 前置依赖服务的 `agent_env`（按 `runtime.requires` 顺序合并，优先级低于本 agent 的 `runtime.env`）。
+    if !agent.required_services().is_empty() {
+        let cfg_path = agent.effective_global_config_path();
+        let global_env = crate::runtime::services::global_dotenv(cfg_path.as_deref());
+        match agent.load_global_config() {
+            Ok(cfg) => {
+                let mut agents_dirs: Vec<&std::path::Path> = vec![cfg.agents_dir.as_path()];
+                if let Some(parent) = agent.dir.parent() {
+                    agents_dirs.push(parent);
+                }
+                let registered_identity_keys =
+                    crate::runtime::services::blocked_identity_keys_for_agents_dirs(&agents_dirs);
+                // 共享服务 agent_env 的 `${VAR}` 展开禁止引用任何 runtime/飞书凭据键（含兄弟 agent
+                // 自定义名称的 `app_id_env`/`app_secret_env`），防止凭据被换名注入。
+                let service_lookup = |name: &str| -> Option<String> {
+                    if summon_core::agent_identity::is_runtime_owned_env_key(name)
+                        || registered_identity_keys.contains(name)
+                    {
+                        return None;
+                    }
+                    envfile
+                        .get(name)
+                        .filter(|v| !v.is_empty())
+                        .cloned()
+                        .or_else(|| global_env.get(name).filter(|v| !v.is_empty()).cloned())
+                        .or_else(|| std::env::var(name).ok().filter(|v| !v.is_empty()))
+                };
+                let mut seen = std::collections::HashSet::new();
+                for raw_svc in agent.required_services() {
+                    let svc_name = raw_svc.trim();
+                    if !seen.insert(svc_name.to_string()) {
+                        continue;
+                    }
+                    let Some(spec) = cfg.services.get(svc_name) else {
+                        continue;
+                    };
+                    let mut keys: Vec<&String> = spec.agent_env.keys().collect();
+                    keys.sort();
+                    for key in keys {
+                        if summon_core::agent_identity::is_runtime_owned_env_key(key)
+                            || registered_identity_keys.contains(key)
+                        {
+                            log(&summon_i18n::format!(
+                                "services.agent_env_skip_runtime_owned",
+                                agent = agent.name,
+                                service = svc_name,
+                                key = key
+                            ));
+                            continue;
+                        }
+                        let raw = &spec.agent_env[key];
+                        match expand_env_value(raw, &service_lookup) {
+                            Some(v) => upsert(&mut merged, key.clone(), v),
+                            None => {
+                                log(&summon_i18n::format!(
+                                    "services.agent_env_expand_dropped",
+                                    agent = agent.name,
+                                    service = svc_name,
+                                    key = key
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                log(&format!(
+                    "[{}] failed to load global config for required services: {error}",
+                    agent.name
+                ));
+            }
+        }
+    }
+
     let lookup = |name: &str| -> Option<String> {
         envfile
             .get(name)
@@ -356,17 +442,15 @@ pub fn resolve_extra_env(agent: &Agent) -> Vec<(String, String)> {
             .cloned()
             .or_else(|| std::env::var(name).ok().filter(|v| !v.is_empty()))
     };
-    agent
-        .extra_env()
-        .into_iter()
-        .filter_map(|(k, raw)| match expand_env_value(&raw, &lookup) {
-            Some(v) => Some((k, v)),
+    for (k, raw) in agent.extra_env() {
+        match expand_env_value(&raw, &lookup) {
+            Some(v) => upsert(&mut merged, k, v),
             None => {
                 log(&summon_i18n::format!("rd52f71ac16", agent.name));
-                None
             }
-        })
-        .collect()
+        }
+    }
+    merged
 }
 
 /// 飞书运行时身份数据的落盘作用域。alias 防止同一 app 下不同 agent 互相污染；app_id 指纹防止
@@ -1029,14 +1113,35 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// 收集 `agents_dir` 下所有在册 agent 配置中声明的飞书凭据键名（含非 `FEISHU_*` 自定义键名），
+/// 用于共享服务环境隔离与 `agent_env` 展开时拦截兄弟凭据换名引用。
+pub fn registered_feishu_identity_keys(
+    agents_dir: &std::path::Path,
+) -> std::collections::HashSet<String> {
+    let mut keys = std::collections::HashSet::new();
+    if let Ok((reg, _warnings)) = summon_core::registry::Registry::load_tolerant(agents_dir) {
+        for a in &reg.agents {
+            if let Some(f) = a.feishu.as_ref() {
+                if let Some(n) = f.app_id_env.as_deref() {
+                    keys.insert(n.to_string());
+                }
+                if let Some(n) = f.app_secret_env.as_deref() {
+                    keys.insert(n.to_string());
+                }
+            }
+        }
+    }
+    keys
+}
+
 /// tmux 路径的飞书身份隔离材料:`(要 env -u 清掉的全部身份键, 要设回的本 agent 自己凭据)`。
 /// tmux pane 继承的是 tmux server 环境(无法在 Rust 里按前缀枚举),故按「所有已知 agent 的身份键名」
 /// 精确清——从 agents 目录(本 agent.dir 的父目录)整份 tolerant 加载收集每个 agent 的
 /// `app_id_env`/`app_secret_env` 名,再 `feishu_unset_keys` 去重 + 补规范名。registry 读不到则只清
 /// 规范名(降级,仍清掉 stray `FEISHU_APP_*`)。
 ///
-/// why tolerant:这里收的是「要清掉的键名」,收得越全越安全。旧的 strict 语义下,任何一份
-/// agent.yaml 坏掉都会让 ① 整个失效——一个兄弟键都清不到,反而是更危险的降级。
+/// why tolerant:这里收的是「要清掉的键名」,收得越全越安全。strict 加载时任何一份
+/// agent.yaml 坏掉都会让 ① 整个失效,一个兄弟键都清不到。
 pub fn agent_feishu_isolation_tmux(agent: &Agent) -> (Vec<String>, Vec<(String, String)>) {
     let inject = agent_identity_env(agent);
     let mut names: Vec<String> = Vec::new();
@@ -1867,6 +1972,243 @@ mod runtime_env_expand_tests {
         let got = resolve_extra_env(&agent);
         std::env::remove_var("SUMMON_TEST_EMPTY_VAR");
         assert_eq!(got, vec![("V".to_string(), "from-process".to_string())]);
+    }
+
+    #[test]
+    fn required_service_agent_env_blocks_renamed_runtime_and_feishu_credential_refs() {
+        let _guard = crate::test_support::process_test_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let summon_root = tmp.path();
+        std::fs::write(
+            summon_root.join(".env"),
+            "FEISHU_APP_SECRET_OTHER=synth-other-secret-99\nSAFE_PROXY_TOKEN=synth-safe-token-11\n",
+        )
+        .unwrap();
+        std::fs::write(
+            summon_root.join("config.yaml"),
+            r#"services:
+  proxy:
+    healthcheck:
+      tcp: 127.0.0.1:18999
+    agent_env:
+      SMUGGLED_FEISHU: "${FEISHU_APP_SECRET_OTHER}"
+      SMUGGLED_HANDOFF: "${SUMMON_TEST_AGENT_ENV_HANDOFF_TOKEN}"
+      PROXY_TOKEN: "${SAFE_PROXY_TOKEN}"
+"#,
+        )
+        .unwrap();
+        let agent_dir = summon_root.join("agents").join("synth-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            r#"name: synth-agent
+runtime:
+  cli: claude
+  requires:
+    - proxy
+"#,
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(summon_root.join("config.yaml"));
+
+        std::env::set_var(
+            "SUMMON_TEST_AGENT_ENV_HANDOFF_TOKEN",
+            "synth-handoff-secret-88",
+        );
+        let merged = resolve_extra_env(&agent);
+        std::env::remove_var("SUMMON_TEST_AGENT_ENV_HANDOFF_TOKEN");
+        let map: std::collections::HashMap<_, _> = merged.into_iter().collect();
+        assert!(!map.contains_key("SMUGGLED_FEISHU"));
+        assert!(!map.contains_key("SMUGGLED_HANDOFF"));
+        assert_eq!(
+            map.get("PROXY_TOKEN").map(String::as_str),
+            Some("synth-safe-token-11")
+        );
+    }
+
+    #[test]
+    fn required_service_agent_env_blocks_sibling_custom_identity_key_refs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let summon_root = tmp.path();
+        std::fs::write(
+            summon_root.join(".env"),
+            "CUSTOM_SIBLING_BOT_SECRET=synth-custom-secret-66
+SAFE_TOKEN=synth-ok-66
+",
+        )
+        .unwrap();
+        std::fs::write(
+            summon_root.join("config.yaml"),
+            r#"services:
+  proxy:
+    healthcheck:
+      tcp: 127.0.0.1:18999
+    agent_env:
+      SMUGGLED_CUSTOM: "${CUSTOM_SIBLING_BOT_SECRET}"
+      SAFE_OUT: "${SAFE_TOKEN}"
+"#,
+        )
+        .unwrap();
+        let sibling_dir = summon_root.join("agents").join("sibling");
+        std::fs::create_dir_all(&sibling_dir).unwrap();
+        std::fs::write(
+            sibling_dir.join("agent.yaml"),
+            r#"name: sibling
+runtime:
+  cli: claude
+feishu:
+  app_id_env: CUSTOM_SIBLING_BOT_ID
+  app_secret_env: CUSTOM_SIBLING_BOT_SECRET
+"#,
+        )
+        .unwrap();
+        let agent_dir = summon_root.join("agents").join("caller");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            r#"name: caller
+runtime:
+  cli: claude
+  requires:
+    - proxy
+"#,
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(summon_root.join("config.yaml"));
+
+        std::env::set_var("CUSTOM_SIBLING_BOT_SECRET", "synth-custom-secret-66");
+        let merged = resolve_extra_env(&agent);
+        std::env::remove_var("CUSTOM_SIBLING_BOT_SECRET");
+
+        let map: std::collections::HashMap<_, _> = merged.into_iter().collect();
+        assert!(
+            !map.contains_key("SMUGGLED_CUSTOM"),
+            "sibling custom identity key must not be smuggled: {map:?}"
+        );
+        assert_eq!(map.get("SAFE_OUT").map(String::as_str), Some("synth-ok-66"));
+    }
+
+    #[test]
+    fn required_service_agent_env_blocks_custom_identity_key_from_configured_agents_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let summon_root = tmp.path().join("summon");
+        let custom_agents_dir = tmp.path().join("external-agents");
+        let sibling_dir = custom_agents_dir.join("sibling");
+        std::fs::create_dir_all(&summon_root).unwrap();
+        std::fs::create_dir_all(&sibling_dir).unwrap();
+        std::fs::write(summon_root.join(".env"), "SAFE_TOKEN=synth-ok-67\n").unwrap();
+        std::fs::write(
+            summon_root.join("config.yaml"),
+            format!(
+                r#"agents_dir: {}
+services:
+  proxy:
+    healthcheck:
+      tcp: 127.0.0.1:18999
+    agent_env:
+      SMUGGLED_EXTERNAL: "${{CUSTOM_EXTERNAL_BOT_SECRET}}"
+      CUSTOM_EXTERNAL_BOT_SECRET: "spoofed-value"
+      SAFE_OUT: "${{SAFE_TOKEN}}"
+"#,
+                custom_agents_dir.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            sibling_dir.join("agent.yaml"),
+            r#"name: sibling
+runtime:
+  cli: claude
+feishu:
+  app_id_env: CUSTOM_EXTERNAL_BOT_ID
+  app_secret_env: CUSTOM_EXTERNAL_BOT_SECRET
+"#,
+        )
+        .unwrap();
+        let agent_dir = tmp.path().join("separate-caller-dir").join("caller");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            r#"name: caller
+runtime:
+  cli: claude
+  requires:
+    - proxy
+"#,
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(summon_root.join("config.yaml"));
+
+        std::env::set_var("CUSTOM_EXTERNAL_BOT_SECRET", "synth-external-secret-67");
+        let merged = resolve_extra_env(&agent);
+        std::env::remove_var("CUSTOM_EXTERNAL_BOT_SECRET");
+
+        let map: std::collections::HashMap<_, _> = merged.into_iter().collect();
+        assert!(!map.contains_key("SMUGGLED_EXTERNAL"), "{map:?}");
+        assert!(!map.contains_key("CUSTOM_EXTERNAL_BOT_SECRET"), "{map:?}");
+        assert_eq!(map.get("SAFE_OUT").map(String::as_str), Some("synth-ok-67"));
+    }
+
+    #[test]
+    fn required_service_agent_env_merges_with_lower_precedence_and_blocks_runtime_owned() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("config.yaml");
+        std::fs::write(
+            &config_path,
+            concat!(
+                "services:\n",
+                "  proxy:\n",
+                "    healthcheck:\n",
+                "      http: http://127.0.0.1:8080/health\n",
+                "    agent_env:\n",
+                "      ANTHROPIC_BASE_URL: http://127.0.0.1:8080\n",
+                "      PROXY_TOKEN: \"${SHARED_PROXY_TOKEN}\"\n",
+                "      OVERRIDE_ME: from-service\n",
+                "      SUMMON_AGENT: forged\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join(".env"),
+            "SHARED_PROXY_TOKEN=global-secret\n",
+        )
+        .unwrap();
+
+        let agent_dir = root.path().join("agents/demo");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("agent.yaml"),
+            concat!(
+                "name: demo\n",
+                "runtime:\n",
+                "  cli: claude\n",
+                "  requires: [proxy]\n",
+                "  env:\n",
+                "    OVERRIDE_ME: from-agent\n",
+            ),
+        )
+        .unwrap();
+        let mut reg = Registry::load(&root.path().join("agents")).unwrap();
+        reg = reg.with_global_config_path(&config_path);
+        let agent = reg.agents.into_iter().next().unwrap();
+
+        let got: std::collections::HashMap<_, _> = resolve_extra_env(&agent).into_iter().collect();
+        assert_eq!(
+            got.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("http://127.0.0.1:8080")
+        );
+        assert_eq!(
+            got.get("PROXY_TOKEN").map(String::as_str),
+            Some("global-secret")
+        );
+        assert_eq!(
+            got.get("OVERRIDE_ME").map(String::as_str),
+            Some("from-agent")
+        );
+        assert!(
+            !got.contains_key("SUMMON_AGENT"),
+            "runtime-owned keys from service agent_env must be blocked"
+        );
     }
 }
 

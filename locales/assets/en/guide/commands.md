@@ -135,6 +135,7 @@ configured safe command route. Unavailable/unsafe forms are rejected rather than
 - session exit / archive <TARGET>: preserve resume / start fresh. Running turns need --interrupt.
 - summon comments list: comment task states, processes, and full task IDs.
 - summon comments stop <id> --agent <alias>: stop/reap this draft; no automatic redraft.
+- summon services [status|check|start|stop]: inspect, probe, fallback-start, or stop prerequisite services declared in global `config.yaml`; `status` / `check` accept an optional service name, and externally managed services are never stopped.
 - summon autostart on|off|status: shared with Menu Bar Launch at login; enabling
   preserves keep_alive unless explicit. enable/disable aliases supported.
 

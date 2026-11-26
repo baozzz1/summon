@@ -276,6 +276,7 @@ app owner. A nonempty list disables this owner fallback.
 | codex_sandbox / codex_approval_policy | override global Codex policy |
 | codex_skip_git_repo_check | false; Codex exec non-Git exception |
 | env | subprocess environment |
+| requires | required service names from global `services`; probed (and started on demand) before each turn, fail-closed when unhealthy |
 | cursor_quota_token_command | agent quota credential command |
 | execution.target / execution.working_dir | remote tools target / absolute remote directory |
 | tmux_name / seed | session name / initial input; usually omit |
@@ -304,6 +305,7 @@ Top-level global config.yaml, outside messaging:
 | macos.agent_privacy_identity | true; macOS only. Privacy access (speech recognition, microphone, folders) requested by agent CLIs and their tools belongs to each CLI; false shares summon's grants. Next agent launch; see `summon guide troubleshooting` |
 | remotes | empty; fleet machines with name, ssh_host, summon_bin |
 | execution_targets | empty; remote targets with provider: claude-code |
+| services | empty; shared local prerequisite services (see below) |
 
 Tools: tmux, lark_cli, claude, codex, traex, cursor_agent, git, ssh, npx, pkill, open,
 xdg_open, launchctl, systemctl, loginctl, pbcopy, osascript. tools takes precedence over
@@ -321,6 +323,13 @@ top_k 50, max_age_secs 300, per_hour 6. Default join/create triggers are the exi
 Chinese phrases; invite_verbs is /invite. Configure trigger strings in join_verbs /
 create_verbs. blocklist excludes chats; aliases adds names; owner_open_id binds requester;
 lark_profile selects login identity. Deployment/user authorization still bounds capabilities.
+
+Prerequisite services `services`: declare machine-shared local services (such as local proxies, bridges, or MCP servers) independently of any single agent CLI. Each key is a service name (1-48 chars in `[A-Za-z0-9_-]`):
+- `healthcheck` (required, choose exactly one of `http`, `tcp`, or `command`): `http` (expects 2xx, no redirects, loopback bypasses proxy), `tcp` (`host:port` or `[ipv6]:port`), or `command` (direct argv list, no shell, exit 0 = healthy); plus `timeout_secs` (per-probe timeout, default 2, range 1..=30) and `ready_timeout_secs` (fallback startup readiness timeout, default 15, range 1..=120).
+- `command` (optional argv list, no shell): fallback startup command when the probe fails; omit for probe-only services managed externally by launchd/systemd. Supports `working_dir` (`~/` supported), `env` (expanded from global `.env` and process env only, never per-agent `.env`), and `survive_daemon_restart` (default `true`; set `false` to stop summon-started fallback processes on graceful daemon shutdown).
+- `agent_env` (optional map): injected into agents that list the service in `runtime.requires`, with lower precedence than the agent's own `runtime.env`; cannot override runtime-owned `SUMMON_*` keys. Supports `${VAR}` references (resolved from agent `.env` -> global `.env` -> process env).
+
+Already-healthy services are never restarted. If `command` is a one-shot launcher (such as `launchctl kickstart` or `systemctl --user start`), set `oneshot: true` (default `false`) so summon requires both exit code 0 and a healthy probe, skips writing a managed lease, and treats the resulting service as externally managed; externally managed services are never stopped by `summon services stop` or daemon shutdown. Changes to `healthcheck`, `command`, or `runtime.requires` take effect on the next turn; `agent_env` is recomputed whenever an agent CLI process launches, so long-lived tmux sessions pick up `agent_env` changes on a fresh or restarted session.
 
 Automatic upgrades `upgrade`: `auto: false` (off by default), `check_interval_hours: 6`, `min_age_hours: 2`
 (a release must be this old before it is adopted), `idle_minutes: 10` (the machine must be idle this long before

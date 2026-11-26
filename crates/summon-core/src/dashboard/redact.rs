@@ -1,9 +1,10 @@
 //! 敏感值的脱敏往返:下发前把密钥换成占位符,保存时占位符原样带回就还原原值,改动了才写新值。
 //!
-//! 目前唯一的敏感字段是 agent.yaml 的 `runtime.env`:值可以写 `${VAR}` 引用(真值在已
-//! gitignore 的 `.env` 里),这种照常显示;其余直接写在 yaml 里的字面值一律当密钥。
+//! 敏感字段包括 agent.yaml 的 `runtime.env`，以及 config.yaml 的 `services.<name>.env` 与
+//! `services.<name>.agent_env`：值可以写 `${VAR}` 引用(真值在已 gitignore 的 `.env` 里),
+//! 这种照常显示;其余直接写在 yaml 里的字面值一律当密钥。
 //!
-//! **fail-closed**:原文的结构判不准、又可能含 `runtime.env` 时,返回错误而不是原文 —— 宁可
+//! **fail-closed**:原文的结构判不准、又可能含敏感映射时,返回错误而不是原文 —— 宁可
 //! 原文模式打不开,也不让密钥出现在响应里。
 
 use super::RawKind;
@@ -66,15 +67,26 @@ pub fn unmask(key: &str, submitted: &str, original: Option<&str>) -> Result<Stri
 }
 
 const ENV_PATH: [&str; 2] = ["runtime", "env"];
+const SERVICE_ENV_FIELDS: [&str; 2] = ["env", "agent_env"];
 
 fn env_path() -> Vec<String> {
     ENV_PATH.iter().map(|s| s.to_string()).collect()
 }
 
+fn service_hidden_key(service: &str, field: &str, key: &str) -> String {
+    format!("services.{service}.{field}.{key}")
+}
+
+struct RedactEntry {
+    hidden_key: String,
+    display_key: String,
+    range: std::ops::Range<usize>,
+}
+
 /// 原文下发用:返回脱敏后的全文与被藏起来的值(留在服务端,不下发)。
 pub fn redact(kind: RawKind, text: &str) -> Result<(String, Vec<Hidden>), RedactError> {
     if kind == RawKind::Config {
-        return Ok((text.to_string(), Vec::new()));
+        return redact_config_services(text);
     }
     let children = match child_values(text, &env_path()) {
         Ok(ChildLookup::Children(children)) => children,
@@ -103,9 +115,12 @@ pub fn redact(kind: RawKind, text: &str) -> Result<(String, Vec<Hidden>), Redact
 
 /// 原文保存用:把编辑后全文里原样带回的占位符还原成原值。
 pub fn restore(kind: RawKind, edited: &str, hidden: &[Hidden]) -> Result<String, RedactError> {
+    if kind == RawKind::Config {
+        return restore_config_services(edited, hidden);
+    }
     let stray = || RedactError::StrayPlaceholder(summon_i18n::format!("r69a30f7e5d"));
-    let children = match (kind, child_values(edited, &env_path())) {
-        (RawKind::Agent, Ok(ChildLookup::Children(children))) => children,
+    let children = match child_values(edited, &env_path()) {
+        Ok(ChildLookup::Children(children)) => children,
         _ if edited.contains(PLACEHOLDER) => return Err(stray()),
         _ => return Ok(edited.to_string()),
     };
@@ -127,6 +142,133 @@ pub fn restore(kind: RawKind, edited: &str, hidden: &[Hidden]) -> Result<String,
         return Err(stray());
     }
     Ok(out)
+}
+
+fn collect_config_service_env_entries(text: &str) -> Result<Option<Vec<RedactEntry>>, ()> {
+    let services = match child_values(text, &["services".to_string()]) {
+        Ok(ChildLookup::Children(children)) => children,
+        Ok(ChildLookup::Missing) => return Ok(None),
+        Ok(ChildLookup::NotBlockMap { .. }) | Err(_) => return Err(()),
+    };
+    let mut entries = Vec::new();
+    for service in services {
+        for field in SERVICE_ENV_FIELDS {
+            let path = vec![
+                "services".to_string(),
+                service.key.clone(),
+                field.to_string(),
+            ];
+            match child_values(text, &path) {
+                Ok(ChildLookup::Children(children)) => {
+                    for child in children {
+                        entries.push(RedactEntry {
+                            hidden_key: service_hidden_key(&service.key, field, &child.key),
+                            display_key: child.key,
+                            range: child.range,
+                        });
+                    }
+                }
+                Ok(ChildLookup::Missing) => {}
+                Ok(ChildLookup::NotBlockMap { .. }) | Err(_) => return Err(()),
+            }
+        }
+    }
+    entries.sort_by_key(|entry| entry.range.start);
+    Ok(Some(entries))
+}
+
+fn redact_config_services(text: &str) -> Result<(String, Vec<Hidden>), RedactError> {
+    let entries = match collect_config_service_env_entries(text) {
+        Ok(Some(entries)) => entries,
+        Ok(None) | Err(()) => {
+            return fallback_config_services(text).map(|()| (text.to_string(), Vec::new()))
+        }
+    };
+    let mut out = text.to_string();
+    let mut hidden = Vec::new();
+    for entry in entries.iter().rev() {
+        let raw = &text[entry.range.clone()];
+        if !value_is_secret(raw) {
+            continue;
+        }
+        hidden.push(Hidden {
+            key: entry.hidden_key.clone(),
+            raw: raw.to_string(),
+        });
+        out.replace_range(entry.range.clone(), &format!(" {PLACEHOLDER}"));
+    }
+    hidden.reverse();
+    Ok((out, hidden))
+}
+
+fn restore_config_services(edited: &str, hidden: &[Hidden]) -> Result<String, RedactError> {
+    let stray = || RedactError::StrayPlaceholder(summon_i18n::format!("r69a30f7e5d"));
+    let entries = match collect_config_service_env_entries(edited) {
+        Ok(Some(entries)) => entries,
+        _ if edited.contains(PLACEHOLDER) => return Err(stray()),
+        _ => return Ok(edited.to_string()),
+    };
+    let mut out = edited.to_string();
+    for entry in entries.iter().rev() {
+        let raw = &edited[entry.range.clone()];
+        if !is_placeholder(raw) {
+            continue;
+        }
+        let Some(original) = hidden.iter().find(|h| h.key == entry.hidden_key) else {
+            return Err(RedactError::StrayPlaceholder(summon_i18n::format!(
+                "r816896b342",
+                entry.display_key
+            )));
+        };
+        out.replace_range(entry.range.clone(), &original.raw);
+    }
+    if out.contains(PLACEHOLDER) {
+        return Err(stray());
+    }
+    Ok(out)
+}
+
+fn map_values_all_visible(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => true,
+        Some(Value::Mapping(map)) => map.values().all(|v| match v {
+            Value::String(s) => !is_secret(s),
+            Value::Null => true,
+            _ => false,
+        }),
+        Some(_) => false,
+    }
+}
+
+fn fallback_config_services(text: &str) -> Result<(), RedactError> {
+    let refuse =
+        || RedactError::Unsupported(summon_i18n::text!("services.redact_unsupported").to_string());
+    match serde_yaml::from_str::<Value>(text) {
+        Ok(doc) => {
+            let Some(services) = doc.get("services") else {
+                return Ok(());
+            };
+            let visible = match services {
+                Value::Null => true,
+                Value::Mapping(map) => map.values().all(|svc| match svc {
+                    Value::Null => true,
+                    Value::Mapping(svc_map) => {
+                        map_values_all_visible(svc_map.get("env"))
+                            && map_values_all_visible(svc_map.get("agent_env"))
+                    }
+                    _ => false,
+                }),
+                _ => false,
+            };
+            if visible {
+                Ok(())
+            } else {
+                Err(refuse())
+            }
+        }
+        // 定位器与 YAML 解析器都无法解析时，无法证明不存在敏感 `services` 段，一律 fail-closed。
+        Err(_) => Err(refuse()),
+    }
 }
 
 /// 一段值的原文要不要藏:单独解析出来是只含引用的字符串或空值才显示,其余(字面串、数字、
@@ -156,36 +298,27 @@ fn fallback(text: &str) -> Result<(), RedactError> {
     match serde_yaml::from_str::<Value>(text) {
         Ok(doc) => {
             let env = doc.get("runtime").and_then(|r| r.get("env"));
-            let visible = match env {
-                None | Some(Value::Null) => true,
-                Some(Value::Mapping(map)) => map.values().all(|v| match v {
-                    Value::String(s) => !is_secret(s),
-                    Value::Null => true,
-                    _ => false,
-                }),
-                Some(_) => false,
-            };
-            if visible {
+            if map_values_all_visible(env) {
                 Ok(())
             } else {
                 Err(refuse())
             }
         }
         // 解析不了:只要文本里任何地方像是写了 `env:`,就不给。
-        Err(_) if mentions_env_key(text) => Err(refuse()),
+        Err(_) if mentions_key(text, "env") => Err(refuse()),
         Err(_) => Ok(()),
     }
 }
 
-fn mentions_env_key(text: &str) -> bool {
+fn mentions_key(text: &str, needle: &str) -> bool {
     text.lines()
         .filter(|line| !line.trim_start().starts_with('#'))
         .any(|line| {
             let bytes = line.as_bytes();
-            line.match_indices("env").any(|(at, _)| {
+            line.match_indices(needle).any(|(at, _)| {
                 let before = at.checked_sub(1).map(|i| bytes[i]);
                 let boundary = !before.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_');
-                let rest = line[at + 3..].trim_start_matches(['"', '\'', ' ', '\t']);
+                let rest = line[at + needle.len()..].trim_start_matches(['"', '\'', ' ', '\t']);
                 boundary && rest.starts_with(':')
             })
         })
@@ -224,6 +357,70 @@ mod tests {
             redact(RawKind::Config, cfg).unwrap(),
             (cfg.to_string(), Vec::new())
         );
+    }
+
+    #[test]
+    fn config_services_with_utf8_bom_redacts_and_restores_round_trip() {
+        let raw = "\u{feff}services:\n  synth-svc:\n    env:\n      API_TOKEN: synth-bom-secret-01\n      PASS_REF: \"${UPSTREAM_TOKEN}\"\n    agent_env:\n      AGENT_KEY: synth-bom-secret-02\n";
+        let (redacted, hidden) = redact(RawKind::Config, raw).expect("BOM config must redact");
+        assert!(
+            !redacted.contains("synth-bom-secret-01"),
+            "BOM service env secret leaked: {redacted}"
+        );
+        assert!(
+            !redacted.contains("synth-bom-secret-02"),
+            "BOM service agent_env secret leaked: {redacted}"
+        );
+        assert!(redacted.contains("${UPSTREAM_TOKEN}"));
+        assert_eq!(hidden.len(), 2);
+        let restored =
+            restore(RawKind::Config, &redacted, &hidden).expect("BOM restore must succeed");
+        assert_eq!(restored, raw);
+    }
+
+    #[test]
+    fn escaped_services_key_with_syntax_error_fails_closed() {
+        let broken = "{\"serv\\x69ces\": {\"proxy\": {\"env\": {\"TOKEN\": \"synth-escaped-secret-77\"}}}, broken: [}\n";
+        let err = redact(RawKind::Config, broken).unwrap_err();
+        assert!(matches!(err, RedactError::Unsupported(_)), "{err:?}");
+        assert!(
+            !format!("{err:?}").contains("synth-escaped-secret-77"),
+            "error must not leak secret: {err:?}"
+        );
+    }
+
+    #[test]
+    fn config_services_env_and_agent_env_are_redacted_and_restored() {
+        let cfg = "services:\n  proxy:\n    healthcheck:\n      http: http://127.0.0.1:8080/health\n    env:\n      API_KEY: sk-service-secret\n      REF: \"${GLOBAL_REF}\"\n    agent_env:\n      ANTHROPIC_BASE_URL: http://127.0.0.1:8080\n      ANTHROPIC_AUTH_TOKEN: \"${PROXY_TOKEN}\"\n";
+        let (redacted_cfg, hidden) = redact(RawKind::Config, cfg).unwrap();
+        assert!(
+            !redacted_cfg.contains("sk-service-secret"),
+            "{redacted_cfg}"
+        );
+        assert!(
+            !redacted_cfg.contains("ANTHROPIC_BASE_URL: http://127.0.0.1:8080"),
+            "{redacted_cfg}"
+        );
+        assert!(
+            redacted_cfg.contains("REF: \"${GLOBAL_REF}\""),
+            "{redacted_cfg}"
+        );
+        assert!(
+            redacted_cfg.contains("ANTHROPIC_AUTH_TOKEN: \"${PROXY_TOKEN}\""),
+            "{redacted_cfg}"
+        );
+        assert_eq!(hidden.len(), 2);
+        assert_eq!(
+            restore(RawKind::Config, &redacted_cfg, &hidden).unwrap(),
+            cfg
+        );
+
+        // Flow mapping with literal secret in services fails closed.
+        let flow = "services: {proxy: {env: {SECRET: sk-1}}}\n";
+        assert!(matches!(
+            redact(RawKind::Config, flow),
+            Err(RedactError::Unsupported(_))
+        ));
     }
 
     #[test]

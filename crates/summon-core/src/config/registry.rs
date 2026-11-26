@@ -311,6 +311,10 @@ pub struct Runtime {
     /// ```
     #[serde(default)]
     pub chat_working_dirs: Option<std::collections::HashMap<String, String>>,
+    /// 本 agent 运行前必须就绪的前置服务名列表（对应 config.yaml 的 `services.<name>`）。
+    /// 按声明顺序合并服务的 `agent_env`（优先级低于本 agent 的 `runtime.env`），并在每轮前探活/按需拉起。
+    #[serde(default)]
+    pub requires: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -532,6 +536,33 @@ impl Agent {
             .and_then(|r| r.env.as_ref())
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default()
+    }
+
+    /// 本 agent 声明依赖的前置服务名列表（按 `runtime.requires` 声明顺序）。
+    pub fn required_services(&self) -> &[String] {
+        self.runtime
+            .as_ref()
+            .map(|r| r.requires.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// 推断本 agent 所属的全局 `config.yaml` 路径。
+    /// 显式绑定的 `global_config_path` 优先；其次按 `<root>/agents/<alias>` 反推 `<root>/config.yaml`。
+    pub fn effective_global_config_path(&self) -> Option<PathBuf> {
+        self.global_config_path.clone().or_else(|| {
+            self.dir
+                .parent()?
+                .parent()
+                .map(|root| root.join("config.yaml"))
+        })
+    }
+
+    /// 现读本 agent 所属的全局 `config.yaml`。文件不存在返回默认配置；读不出或解析失败返回脱敏错误（fail-closed）。
+    pub fn load_global_config(&self) -> Result<crate::config::Config, String> {
+        let Some(path) = self.effective_global_config_path() else {
+            return Ok(crate::config::Config::default());
+        };
+        crate::config::Config::load_strict_at(&path)
     }
 
     /// 按 chat_id 查 `runtime.chat_working_dirs` 映射配置的工作目录(已展开 ~/)。

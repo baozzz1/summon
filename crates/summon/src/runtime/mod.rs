@@ -43,6 +43,7 @@ pub(crate) mod responsibility;
 /// stdio 上的 JSON-RPC 传输层原语(codex app-server / cursor ACP 两个客户端共用)。
 pub mod rpc_stdio;
 pub(crate) mod self_followup;
+pub(crate) mod services;
 pub(crate) mod session_end;
 pub(crate) mod status_snapshot;
 /// PreToolUse 执行闸:外部发起人的轮次只读。由 summon 会话专属 settings 调用。

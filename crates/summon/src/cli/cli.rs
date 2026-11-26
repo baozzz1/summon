@@ -147,6 +147,30 @@ pub enum CommentsAction {
 }
 
 #[derive(Subcommand)]
+pub enum ServicesAction {
+    #[command(about = summon_i18n::text!("services.cli.status_about"))]
+    Status {
+        #[arg(help = summon_i18n::text!("services.cli.name_help"))]
+        name: Option<String>,
+    },
+    #[command(about = summon_i18n::text!("services.cli.check_about"))]
+    Check {
+        #[arg(help = summon_i18n::text!("services.cli.name_help"))]
+        name: Option<String>,
+    },
+    #[command(about = summon_i18n::text!("services.cli.start_about"))]
+    Start {
+        #[arg(help = summon_i18n::text!("services.cli.target_name_help"))]
+        name: String,
+    },
+    #[command(about = summon_i18n::text!("services.cli.stop_about"))]
+    Stop {
+        #[arg(help = summon_i18n::text!("services.cli.target_name_help"))]
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum Cmd {
     #[command(about = summon_i18n::text!("r7e09aa5d48"))]
     /// 查看或停止文档评论的起草任务。
@@ -168,6 +192,12 @@ pub enum Cmd {
     RemoteTools {
         #[command(subcommand)]
         action: crate::remote_tools::RemoteToolsCommand,
+    },
+    #[command(about = summon_i18n::text!("services.cli.about"))]
+    /// 检查、按需拉起或停止 config.yaml 中声明的前置服务。
+    Services {
+        #[command(subcommand)]
+        action: Option<ServicesAction>,
     },
     #[command(about = summon_i18n::text!("reea94e342b"))]
     /// 在透明 PTY 内运行 CLI 并采集程序状态（内部启动入口）。
@@ -1132,6 +1162,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Cmd::CommentReader { .. } => unreachable!("comment reader handled before config"),
         Cmd::RemoteTools { action } => crate::remote_tools::run(&cfg, action),
+        Cmd::Services { action } => services_cmd(action),
         Cmd::ProgramStatusRun { .. } => unreachable!("program status handled before config"),
         Cmd::InstallStamp { .. } => unreachable!("install stamp handled before config"),
         Cmd::Agents { action } => agents_cmd(&cfg, action),
@@ -6891,6 +6922,17 @@ fn doctor(cfg: &Config) -> anyhow::Result<()> {
                 "{}",
                 format_codex_policy_section(&reg.routable(), &cfg.codex)
             );
+            print!(
+                "{}",
+                format_services_doctor_section(
+                    cfg,
+                    &reg.routable(),
+                    &crate::runtime::services::services_run_dir(),
+                    &crate::runtime::services::global_dotenv(Some(
+                        &summon_core::config::config_path()
+                    )),
+                )
+            );
             // 上面两行只证明「盘上凭据在不在」,daemon 内存里用的是不是这一份是另一回事:
             // daemon epoch 冻结 resolved 身份,盘上一变就对该 agent 的外部入站 fail-closed,
             // 而此前唯一信号在 daemon.log 里。这节把它摆到 doctor 面上。
@@ -6960,6 +7002,315 @@ fn doctor(cfg: &Config) -> anyhow::Result<()> {
 
 /// doctor 的"配置演进检查"节:读用户 config.yaml 原始 Value,与已知字段元信息表对比,
 /// 输出可能缺少的新字段(用内置默认)和已废弃字段。纯展示、不影响功能。
+fn service_required_by_map(
+    agents: &[&summon_core::registry::Agent],
+) -> std::collections::HashMap<String, Vec<String>> {
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for agent in agents {
+        for raw in agent.required_services() {
+            let name = raw.trim().to_string();
+            let list = map.entry(name).or_default();
+            if !list.contains(&agent.name) {
+                list.push(agent.name.clone());
+            }
+        }
+    }
+    for list in map.values_mut() {
+        list.sort();
+    }
+    map
+}
+
+fn format_service_status_line(status: &crate::runtime::services::ServiceStatus) -> String {
+    use crate::runtime::services::ServiceOwnership;
+    let mode = if status.has_command {
+        summon_i18n::text!("services.cli.mode_fallback")
+    } else {
+        summon_i18n::text!("services.cli.mode_probe_only")
+    };
+    let req = if status.required_by.is_empty() {
+        String::new()
+    } else {
+        summon_i18n::format!(
+            "services.cli.requires_prefix",
+            agents = status.required_by.join(",")
+        )
+    };
+    if !status.validation_issues.is_empty() {
+        let invalid = summon_i18n::text!("services.cli.status_invalid");
+        return format!(
+            "  {:<22} : {invalid} ({}) [{mode}]{req}",
+            status.name,
+            status.validation_issues.join("; ")
+        );
+    }
+    let probe = status.probe.as_ref();
+    let health = if probe.is_some_and(|p| p.healthy) {
+        summon_i18n::text!("services.cli.status_ok")
+    } else {
+        summon_i18n::text!("services.cli.status_unhealthy")
+    };
+    let owner = match &status.ownership {
+        ServiceOwnership::External => summon_i18n::text!("services.cli.owner_external").to_string(),
+        ServiceOwnership::SummonManaged {
+            pid,
+            survive_daemon_restart,
+            ..
+        } => {
+            if *survive_daemon_restart {
+                summon_i18n::format!("services.cli.owner_summon", pid = pid)
+            } else {
+                summon_i18n::format!("services.cli.owner_summon_ephemeral", pid = pid)
+            }
+        }
+        ServiceOwnership::Stopped => summon_i18n::text!("services.cli.owner_stopped").to_string(),
+    };
+    let detail = probe.map(|p| p.detail.as_str()).unwrap_or("");
+    format!(
+        "  {:<22} : {:<9} | {:<18} | {mode}{req} ({detail})",
+        status.name, health, owner
+    )
+}
+
+fn format_services_doctor_section(
+    cfg: &Config,
+    agents: &[&summon_core::registry::Agent],
+    services_dir: &std::path::Path,
+    global_env: &std::collections::HashMap<String, String>,
+) -> String {
+    let findings = crate::setup::config_findings::services_findings(cfg, agents);
+    if cfg.services.is_empty() && findings.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "services        :
+",
+    );
+    for finding in &findings {
+        out.push_str(&finding.doctor_line());
+        out.push('\n');
+    }
+    let mut blocked_keys = crate::runtime::services::blocked_identity_keys_for_config(cfg);
+    for a in agents {
+        if let Some(f) = a.feishu.as_ref() {
+            if let Some(k) = f.app_id_env.as_deref() {
+                blocked_keys.insert(k.to_string());
+            }
+            if let Some(k) = f.app_secret_env.as_deref() {
+                blocked_keys.insert(k.to_string());
+            }
+        }
+    }
+    let req_map = service_required_by_map(agents);
+    let mut names: Vec<&String> = cfg.services.keys().collect();
+    names.sort();
+    for name in names {
+        let spec = &cfg.services[name];
+        let required_by = req_map.get(name).cloned().unwrap_or_default();
+        let status = crate::runtime::services::service_status_at(
+            name,
+            spec,
+            services_dir,
+            global_env,
+            &blocked_keys,
+            required_by,
+        );
+        out.push_str(&format_service_status_line(&status));
+        out.push('\n');
+    }
+    out
+}
+
+fn services_cmd(action: Option<ServicesAction>) -> anyhow::Result<()> {
+    // 严格解析 config.yaml：坏配置返回非零，不静默回落成空服务表。
+    let cfg = Config::load_strict().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let services_dir = crate::runtime::services::services_run_dir();
+    let global_env =
+        crate::runtime::services::global_dotenv(Some(&summon_core::config::config_path()));
+    services_cmd_with(&cfg, action, &services_dir, &global_env)
+}
+
+fn services_cmd_with(
+    cfg: &Config,
+    action: Option<ServicesAction>,
+    services_dir: &std::path::Path,
+    global_env: &std::collections::HashMap<String, String>,
+) -> anyhow::Result<()> {
+    let agents_storage = Registry::load_tolerant(&cfg.agents_dir)
+        .ok()
+        .map(|(reg, _)| reg);
+    let agent_refs: Vec<&summon_core::registry::Agent> = agents_storage
+        .as_ref()
+        .map(|reg| reg.routable())
+        .unwrap_or_default();
+    let req_map = service_required_by_map(&agent_refs);
+    let blocked_keys = crate::runtime::services::blocked_identity_keys_for_config(cfg);
+
+    match action.unwrap_or(ServicesAction::Status { name: None }) {
+        ServicesAction::Status { name } => {
+            if name.is_none() && cfg.services.is_empty() {
+                println!("{}", summon_i18n::text!("services.cli.none_configured"));
+                return Ok(());
+            }
+            let targets = select_service_names(cfg, name.as_deref())?;
+            for svc in targets {
+                let spec = &cfg.services[&svc];
+                let status = crate::runtime::services::service_status_at(
+                    &svc,
+                    spec,
+                    services_dir,
+                    global_env,
+                    &blocked_keys,
+                    req_map.get(&svc).cloned().unwrap_or_default(),
+                );
+                println!("{}", format_service_status_line(&status));
+            }
+            Ok(())
+        }
+        ServicesAction::Check { name } => {
+            if name.is_none() && cfg.services.is_empty() {
+                println!("{}", summon_i18n::text!("services.cli.none_configured"));
+                return Ok(());
+            }
+            let targets = select_service_names(cfg, name.as_deref())?;
+            let mut failed = 0usize;
+            for svc in targets {
+                let spec = &cfg.services[&svc];
+                let status = crate::runtime::services::service_status_at(
+                    &svc,
+                    spec,
+                    services_dir,
+                    global_env,
+                    &blocked_keys,
+                    req_map.get(&svc).cloned().unwrap_or_default(),
+                );
+                println!("{}", format_service_status_line(&status));
+                if !status.validation_issues.is_empty()
+                    || !status.probe.as_ref().is_some_and(|p| p.healthy)
+                {
+                    failed += 1;
+                }
+            }
+            if failed > 0 {
+                anyhow::bail!(
+                    "{}",
+                    summon_i18n::format!("services.cli.check_failed_summary", count = failed)
+                );
+            }
+            Ok(())
+        }
+        ServicesAction::Start { name } => {
+            let Some(spec) = cfg.services.get(&name) else {
+                anyhow::bail!(
+                    "{}",
+                    summon_i18n::format!("services.cli.not_found", name = name)
+                );
+            };
+            match crate::runtime::services::ensure_service_at(
+                &name,
+                spec,
+                services_dir,
+                global_env,
+                &blocked_keys,
+            )? {
+                crate::runtime::services::EnsureOutcome::AlreadyHealthy { probe } => {
+                    println!(
+                        "{}",
+                        summon_i18n::format!(
+                            "services.cli.already_healthy",
+                            name = name,
+                            detail = probe.detail
+                        )
+                    );
+                }
+                crate::runtime::services::EnsureOutcome::Started {
+                    pid,
+                    probe,
+                    log_path,
+                } => {
+                    println!(
+                        "{}",
+                        summon_i18n::format!(
+                            "services.cli.started",
+                            name = name,
+                            pid = pid,
+                            detail = probe.detail,
+                            log = summon_core::registry::collapse_tilde(
+                                &log_path.display().to_string()
+                            )
+                        )
+                    );
+                }
+                crate::runtime::services::EnsureOutcome::StartedExternal { probe, log_path } => {
+                    println!(
+                        "{}",
+                        summon_i18n::format!(
+                            "services.cli.started_external",
+                            name = name,
+                            detail = probe.detail,
+                            log = summon_core::registry::collapse_tilde(
+                                &log_path.display().to_string()
+                            )
+                        )
+                    );
+                }
+            }
+            Ok(())
+        }
+        ServicesAction::Stop { name } => {
+            let Some(spec) = cfg.services.get(&name) else {
+                anyhow::bail!(
+                    "{}",
+                    summon_i18n::format!("services.cli.not_found", name = name)
+                );
+            };
+            match crate::runtime::services::stop_service_at(
+                &name,
+                spec,
+                services_dir,
+                global_env,
+                &blocked_keys,
+            )? {
+                crate::runtime::services::StopOutcome::Stopped { pid } => {
+                    println!(
+                        "{}",
+                        summon_i18n::format!("services.cli.stopped", name = name, pid = pid)
+                    );
+                    Ok(())
+                }
+                crate::runtime::services::StopOutcome::NotRunning => {
+                    println!(
+                        "{}",
+                        summon_i18n::format!("services.cli.not_running", name = name)
+                    );
+                    Ok(())
+                }
+                crate::runtime::services::StopOutcome::ExternallyManaged => {
+                    anyhow::bail!(
+                        "{}",
+                        summon_i18n::format!("services.cli.external_refused", name = name)
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn select_service_names(cfg: &Config, target: Option<&str>) -> anyhow::Result<Vec<String>> {
+    if let Some(name) = target {
+        if !cfg.services.contains_key(name) {
+            anyhow::bail!(
+                "{}",
+                summon_i18n::format!("services.cli.not_found", name = name)
+            );
+        }
+        return Ok(vec![name.to_string()]);
+    }
+    let mut names: Vec<String> = cfg.services.keys().cloned().collect();
+    names.sort();
+    Ok(names)
+}
+
 fn doctor_config_evolution() {
     use summon_core::config::{config_path, path_exists_in_value, CONFIG_FIELD_META};
 
@@ -10224,5 +10575,215 @@ mod config_field_effect_tests {
             config_field_effect(model, &agent("codex", "")),
             "下一轮起生效"
         );
+    }
+}
+
+#[cfg(test)]
+mod services_cli_tests {
+    use super::{
+        format_service_status_line, format_services_doctor_section, services_cmd_with, Cli, Cmd,
+        ServicesAction,
+    };
+    use clap::Parser;
+    use std::collections::HashMap;
+    use summon_core::config::Config;
+    use summon_core::registry::Agent;
+    use summon_core::services::{ServiceHealthcheck, ServiceSpec};
+
+    #[test]
+    fn services_subcommands_parse() {
+        let cli = Cli::try_parse_from(["summon", "services"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Services { action: None }));
+
+        let cli = Cli::try_parse_from(["summon", "services", "status", "local-proxy"]).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Services {
+                action: Some(ServicesAction::Status { name: Some(ref n) })
+            } if n == "local-proxy"
+        ));
+
+        let cli = Cli::try_parse_from(["summon", "services", "check", "local-proxy"]).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Services {
+                action: Some(ServicesAction::Check { name: Some(ref n) })
+            } if n == "local-proxy"
+        ));
+
+        let cli = Cli::try_parse_from(["summon", "services", "start", "local-proxy"]).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Services {
+                action: Some(ServicesAction::Start { ref name })
+            } if name == "local-proxy"
+        ));
+
+        let cli = Cli::try_parse_from(["summon", "services", "stop", "local-proxy"]).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Services {
+                action: Some(ServicesAction::Stop { ref name })
+            } if name == "local-proxy"
+        ));
+    }
+
+    #[test]
+    fn doctor_section_stays_silent_when_no_services_and_no_requires() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let agent: Agent = serde_yaml::from_str("name: plain\nruntime:\n  cli: claude\n").unwrap();
+        let out = format_services_doctor_section(&cfg, &[&agent], tmp.path(), &HashMap::new());
+        assert!(out.is_empty(), "unexpected doctor section: {out:?}");
+    }
+
+    #[test]
+    fn doctor_section_reports_defined_and_undefined_services() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = Config::default();
+        cfg.services.insert(
+            "local-proxy".into(),
+            ServiceSpec {
+                healthcheck: ServiceHealthcheck {
+                    command: Some(vec!["true".into()]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let agent: Agent = serde_yaml::from_str(
+            "name: bot\nruntime:\n  cli: claude\n  requires:\n    - local-proxy\n    - missing-svc\n",
+        )
+        .unwrap();
+        let out = format_services_doctor_section(&cfg, &[&agent], tmp.path(), &HashMap::new());
+        assert!(!out.is_empty(), "expected non-empty doctor section");
+        assert!(
+            out.contains("local-proxy"),
+            "missing defined service: {out}"
+        );
+        assert!(
+            out.contains("missing-svc"),
+            "missing dangling service: {out}"
+        );
+        assert!(out.contains("bot"), "missing referencing agent: {out}");
+    }
+
+    #[test]
+    fn services_check_and_status_reject_missing_name_even_when_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let err = services_cmd_with(
+            &cfg,
+            Some(ServicesAction::Check {
+                name: Some("missing-svc".into()),
+            }),
+            tmp.path(),
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("missing-svc"), "{err}");
+
+        let err_status = services_cmd_with(
+            &cfg,
+            Some(ServicesAction::Status {
+                name: Some("missing-svc".into()),
+            }),
+            tmp.path(),
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(
+            err_status.to_string().contains("missing-svc"),
+            "{err_status}"
+        );
+    }
+
+    #[test]
+    fn service_status_line_uses_localized_chinese_labels() {
+        let status = crate::runtime::services::ServiceStatus {
+            name: "demo-svc".into(),
+            has_command: false,
+            validation_issues: Vec::new(),
+            probe: Some(crate::runtime::services::ProbeResult {
+                healthy: true,
+                detail: "HTTP 200".into(),
+                elapsed_ms: 2,
+            }),
+            ownership: crate::runtime::services::ServiceOwnership::External,
+            required_by: vec!["agent-a".into()],
+        };
+        let line = summon_core::i18n::with_language(summon_core::i18n::Language::Chinese, || {
+            format_service_status_line(&status)
+        });
+        assert!(line.contains("正常"), "{line}");
+        assert!(line.contains("外部托管"), "{line}");
+        assert!(line.contains("仅探活"), "{line}");
+        assert!(line.contains("依赖方：agent-a"), "{line}");
+    }
+
+    #[test]
+    fn services_cmd_blocks_custom_agent_secret_from_non_default_agents_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let custom_agents_dir = tmp.path().join("custom-agents");
+        let bot_dir = custom_agents_dir.join("bot-a");
+        std::fs::create_dir_all(&bot_dir).unwrap();
+        std::fs::write(
+            bot_dir.join("agent.yaml"),
+            r#"name: bot-a
+runtime:
+  cli: claude
+feishu:
+  app_id_env: CLI_CUSTOM_BOT_ID
+  app_secret_env: CLI_CUSTOM_BOT_SECRET
+"#,
+        )
+        .unwrap();
+
+        let dump = tmp.path().join("cli_probe_env.txt");
+        let mut env = std::collections::HashMap::new();
+        env.insert("LEAKED".into(), "${CLI_CUSTOM_BOT_SECRET}".into());
+        env.insert("ALLOWED".into(), "${CLI_SAFE_OPT}".into());
+
+        let mut cfg = summon_core::config::Config {
+            agents_dir: custom_agents_dir,
+            ..Default::default()
+        };
+        cfg.services.insert(
+            "probe-svc".into(),
+            summon_core::services::ServiceSpec {
+                healthcheck: summon_core::services::ServiceHealthcheck {
+                    command: Some(vec![
+                        "sh".into(),
+                        "-c".into(),
+                        format!(
+                            "printf 'LEAK=%s;OK=%s\n' \"$LEAKED\" \"$ALLOWED\" > '{}'",
+                            dump.display()
+                        ),
+                    ]),
+                    timeout_secs: 3,
+                    ..Default::default()
+                },
+                env,
+                ..Default::default()
+            },
+        );
+
+        let mut global_env = std::collections::HashMap::new();
+        global_env.insert("CLI_CUSTOM_BOT_SECRET".into(), "synth-cli-secret-88".into());
+        global_env.insert("CLI_SAFE_OPT".into(), "ok-88".into());
+
+        let services_dir = tmp.path().join("isolated-run").join("services");
+        services_cmd_with(
+            &cfg,
+            Some(ServicesAction::Check {
+                name: Some("probe-svc".into()),
+            }),
+            &services_dir,
+            &global_env,
+        )
+        .unwrap();
+
+        let out = std::fs::read_to_string(&dump).unwrap();
+        assert_eq!(out.trim(), "LEAK=;OK=ok-88");
     }
 }

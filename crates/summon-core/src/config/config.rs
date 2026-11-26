@@ -35,6 +35,8 @@ pub struct Config {
     pub remotes: Vec<Remote>,
     /// 允许绑定的远程工具执行目标；在线连接由执行机器通过出站 SSH 注册。
     pub execution_targets: HashMap<String, crate::remote_tools::ExecutionTarget>,
+    /// 前置依赖服务定义（探活、环境变量自动注入、按需拉起兜底）。默认空。
+    pub services: HashMap<String, crate::services::ServiceSpec>,
     /// claude 托管会话的行为开关。
     pub claude: Claude,
     /// codex 托管会话的权限策略(sandbox + approval)。两个键都可选,不写 = 内置默认。
@@ -123,6 +125,7 @@ impl Default for Config {
             sentinel: Sentinel::default(),
             remotes: Vec::new(),
             execution_targets: HashMap::new(),
+            services: HashMap::new(),
             claude: Claude::default(),
             codex: Default::default(),
             cursor: Cursor::default(),
@@ -615,10 +618,22 @@ pub const TMUX_CANDIDATE_DIRS: [&str; 6] = [
     "~/.local/bin",                   // 用户自装
 ];
 
+/// 脱敏格式化 `serde_yaml` 解析错误：仅保留错误类别与行列号，绝不透传配置标量原文。
+pub fn format_yaml_parse_error(e: &serde_yaml::Error) -> String {
+    match e.location() {
+        Some(loc) => summon_i18n::format!(
+            "services.config_yaml_location",
+            line = loc.line(),
+            column = loc.column()
+        ),
+        None => summon_i18n::text!("services.config_yaml_invalid").to_string(),
+    }
+}
+
 pub fn parse_or_fallback(yaml: &str, fallback: Config) -> (Config, Option<String>) {
     match serde_yaml::from_str::<Config>(yaml) {
         Ok(cfg) => (cfg, None),
-        Err(e) => (fallback, Some(e.to_string())),
+        Err(e) => (fallback, Some(format_yaml_parse_error(&e))),
     }
 }
 
@@ -651,6 +666,35 @@ impl Config {
             Some(e) => eprintln!("{}", summon_i18n::format!("r6afdf4a98b", path.display())),
         }
         cfg
+    }
+
+    /// 严格读取全局 `config.yaml`：文件不存在返回默认配置；I/O 或 YAML 解析失败只返回脱敏后的错误类别与行列，
+    /// 不把解析器原文中可能携带的配置标量值透传到日志或会话通知。
+    pub fn load_strict_at(path: &std::path::Path) -> Result<Self, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => {
+                let io_err = summon_i18n::format!(
+                    "services.config_io_error",
+                    kind = format!("{:?}", e.kind())
+                );
+                return Err(summon_i18n::format!(
+                    "services.config_load_failed",
+                    error = io_err
+                ));
+            }
+        };
+        serde_yaml::from_str(&text).map_err(|e| {
+            summon_i18n::format!(
+                "services.config_load_failed",
+                error = format_yaml_parse_error(&e)
+            )
+        })
+    }
+
+    pub fn load_strict() -> Result<Self, String> {
+        Self::load_strict_at(&config_path())
     }
 }
 

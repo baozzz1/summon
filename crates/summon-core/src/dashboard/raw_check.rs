@@ -324,6 +324,7 @@ fn shape(kind: RawKind) -> Shape {
             ("remotes", Shape::Seq(Box::new(strukt::<Remote>(vec![])))),
             // 严格子结构:写错的键 serde 自己报错,这里不重复。
             ("execution_targets", map_of(Shape::Leaf)),
+            ("services", map_of(Shape::Leaf)),
             ("claude", strukt::<Claude>(vec![])),
             ("codex", strukt::<CodexPolicyOverride>(vec![])),
             (

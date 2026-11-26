@@ -6,9 +6,9 @@
 
 ## 未发布
 
-<!-- 开发期间在这里按需添加「新增」「改进」「修复」「升级注意」分类，删除没有内容的分类。
-发版时把条目移到新的版本节，写明版本号和日期，再保留空的「未发布」节；发版步骤见 CLAUDE.md。
-每条说明用户能做什么或哪个问题得到修复；有配置开关、默认值变化、兼容限制时一并写明。 -->
+### 新增
+
+- 支持全局前置依赖 / 托管服务抽象：可在 `~/.summon/config.yaml` 的 `services` 中声明共享本地服务（支持 `http` / `tcp` / `command` 健康检查、可选兜底拉起 `command`、`survive_daemon_restart` 生命周期控制，以及向依赖 agent 注入低优先级的 `agent_env`），并在 `agent.yaml` 中用 `runtime.requires` 声明依赖。每轮开跑前自动探活并按需单飞兜底拉起，不就绪时 fail-closed 报错；外部托管服务只探活不误杀。配套新增 `summon services [status|check|start|stop]`、`summon doctor` 服务状态段与配置校验，以及 Web 控制台对 `services.<name>.env` / `agent_env` 字面值的自动脱敏。
 
 ### 修复
 
