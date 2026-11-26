@@ -754,6 +754,7 @@ mod tests {
             ("summon/src/runtime/daemon/boot.rs", 1), // 收紧运行目录
             ("summon/src/runtime/daemon/export.rs", 1), // 收紧导出包目录
             ("summon/src/runtime/dashboard/agent_archive.rs", 1), // 收紧清理隔离目录，内含凭据
+            ("summon/src/runtime/services.rs", 1), // 收紧托管服务租约与日志目录
             ("summon/src/setup/init.rs", 1),     // 收紧 ~/.summon
             ("summon/src/setup/self_install.rs", 1), // 发布到落点的暂存文件
             ("summon-core/src/release.rs", 2),   // 解出的平台包文件(创建时与落盘后各一处)

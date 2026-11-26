@@ -282,7 +282,7 @@ pub(super) fn append_reply_transcript(
 }
 
 /// 读 agent.dir/.env(简单 dotenv:KEY=VALUE,# 注释)。
-pub(super) fn env_from_file(path: &std::path::Path) -> HashMap<String, String> {
+pub(crate) fn env_from_file(path: &std::path::Path) -> HashMap<String, String> {
     let mut m = HashMap::new();
     if let Ok(s) = std::fs::read_to_string(path) {
         for line in s.lines() {
@@ -320,7 +320,10 @@ pub fn resolve_creds(agent: &Agent) -> (Option<String>, Option<String>) {
 /// 任一引用解析不到 → 返回 `None`,由调用方**整条丢弃**。不回退成空串:空值会
 /// 覆盖上游同名变量(如 CLI 自己从登录态读到的 token),表现为「配了反而更坏」,
 /// 比缺失更难查。未闭合的 `${` 不当引用,原样保留。
-fn expand_env_value(raw: &str, lookup: &impl Fn(&str) -> Option<String>) -> Option<String> {
+pub(crate) fn expand_env_value(
+    raw: &str,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Option<String> {
     if !raw.contains("${") {
         return Some(raw.to_string());
     }
@@ -349,6 +352,74 @@ fn expand_env_value(raw: &str, lookup: &impl Fn(&str) -> Option<String>) -> Opti
 /// 走本函数,不要直接用 `Agent::extra_env()`(那是未展开的原始配置)。
 pub fn resolve_extra_env(agent: &Agent) -> Vec<(String, String)> {
     let envfile = env_from_file(&agent.dir.join(".env"));
+    let mut merged: Vec<(String, String)> = Vec::new();
+    let upsert = |list: &mut Vec<(String, String)>, key: String, val: String| {
+        if let Some((_, existing)) = list.iter_mut().find(|(k, _)| *k == key) {
+            *existing = val;
+        } else {
+            list.push((key, val));
+        }
+    };
+
+    // 前置依赖服务的 `agent_env`（按 `runtime.requires` 顺序合并，优先级低于本 agent 的 `runtime.env`）。
+    if !agent.required_services().is_empty() {
+        let cfg_path = agent.effective_global_config_path();
+        let global_env = crate::runtime::services::global_dotenv(cfg_path.as_deref());
+        let service_lookup = |name: &str| -> Option<String> {
+            envfile
+                .get(name)
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .or_else(|| global_env.get(name).filter(|v| !v.is_empty()).cloned())
+                .or_else(|| std::env::var(name).ok().filter(|v| !v.is_empty()))
+        };
+        match agent.load_global_config() {
+            Ok(cfg) => {
+                let mut seen = std::collections::HashSet::new();
+                for raw_svc in agent.required_services() {
+                    let svc_name = raw_svc.trim();
+                    if !seen.insert(svc_name.to_string()) {
+                        continue;
+                    }
+                    let Some(spec) = cfg.services.get(svc_name) else {
+                        continue;
+                    };
+                    let mut keys: Vec<&String> = spec.agent_env.keys().collect();
+                    keys.sort();
+                    for key in keys {
+                        if summon_core::agent_identity::is_runtime_owned_env_key(key) {
+                            log(&summon_i18n::format!(
+                                "services.agent_env_skip_runtime_owned",
+                                agent = agent.name,
+                                service = svc_name,
+                                key = key
+                            ));
+                            continue;
+                        }
+                        let raw = &spec.agent_env[key];
+                        match expand_env_value(raw, &service_lookup) {
+                            Some(v) => upsert(&mut merged, key.clone(), v),
+                            None => {
+                                log(&summon_i18n::format!(
+                                    "services.agent_env_expand_dropped",
+                                    agent = agent.name,
+                                    service = svc_name,
+                                    key = key
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                log(&format!(
+                    "[{}] failed to load global config for required services: {error}",
+                    agent.name
+                ));
+            }
+        }
+    }
+
     let lookup = |name: &str| -> Option<String> {
         envfile
             .get(name)
@@ -356,17 +427,15 @@ pub fn resolve_extra_env(agent: &Agent) -> Vec<(String, String)> {
             .cloned()
             .or_else(|| std::env::var(name).ok().filter(|v| !v.is_empty()))
     };
-    agent
-        .extra_env()
-        .into_iter()
-        .filter_map(|(k, raw)| match expand_env_value(&raw, &lookup) {
-            Some(v) => Some((k, v)),
+    for (k, raw) in agent.extra_env() {
+        match expand_env_value(&raw, &lookup) {
+            Some(v) => upsert(&mut merged, k, v),
             None => {
                 log(&summon_i18n::format!("rd52f71ac16", agent.name));
-                None
             }
-        })
-        .collect()
+        }
+    }
+    merged
 }
 
 /// 飞书运行时身份数据的落盘作用域。alias 防止同一 app 下不同 agent 互相污染；app_id 指纹防止
@@ -1867,6 +1936,68 @@ mod runtime_env_expand_tests {
         let got = resolve_extra_env(&agent);
         std::env::remove_var("SUMMON_TEST_EMPTY_VAR");
         assert_eq!(got, vec![("V".to_string(), "from-process".to_string())]);
+    }
+
+    #[test]
+    fn required_service_agent_env_merges_with_lower_precedence_and_blocks_runtime_owned() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("config.yaml");
+        std::fs::write(
+            &config_path,
+            concat!(
+                "services:\n",
+                "  proxy:\n",
+                "    healthcheck:\n",
+                "      http: http://127.0.0.1:8080/health\n",
+                "    agent_env:\n",
+                "      ANTHROPIC_BASE_URL: http://127.0.0.1:8080\n",
+                "      PROXY_TOKEN: \"${SHARED_PROXY_TOKEN}\"\n",
+                "      OVERRIDE_ME: from-service\n",
+                "      SUMMON_AGENT: forged\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join(".env"),
+            "SHARED_PROXY_TOKEN=global-secret\n",
+        )
+        .unwrap();
+
+        let agent_dir = root.path().join("agents/demo");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("agent.yaml"),
+            concat!(
+                "name: demo\n",
+                "runtime:\n",
+                "  cli: claude\n",
+                "  requires: [proxy]\n",
+                "  env:\n",
+                "    OVERRIDE_ME: from-agent\n",
+            ),
+        )
+        .unwrap();
+        let mut reg = Registry::load(&root.path().join("agents")).unwrap();
+        reg = reg.with_global_config_path(&config_path);
+        let agent = reg.agents.into_iter().next().unwrap();
+
+        let got: std::collections::HashMap<_, _> = resolve_extra_env(&agent).into_iter().collect();
+        assert_eq!(
+            got.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("http://127.0.0.1:8080")
+        );
+        assert_eq!(
+            got.get("PROXY_TOKEN").map(String::as_str),
+            Some("global-secret")
+        );
+        assert_eq!(
+            got.get("OVERRIDE_ME").map(String::as_str),
+            Some("from-agent")
+        );
+        assert!(
+            !got.contains_key("SUMMON_AGENT"),
+            "runtime-owned keys from service agent_env must be blocked"
+        );
     }
 }
 

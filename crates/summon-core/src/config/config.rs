@@ -35,6 +35,8 @@ pub struct Config {
     pub remotes: Vec<Remote>,
     /// 允许绑定的远程工具执行目标；在线连接由执行机器通过出站 SSH 注册。
     pub execution_targets: HashMap<String, crate::remote_tools::ExecutionTarget>,
+    /// 前置依赖服务定义（探活、环境变量自动注入、按需拉起兜底）。默认空。
+    pub services: HashMap<String, crate::services::ServiceSpec>,
     /// claude 托管会话的行为开关。
     pub claude: Claude,
     /// codex 托管会话的权限策略(sandbox + approval)。两个键都可选,不写 = 内置默认。
@@ -123,6 +125,7 @@ impl Default for Config {
             sentinel: Sentinel::default(),
             remotes: Vec::new(),
             execution_targets: HashMap::new(),
+            services: HashMap::new(),
             claude: Claude::default(),
             codex: Default::default(),
             cursor: Cursor::default(),

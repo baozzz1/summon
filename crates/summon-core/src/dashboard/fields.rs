@@ -530,12 +530,24 @@ pub const KEY_NOTES: &[KeyNote] = &[
         NoteKind::RawOnly,
         "rfc86c51b11",
     ),
+    note(
+        RawKind::Config,
+        "services",
+        NoteKind::RawOnly,
+        "services.raw_only_config",
+    ),
     note(RawKind::Config, "upgrade", NoteKind::RawOnly, "rc65e64aa17"),
     note(
         RawKind::Agent,
         "runtime.execution",
         NoteKind::RawOnly,
         "r65bc01b049",
+    ),
+    note(
+        RawKind::Agent,
+        "runtime.requires",
+        NoteKind::RawOnly,
+        "services.raw_only_agent",
     ),
     note(
         RawKind::Agent,

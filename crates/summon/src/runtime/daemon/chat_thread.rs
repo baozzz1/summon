@@ -6686,6 +6686,30 @@ pub(super) fn stream_turn(
             return TurnResult::RecoveryDeferred;
         }
     }
+    // 前置依赖服务 fail-closed 准入（探活 + 按需拉起兜底）。接管轮（reattach=true）的
+    // Transcript 会话已在跑，只观测转录，不阻塞。
+    if !reattach {
+        if let Err(error) = crate::runtime::services::ensure_agent_services(agent) {
+            log(&summon_i18n::format!(
+                "services.preflight_blocked_log",
+                agent = agent.name,
+                tag = tag,
+                error = error
+            ));
+            let chat_ref = ChatRef {
+                thread_anchor,
+                chat_id,
+                chat_type,
+                agent_dir: &agent.state_dir(),
+                agent_name: &agent.name,
+                delivery_scope,
+            };
+            let notice =
+                agent_error_notice(&agent.name, agent.capture_mode(), &tag, &error.to_string());
+            let _ = frontend.send_message(&chat_ref, &notice);
+            return TurnResult::Failed;
+        }
+    }
     // 防御性清理:上一轮若因异常路径(stream_finish 查不到 stream_map 条目等)留下了 stale
     // stream_state.json,这里清掉,避免它被误读或让用户困惑。resume 路径(`resume_pending_turn`)
     // 不走这里,直接调 `stream_turn_headless` 并传 `saved_stream_state`,不会被误清。
@@ -14449,6 +14473,15 @@ fn resume_pending_turn_with_sources(
     // 等下次重试，不能退回盘上的旧 PRIMER 继续执行。
     if let Err(error) = (sources.prepare_prompt)(agent, chat_type, chat_id, &sess.tmux.session) {
         log(&summon_i18n::format!("rf6539b548c", agent.name));
+        return false;
+    }
+    if let Err(error) = crate::runtime::services::ensure_agent_services(agent) {
+        log(&summon_i18n::format!(
+            "services.preflight_blocked_log",
+            agent = agent.name,
+            tag = tag,
+            error = error
+        ));
         return false;
     }
 
@@ -23232,6 +23265,88 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
         fn unreact(&self, _msg: &MsgRef, _reaction_id: &str) -> anyhow::Result<()> {
             Ok(())
         }
+    }
+
+    /// agent 声明了 `runtime.requires` 但依赖服务未就绪（或未定义）时，`stream_turn` 必须
+    /// fail-closed：不启动会话、直接通过 frontend 向用户发故障提示并返回 `TurnResult::Failed`。
+    #[test]
+    fn stream_turn_fails_closed_when_required_service_is_unhealthy() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &cfg_path,
+            r#"services:
+  local-proxy:
+    healthcheck:
+      command: ["false"]
+      timeout_secs: 2
+"#,
+        )
+        .unwrap();
+        let agent_dir = dir.path().join("agents").join("bot");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            "name: bot\nruntime:\n  cli: claude\n  requires:\n    - local-proxy\n",
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(cfg_path);
+
+        let sess = Session::for_agent(&agent, 100, 100);
+        let fe = SpyFrontend {
+            sent: std::cell::RefCell::new(Vec::new()),
+            fail_send: false,
+        };
+        let inflight = crate::runtime::inflight::InFlight::default();
+        let mirror = super::dispatcher::MirrorDeliveryTracker::default();
+        let mut delivered = false;
+        let mut on_delivered = || delivered = true;
+        let mut on_steer = |_ids: &[String]| {};
+        let settings = summon_core::settings::ResolvedSettings::resolve(
+            &resolve_messaging(&agent),
+            &summon_core::settings::ChatOverrides::default(),
+        );
+
+        let res = stream_turn(
+            &agent,
+            "test-scope",
+            &sess,
+            &fe,
+            "oc_test",
+            "p2p",
+            "hello",
+            &inflight,
+            &mirror,
+            vec![],
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &mut on_delivered,
+            &mut on_steer,
+            None,
+            None,
+            None,
+            settings,
+        );
+
+        assert!(
+            matches!(res, TurnResult::Failed),
+            "expected TurnResult::Failed when required service is unhealthy, got {res:?}"
+        );
+        assert!(
+            !delivered,
+            "on_delivered must not fire when preflight blocks the turn"
+        );
+        let sent = fe.sent.borrow();
+        assert_eq!(sent.len(), 1, "expected exactly one error notice: {sent:?}");
+        assert!(
+            sent[0].contains("local-proxy"),
+            "error notice must name the failing service: {}",
+            sent[0]
+        );
     }
 
     fn spy_chat(dir: &tempfile::TempDir) -> ChatRef<'_> {

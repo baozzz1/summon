@@ -30,6 +30,10 @@ pub(crate) enum ConfigFinding {
     },
     /// Codex 策略的危险组合(会暂停等审批、写不了文件又没法升级)。
     CodexWarning { agent: String, warning: String },
+    /// agent 的 `runtime.requires` 引用了未在 `config.yaml` 中定义的 service。
+    ServiceUndefined { agent: String, service: String },
+    /// `config.yaml` 中某个 `services.<name>` 静态校验未通过。
+    ServiceConfigInvalid { service: String, reason: String },
 }
 
 /// 控制台「需要处理」里的一条:是什么、在哪、怎么改。
@@ -61,6 +65,20 @@ impl ConfigFinding {
                 summon_i18n::format!("r093889e8b4")
             }
             Self::CodexWarning { agent, warning } => format!("  {agent:<12} ↳ {warning}"),
+            Self::ServiceUndefined { agent, service } => {
+                summon_i18n::format!(
+                    "services.finding.undefined_doctor",
+                    agent = agent,
+                    service = service
+                )
+            }
+            Self::ServiceConfigInvalid { service, reason } => {
+                summon_i18n::format!(
+                    "services.finding.invalid_doctor",
+                    service = service,
+                    reason = reason
+                )
+            }
         }
     }
 
@@ -132,6 +150,33 @@ impl ConfigFinding {
                 agent: Some(agent.clone()),
                 key: Some("runtime.codex_sandbox"),
             },
+            Self::ServiceUndefined { agent, service } => FindingView {
+                error: true,
+                title: summon_i18n::format!(
+                    "services.finding.undefined_title",
+                    agent = agent,
+                    service = service
+                ),
+                detail: summon_i18n::format!(
+                    "services.finding.undefined_detail",
+                    service = service
+                ),
+                fix: summon_i18n::format!("services.finding.undefined_fix", service = service),
+                agent: Some(agent.clone()),
+                key: Some("runtime.requires"),
+            },
+            Self::ServiceConfigInvalid { service, reason } => FindingView {
+                error: true,
+                title: summon_i18n::format!("services.finding.invalid_title", service = service),
+                detail: summon_i18n::format!(
+                    "services.finding.invalid_detail",
+                    service = service,
+                    reason = reason
+                ),
+                fix: summon_i18n::format!("services.finding.invalid_fix", service = service),
+                agent: None,
+                key: Some("services"),
+            },
         }
     }
 }
@@ -193,6 +238,40 @@ pub(crate) fn codex_findings(
 }
 
 /// 控制台「需要处理」用的全部配置问题(地址判定用现查的本机地址)。
+/// 前置依赖服务配置检查：校验 `config.yaml` 中每个 service 的静态合法性，
+/// 以及各 agent `runtime.requires` 是否存在悬空引用。
+pub(crate) fn services_findings(cfg: &Config, agents: &[&Agent]) -> Vec<ConfigFinding> {
+    let mut out = Vec::new();
+    let mut service_names: Vec<&String> = cfg.services.keys().collect();
+    service_names.sort();
+    for name in service_names {
+        let spec = &cfg.services[name];
+        let issues = spec.validate(name);
+        if !issues.is_empty() {
+            out.push(ConfigFinding::ServiceConfigInvalid {
+                service: name.clone(),
+                reason: issues.join("; "),
+            });
+        }
+    }
+    for agent in agents {
+        let mut seen = std::collections::HashSet::new();
+        for raw in agent.required_services() {
+            let service = raw.trim();
+            if !seen.insert(service.to_string()) {
+                continue;
+            }
+            if !cfg.services.contains_key(service) {
+                out.push(ConfigFinding::ServiceUndefined {
+                    agent: agent.name.clone(),
+                    service: service.to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn config_findings(
     cfg: &Config,
     agents: &[&Agent],
@@ -203,6 +282,7 @@ pub(crate) fn config_findings(
     out.extend(terminal_findings(cfg));
     out.extend(crate::runtime::dashboard::dashboard_findings(cfg, probe));
     out.extend(codex_findings(agents, &cfg.codex));
+    out.extend(services_findings(cfg, agents));
     out
 }
 
@@ -249,5 +329,26 @@ mod tests {
         let view = found[0].view();
         assert_eq!(view.agent.as_deref(), Some("coder"));
         assert!(view.error);
+    }
+
+    #[test]
+    fn services_findings_detect_invalid_specs_and_dangling_requires() {
+        let mut cfg = Config::default();
+        cfg.services.insert(
+            "broken".into(),
+            summon_core::services::ServiceSpec::default(),
+        );
+        let agent: Agent = serde_yaml::from_str(
+            "name: amadeus\nruntime:\n  cli: claude\n  requires: [broken, missing-proxy]\n",
+        )
+        .unwrap();
+        let found = services_findings(&cfg, &[&agent]);
+        assert!(found
+            .iter()
+            .any(|f| matches!(f, ConfigFinding::ServiceConfigInvalid { service, .. } if service == "broken")));
+        assert!(found
+            .iter()
+            .any(|f| matches!(f, ConfigFinding::ServiceUndefined { agent: a, service } if a == "amadeus" && service == "missing-proxy")));
+        assert!(found.iter().all(|f| f.view().error));
     }
 }

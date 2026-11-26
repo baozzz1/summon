@@ -24,6 +24,7 @@ pub mod remote;
 pub mod remote_tools;
 pub mod schedule;
 pub mod sentinel;
+pub mod services;
 pub mod session;
 pub mod subagent;
 pub mod tools;

@@ -243,6 +243,7 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 | `codex_sandbox` / `codex_approval_policy` | 覆盖全局 Codex 权限策略，见下文 |
 | `codex_skip_git_repo_check` | 默认 `false`；Codex exec 的非 Git 目录检查例外 |
 | `env` | 子进程环境变量键值 |
+| `requires` | 前置依赖服务名列表（对应全局 `config.yaml` 的 `services.<name>`）；每轮开跑前做探活与按需兜底拉起，不就绪则本轮 fail-closed |
 | `cursor_quota_token_command` | 此 agent 的 Cursor 额度凭据命令 |
 | `execution.target` / `execution.working_dir` | 远程工具执行目标 / 目标机器上的绝对工作目录 |
 | `tmux_name` / `seed` | 自定义 tmux 会话名 / CLI 初始输入，通常留空 |
@@ -270,6 +271,7 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 | `macos.agent_privacy_identity` | `true`；仅 macOS。agent CLI 及其工具申请的隐私授权（语音识别、麦克风、文件夹访问等）记在各 CLI 自己名下，`false` 时所有 agent 共用 summon 的授权；下次起 agent 生效，详见 `summon guide troubleshooting` |
 | `remotes` | 跨机 fleet 列表，每项 `name`、`ssh_host`、`summon_bin`；默认空 |
 | `execution_targets` | 远程工具目标表，每项 `provider: claude-code`；默认空 |
+| `services` | 整机共享前置依赖服务表（见下文）；默认空 |
 
 `tools` 可配 `tmux`、`lark_cli`、`claude`、`codex`、`traex`、`cursor_agent`、`git`、`ssh`、`npx`、
 `pkill`、`open`、`xdg_open`、`launchctl`、`systemctl`、`loginctl`、`pbcopy`、`osascript`。
@@ -287,6 +289,14 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 触发词 `join_verbs: [进来回答]`、`create_verbs: [建群]`、`invite_verbs: [/invite]`。
 `blocklist` 排除 chat；`aliases` 设称呼；`owner_open_id` 绑定发起者，`lark_profile` 选择身份配置。
 这份指南只说明配置；身份能力仍受部署环境和用户授权约束。
+
+前置依赖服务 `services`：用于把多个 agent 共享的本机守护服务（例如本地代理、桥接器、MCP 服务）从具体 CLI 里抽离出来。每项键名为服务名（`[A-Za-z0-9_-]`），常用字段：
+- `healthcheck`（必填，三选一）：`http`（期望 2xx，不跟重定向）、`tcp`（`host:port`）或 `command`（直接 argv 列表，不经 shell），配 `timeout_secs`（默认 3）。
+- `command`（可选 argv 列表）：探活失败时的兜底拉起命令；省略时只做探活，适合已由 launchd / systemd 托管的外部服务。可配 `working_dir`、`env`（仅展开全局 `.env`，绝不读各 agent `.env`）、`startup_timeout_secs`（默认 15）、`survive_daemon_restart`（默认 `true`，daemon 重启时保留兜底进程；设为 `false` 则在 daemon 优雅停机时一并清理）。
+- `agent_env`（可选键值表）：注入给所有 `runtime.requires` 声明了该服务的 agent，优先级低于 agent 自己的 `runtime.env`，且不允许覆盖 `SUMMON_*` 等运行时保留变量；支持 `${VAR}` 引用。
+- `description`（可选）：在 `summon services` 与 `summon doctor` 里显示用途说明。
+
+健康服务不会被重复拉起；外部托管服务永远不会被 `summon services stop` 或 daemon 停机误杀。修改 `services` 或 `runtime.requires` 后下一轮自动生效。
 
 自动升级 `upgrade`:`auto: false`(默认关)、`check_interval_hours: 6`、`min_age_hours: 2`(新版发布满这么久
 才采用)、`idle_minutes: 10`(整机连续空闲这么久才换代)、`range: minor`(`patch` 只跟同一 x.y 的补丁版本;
