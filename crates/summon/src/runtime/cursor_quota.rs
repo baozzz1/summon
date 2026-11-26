@@ -20,7 +20,6 @@ use summon_core::cursor_quota::{
     self as core_quota, Begin, FailureKind, IndividualQuota, LoginStore, QuotaSources,
     SourceResult, TokenSource,
 };
-use summon_core::driver::CliDriver;
 use summon_core::registry::Agent;
 
 use crate::observe::log::log;
@@ -33,11 +32,11 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 /// `security` 找不到钥匙串条目时的退出码(errSecItemNotFound)。
 const SECURITY_ITEM_NOT_FOUND: i32 = 44;
 
-/// 每轮开跑时调用(所有无头通道):到了间隔就在后台查一次个人额度,结果写给此刻用这个凭据来源
-/// 的每个 agent。`show_quota` 是这个会话的「额度显示」开关。
+/// 每轮开跑时调用(无头与 Transcript 通道共用):到了间隔就在后台查一次个人额度,结果写给此刻
+/// 用这个凭据来源的每个 agent。`show_quota` 是这个会话的「额度显示」开关。
 pub(crate) fn on_turn_start(agent: &Agent, show_quota: bool) {
-    if CliDriver::from_kind(agent.cli_kind()) != CliDriver::Cursor {
-        // 不再是 cursor 的 agent(热重载换了 cli)不能留着 cursor 的额度:它和别的 CLI 共用一格缓存。
+    if !core_quota::uses_cursor_quota(agent) {
+        // 不再归属 cursor 额度的 agent(热重载换了 cli 或撤掉 token 命令)解除订阅并清掉 Cursor 桶缓存。
         detach(sources(), &agent.name, &write_cache);
         return;
     }
@@ -342,14 +341,18 @@ mod tests {
         TokenSource::GlobalCommand(command.into())
     }
 
-    /// 调用点是这套机制唯一的入口;删掉它,单测照样全绿,角标却再也不会有 Cursor 额度。
+    /// 无头与 Transcript 两条轮入口都必须调用 on_turn_start:既让显式配了 Cursor 额度的
+    /// Claude 代理轮能刷新额度,也让热重载切离 Cursor 时及时 detach 清理旧缓存。
     #[test]
-    fn headless_turns_reach_the_query_entry() {
+    fn both_headless_and_transcript_turns_reach_the_query_entry() {
         let chat_thread = include_str!("daemon/chat_thread.rs");
-        assert!(chat_thread
-            .contains("let quota_badge_on = super::cards::quota_badge_enabled(agent, &tag);"));
-        assert!(chat_thread
-            .contains("crate::runtime::cursor_quota::on_turn_start(agent, quota_badge_on);"));
+        let calls = chat_thread
+            .matches("crate::runtime::cursor_quota::on_turn_start(agent, quota_badge_on);")
+            .count();
+        assert!(
+            calls >= 2,
+            "headless 与 transcript 两条入口都必须触发 cursor_quota::on_turn_start, 实际={calls}"
+        );
     }
 
     #[test]
@@ -529,12 +532,20 @@ mod tests {
         write_cache(agent, pulled(20, 1_790_812_800));
         write_cache(agent, pulled(80, 1_790_294_400));
         assert_eq!(
-            crate::capture::rpc_pool::current_quota_shared(agent, "g"),
+            crate::capture::rpc_pool::current_quota_for_bucket_shared(
+                agent,
+                "g",
+                crate::capture::rpc_pool::QuotaBucket::Cursor,
+            ),
             Some(80)
         );
         write_cache(agent, SourceResult::Unavailable);
         assert_eq!(
-            crate::capture::rpc_pool::current_quota_shared(agent, "g"),
+            crate::capture::rpc_pool::current_quota_for_bucket_shared(
+                agent,
+                "g",
+                crate::capture::rpc_pool::QuotaBucket::Cursor,
+            ),
             None
         );
     }

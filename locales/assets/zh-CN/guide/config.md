@@ -185,8 +185,10 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
   (默认 600)查一次,用它的几个 agent 共享结果。凭据默认读 cursor-agent 自己的登录态(macOS
   钥匙串,Linux `~/.config/cursor/auth.json`);放在别处时写 `token_command`,它的 stdout 输出
   access token,运行时只有 PATH、HOME 这类基础环境。配了 `runtime.cli_cmd` / `runtime.env` 的
-  agent 要在 agent.yaml 写 `runtime.cursor_quota_token_command`(在该 agent 的环境里跑),否则
-  不查(证明不了是同一个账号)。凭据失效或接口不认时角标不再显示额度。`enabled: false` 整机关掉
+  agent,以及经代理接入 Cursor 模型的非 `cli: cursor` agent(例如 `cli: claude` + 代理),都要在
+  agent.yaml 写 `runtime.cursor_quota_token_command`(在该 agent 的环境里跑),否则不查(证明不了是
+  同一个账号);启用后按 Cursor 计费周期显示 `quota N%`(不标 `7d`)。凭据失效或接口不认时角标不再
+  显示额度。`enabled: false` 整机关掉
 
 ## 其余消息配置
 

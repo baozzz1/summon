@@ -218,9 +218,10 @@ Use exact chat IDs from `summon chat-id --turn-id <current credential>` in that 
   share results and interval_secs (600). Default credentials: cursor-agent login
   (macOS keychain; Linux ~/.config/cursor/auth.json). token_command may supply an access
   token using only basic environment such as PATH/HOME. Agents with cli_cmd/env must
-  provide runtime.cursor_quota_token_command in their own environment, otherwise account
-  identity cannot be proven and no query runs. Invalid credentials hide the badge;
-  enabled: false disables machine-wide.
+  provide runtime.cursor_quota_token_command in their own environment (non-cursor agents
+  routing to Cursor models via a proxy can also set it to show Cursor billing-cycle
+  `quota N%` instead of `7d`), otherwise account identity cannot be proven and no query
+  runs. Invalid credentials hide the badge; enabled: false disables machine-wide.
 
 ## Other messaging settings
 

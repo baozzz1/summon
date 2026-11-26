@@ -8006,14 +8006,15 @@ fn badge_seed_for(
     tag: &str,
     settings: &summon_core::settings::ResolvedSettings,
 ) -> summon_core::feishu::TurnBadge {
+    let bucket = crate::capture::rpc_pool::QuotaBucket::for_agent(agent);
+    let use_cursor_quota = bucket == Some(crate::capture::rpc_pool::QuotaBucket::Cursor);
+    let quota_window = bucket.map(|b| b.long_window_kind(agent.cli_kind()));
     let five_hour = super::cards::five_hour_quota_for(agent);
-    // 账号额度:进程内跨 chat 存活的最后一次已知值。Codex/Trae 推送、Claude statusLine
-    // 与 Cursor 的主动查询都写同一入口；没有可靠观测就为 None。
-    //
-    // 种子先带上上一轮已知值;收尾再从池里做一次纯内存快照刷新。后一拍不做 RPC,
-    // 但能覆盖「冷启首轮的 checkout 比 badge seed 晚」的时序,不让第一张卡少额度。
-    let quota = match summon_core::driver::CliDriver::from_kind(agent.cli_kind()) {
-        summon_core::driver::CliDriver::Codex
+    // 账号额度:进程内跨 chat 存活的最后一次已知值,按来源分桶隔离(Claude / Codex / Cursor)。
+    // 种子先带上上一轮已知值;收尾再从对应桶做一次纯内存快照刷新,既覆盖冷启首轮 checkout 或
+    // 后台查询晚于 seed 的时序,也不会在热切 CLI 后把旧来源的额度串进新来源。
+    let quota = match bucket {
+        Some(crate::capture::rpc_pool::QuotaBucket::Codex)
             if crate::capture::rpc_pool::agent_uses_default_codex_account(agent) =>
         {
             crate::capture::rpc_pool::current_default_codex_quota_with_reset_shared(
@@ -8021,7 +8022,12 @@ fn badge_seed_for(
                 tag,
             )
         }
-        _ => crate::capture::rpc_pool::current_quota_with_reset_shared(&agent.name, tag),
+        Some(bucket) => crate::capture::rpc_pool::current_quota_with_reset_for_bucket_shared(
+            &agent.name,
+            tag,
+            bucket,
+        ),
+        None => None,
     };
     summon_core::feishu::TurnBadge {
         cli: agent.cli_kind().to_string(),
@@ -8029,6 +8035,7 @@ fn badge_seed_for(
         model: super::cards::panel_model(agent, tag),
         quota_left_pct: quota.map(|(left_pct, _)| left_pct),
         quota_resets_at: quota.and_then(|(_, resets_at)| resets_at),
+        quota_window,
         quota_5h_left_pct: five_hour.map(|(left_pct, _)| left_pct),
         quota_5h_resets_at: five_hour.and_then(|(_, resets_at)| resets_at),
         // 渲染开关与采集解耦:值照常采,显不显示由 per-chat 面板偏好定(默认关)。
@@ -8036,6 +8043,7 @@ fn badge_seed_for(
         merge_default_codex_quota: crate::capture::rpc_pool::agent_uses_default_codex_account(
             agent,
         ),
+        use_cursor_quota,
         // 配置里那个**会被真正下发**的档位(本会话覆盖 > agent.yaml;无 effort 轴的 CLI 为 None)。
         // claude 收尾时若读到 statusLine 的实时档位会覆盖它。
         effort: super::cards::badge_effort(agent, tag),
@@ -8095,20 +8103,25 @@ fn completion_badge(
 ) -> summon_core::feishu::TurnBadge {
     let mut badge = seed.clone();
     let driver = summon_core::driver::CliDriver::from_kind(&seed.cli);
+    let bucket = crate::capture::rpc_pool::QuotaBucket::for_cli(&seed.cli, seed.use_cursor_quota);
+    if badge.quota_window.is_none() {
+        badge.quota_window = bucket.map(|b| b.long_window_kind(&seed.cli));
+    }
     if driver == summon_core::driver::CliDriver::Cursor {
         // Cursor 在 checkout 时确认模型，晚于轮初角标快照；收尾使用会话已生效的值。
         badge.model =
             crate::capture::rpc_pool::current_model_shared(agent_name, tag).or(badge.model);
     }
-    let latest_rpc_quota = match driver {
-        summon_core::driver::CliDriver::Codex if seed.merge_default_codex_quota => {
+    let latest_rpc_quota = match bucket {
+        Some(crate::capture::rpc_pool::QuotaBucket::Codex) if seed.merge_default_codex_quota => {
             crate::capture::rpc_pool::current_default_codex_quota_with_reset_shared(agent_name, tag)
         }
-        summon_core::driver::CliDriver::Codex => {
-            crate::capture::rpc_pool::current_quota_with_reset_shared(agent_name, tag)
-        }
-        summon_core::driver::CliDriver::Traex => {
-            crate::capture::rpc_pool::current_quota_with_reset_shared(agent_name, tag)
+        Some(crate::capture::rpc_pool::QuotaBucket::Codex) => {
+            crate::capture::rpc_pool::current_quota_with_reset_for_bucket_shared(
+                agent_name,
+                tag,
+                crate::capture::rpc_pool::QuotaBucket::Codex,
+            )
         }
         _ => None,
     };
@@ -8122,22 +8135,31 @@ fn completion_badge(
         }
     }
     if let Some(sid) = session_id {
-        apply_claude_statusline_badge(&mut badge, agent_name, tag, sid);
+        apply_claude_statusline_badge(&mut badge, agent_name, tag, sid, bucket);
     }
-    // Claude 的 statusLine 与 Cursor 的主动查询都写账号缓存,且可能在本轮途中才落地。
-    if matches!(
-        driver,
-        summon_core::driver::CliDriver::Claude | summon_core::driver::CliDriver::Cursor
-    ) {
+    // Claude 的 statusLine 与 Cursor 的主动查询各自写入对应分桶,且可能在本轮途中才落地。
+    if let Some(
+        bucket @ (crate::capture::rpc_pool::QuotaBucket::Claude
+        | crate::capture::rpc_pool::QuotaBucket::Cursor),
+    ) = bucket
+    {
         apply_account_quota(
             &mut badge,
-            crate::capture::rpc_pool::current_quota_with_reset_shared(agent_name, tag),
+            crate::capture::rpc_pool::current_quota_with_reset_for_bucket_shared(
+                agent_name, tag, bucket,
+            ),
         );
     }
     // 5 小时额度以收尾这一刻的缓存为准,不退回轮初的值:一轮跨过 5 小时重置点时,缓存已把
     // 过期窗口丢掉,轮初那份描述的正是那个已经不存在的窗口。claude 的快照上面已记入缓存。
-    let five_hour =
-        super::cards::five_hour_quota_shared(driver, seed.merge_default_codex_quota, agent_name);
+    let five_hour = bucket.and_then(|b| {
+        super::cards::five_hour_quota_for_bucket_shared(
+            &seed.cli,
+            b,
+            seed.merge_default_codex_quota,
+            agent_name,
+        )
+    });
     badge.quota_5h_left_pct = five_hour.map(|(left_pct, _)| left_pct);
     badge.quota_5h_resets_at = five_hour.and_then(|(_, resets_at)| resets_at);
     badge.show_quota = super::cards::quota_badge_enabled_at(agent_state_dir, tag);
@@ -8270,16 +8292,24 @@ fn apply_claude_statusline_badge(
     agent_name: &str,
     tag: &str,
     session_id: &str,
+    bucket: Option<crate::capture::rpc_pool::QuotaBucket>,
 ) {
     let Some(snap) = super::cards::read_claude_session_snapshot(session_id) else {
         return;
     };
     merge_claude_statusline(badge, &snap);
+    if bucket != Some(crate::capture::rpc_pool::QuotaBucket::Claude) {
+        return;
+    }
     super::cards::record_claude_snapshot_quota(agent_name, tag, &snap);
     if snap.seven_day.is_some() {
         apply_account_quota(
             badge,
-            crate::capture::rpc_pool::current_quota_with_reset_shared(agent_name, tag),
+            crate::capture::rpc_pool::current_quota_with_reset_for_bucket_shared(
+                agent_name,
+                tag,
+                crate::capture::rpc_pool::QuotaBucket::Claude,
+            ),
         );
     }
 }
@@ -10743,6 +10773,10 @@ pub(super) fn stream_turn_transcript(
         delivery_scope,
     };
     let tag = chat_tag(chat_type, chat);
+    // Transcript 轮同样走 Cursor 额度入口:既支持显式配了 `runtime.cursor_quota_token_command`
+    // 的代理形态(如 `cli: claude` 接 Cursor 模型),也让热重载从 `cli: cursor` 切来时触发 detach。
+    let quota_badge_on = super::cards::quota_badge_enabled(agent, &tag);
+    crate::runtime::cursor_quota::on_turn_start(agent, quota_badge_on);
     // 接管形态在起会话**之前**定:锚点与盘上 sid 都是上一代留下的事实,读它们零副作用。
     // 四条判据缺一就地转恢复卡 —— 证不了还当新轮重注入,就是同一句话跑两遍。
     let anchor = if reattach {
@@ -17248,8 +17282,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        crate::capture::rpc_pool::record_five_hour_quota_observation_shared(
+        crate::capture::rpc_pool::record_five_hour_quota_observation_for_bucket_shared(
             agent,
+            crate::capture::rpc_pool::QuotaBucket::Claude,
             5,
             Some(now - 60),
             Some(now - 120),
@@ -17314,8 +17349,9 @@ mod tests {
             cli: "claude".into(),
             ..Default::default()
         };
-        crate::capture::rpc_pool::record_quota_observation_shared(
+        crate::capture::rpc_pool::record_quota_observation_for_bucket_shared(
             agent,
+            crate::capture::rpc_pool::QuotaBucket::Claude,
             "g-test",
             80,
             Some(now + 86_400),
@@ -17326,8 +17362,9 @@ mod tests {
         assert_eq!(badge.quota_resets_at, Some(now + 86_400));
 
         let stale = "quota-claude-weekly-reset-passed";
-        crate::capture::rpc_pool::record_quota_observation_shared(
+        crate::capture::rpc_pool::record_quota_observation_for_bucket_shared(
             stale,
+            crate::capture::rpc_pool::QuotaBucket::Claude,
             "g-test",
             70,
             Some(now - 60),
@@ -17396,8 +17433,9 @@ mod tests {
     #[test]
     fn claude_completion_badge_refreshes_account_quota_without_a_session_snapshot() {
         let agent = "claude-completion-account-quota";
-        crate::capture::rpc_pool::record_quota_observation_shared(
+        crate::capture::rpc_pool::record_quota_observation_for_bucket_shared(
             agent,
+            crate::capture::rpc_pool::QuotaBucket::Claude,
             "g-source",
             72,
             Some(800),
@@ -17426,12 +17464,10 @@ mod tests {
             quota_5h_left_pct: None,
             ..Default::default()
         };
-        crate::capture::rpc_pool::record_quota_observation_shared(
+        crate::capture::rpc_pool::replace_account_quota_shared(
             agent,
-            "g-source",
-            96,
-            Some(1_790_812_800),
-            Some(1_000),
+            Some((96, Some(1_790_812_800))),
+            1_000,
         );
 
         let tmp = tempfile::tempdir().unwrap();
@@ -25346,5 +25382,106 @@ mod agent_reload_tests {
             "task("
         );
         assert!(squashed.contains(refresh_then_turn));
+    }
+
+    #[test]
+    fn hot_reload_from_cursor_to_claude_does_not_leak_cursor_quota_as_7d() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            "name: hot-reload-cursor-to-claude
+runtime:
+  cli: claude
+",
+        )
+        .unwrap();
+        agent.dir = tmp.path().join("agents").join(&agent.name);
+        std::fs::create_dir_all(agent.state_dir()).unwrap();
+        super::super::cards::set_quota_badge(&agent, "g-test", true).unwrap();
+
+        // 热切之前 Cursor 曾写入过 85% 月度额度。
+        crate::capture::rpc_pool::replace_account_quota_shared(
+            &agent.name,
+            Some((85, Some(1_796_083_200))),
+            1_000,
+        );
+
+        let settings = summon_core::settings::ResolvedSettings::resolve(
+            &summon_core::config::builtin_messaging(),
+            &Default::default(),
+        );
+        let seed = super::badge_seed_for(&agent, "g-test", &settings);
+        assert_eq!(seed.quota_left_pct, None);
+        assert_eq!(
+            seed.quota_window,
+            Some(summon_core::feishu::LongQuotaKind::Weekly)
+        );
+        let badge = super::completion_badge(&seed, &agent.name, &agent.state_dir(), "g-test", None);
+        assert_eq!(badge.quota_left_pct, None);
+        let rendered = badge.render().unwrap_or_default();
+        assert!(
+            !rendered.contains("7d 85%"),
+            "热切到 claude 后旧 Cursor 额度不能伪装成 7d: {rendered}"
+        );
+    }
+
+    #[test]
+    fn claude_with_cursor_quota_command_renders_billing_cycle_quota_not_7d() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            "name: claude-proxy-cursor-quota
+runtime:
+  cli: claude
+  env:
+    ANTHROPIC_BASE_URL: http://127.0.0.1:18765
+  cursor_quota_token_command: echo tok
+",
+        )
+        .unwrap();
+        agent.dir = tmp.path().join("agents").join(&agent.name);
+        std::fs::create_dir_all(agent.state_dir()).unwrap();
+        super::super::cards::set_quota_badge(&agent, "g-test", true).unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+        crate::capture::rpc_pool::replace_account_quota_shared(
+            &agent.name,
+            Some((85, Some(now + 86_400 * 5))),
+            now,
+        );
+        // 即使 Claude 桶里残留过 5h/7d，也不得串入显式走 Cursor 额度的代理形态。
+        crate::capture::rpc_pool::record_quota_observation_for_bucket_shared(
+            &agent.name,
+            crate::capture::rpc_pool::QuotaBucket::Claude,
+            "g-test",
+            12,
+            Some(now + 86_400),
+            Some(now),
+        );
+        crate::capture::rpc_pool::record_five_hour_quota_observation_for_bucket_shared(
+            &agent.name,
+            crate::capture::rpc_pool::QuotaBucket::Claude,
+            34,
+            Some(now + 3_600),
+            Some(now),
+        );
+
+        let settings = summon_core::settings::ResolvedSettings::resolve(
+            &summon_core::config::builtin_messaging(),
+            &Default::default(),
+        );
+        let seed = super::badge_seed_for(&agent, "g-test", &settings);
+        assert!(seed.use_cursor_quota);
+        assert_eq!(seed.quota_left_pct, Some(85));
+        assert_eq!(seed.quota_5h_left_pct, None);
+        assert_eq!(
+            seed.quota_window,
+            Some(summon_core::feishu::LongQuotaKind::BillingCycle)
+        );
+        let badge = super::completion_badge(&seed, &agent.name, &agent.state_dir(), "g-test", None);
+        assert_eq!(badge.quota_left_pct, Some(85));
+        assert_eq!(badge.quota_5h_left_pct, None);
+        let rendered = badge.render().expect("应渲染角标");
+        assert!(rendered.contains("quota 85%"), "{rendered}");
+        assert!(!rendered.contains("7d"), "{rendered}");
+        assert!(!rendered.contains("5h"), "{rendered}");
     }
 }

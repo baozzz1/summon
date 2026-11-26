@@ -643,21 +643,78 @@ struct LatestQuota {
     observed_at: Option<i64>,
 }
 
-static LATEST_QUOTA: std::sync::OnceLock<Mutex<HashMap<String, LatestQuota>>> =
+/// 账号级额度缓存的分桶键:不同来源各自落桶,热重载切 CLI 或启停
+/// `runtime.cursor_quota_token_command` 时,旧来源的残留(例如 Cursor 月度额度)不会串进新来源。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum QuotaBucket {
+    Claude,
+    Codex,
+    Cursor,
+}
+
+impl QuotaBucket {
+    /// 这个 agent 当前配置归属哪个额度分桶。显式声明 `runtime.cursor_quota_token_command`
+    /// 时优先级高于 `cli`(如 `cli: claude` 经代理走 Cursor 模型)。
+    pub fn for_agent(agent: &Agent) -> Option<Self> {
+        Self::for_cli(
+            agent.cli_kind(),
+            summon_core::cursor_quota::has_agent_token_command(agent),
+        )
+    }
+
+    /// 由角标种子携带的 `(cli, use_cursor_quota)` 还原同一分桶。
+    pub fn for_cli(cli: &str, use_cursor_quota: bool) -> Option<Self> {
+        if use_cursor_quota {
+            return Some(Self::Cursor);
+        }
+        match summon_core::driver::CliDriver::from_kind(cli) {
+            summon_core::driver::CliDriver::Claude => Some(Self::Claude),
+            summon_core::driver::CliDriver::Codex | summon_core::driver::CliDriver::Traex => {
+                Some(Self::Codex)
+            }
+            summon_core::driver::CliDriver::Cursor => Some(Self::Cursor),
+            summon_core::driver::CliDriver::Other => None,
+        }
+    }
+
+    /// 该分桶在给定 `cli` 下的长窗标签语义(周窗 `7d` vs 计费周期 `quota`)。
+    pub fn long_window_kind(self, cli: &str) -> summon_core::feishu::LongQuotaKind {
+        match self {
+            Self::Claude => summon_core::feishu::LongQuotaKind::Weekly,
+            Self::Cursor => summon_core::feishu::LongQuotaKind::BillingCycle,
+            Self::Codex => {
+                if summon_core::driver::CliDriver::from_kind(cli).has_five_hour_and_weekly_quota() {
+                    summon_core::feishu::LongQuotaKind::Weekly
+                } else {
+                    summon_core::feishu::LongQuotaKind::BillingCycle
+                }
+            }
+        }
+    }
+
+    /// 该分桶在给定 `cli` 下是否有 5 小时短窗。
+    pub fn has_five_hour(self, cli: &str) -> bool {
+        self.long_window_kind(cli).is_weekly()
+    }
+}
+
+type QuotaCacheKey = (String, QuotaBucket);
+
+static LATEST_QUOTA: std::sync::OnceLock<Mutex<HashMap<QuotaCacheKey, LatestQuota>>> =
     std::sync::OnceLock::new();
 
 const DEFAULT_CODEX_ACCOUNT: &str = "\0codex-default-account";
 
-fn latest_quota_cache() -> &'static Mutex<HashMap<String, LatestQuota>> {
+fn latest_quota_cache() -> &'static Mutex<HashMap<QuotaCacheKey, LatestQuota>> {
     LATEST_QUOTA.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 5 小时窗口的账号级剩余额度,与周额度分表存、同一套新旧规则。两个窗口各自重置,放进同一条
-/// 记录的话,任一窗口的新观测都会被当成另一窗口的新旧依据。
-static LATEST_FIVE_HOUR_QUOTA: std::sync::OnceLock<Mutex<HashMap<String, LatestQuota>>> =
+/// 5 小时窗口的账号级剩余额度,与长窗分表且按来源分桶存、同一套新旧规则。两个窗口各自重置,
+/// 放进同一条记录的话,任一窗口的新观测都会被当成另一窗口的新旧依据。
+static LATEST_FIVE_HOUR_QUOTA: std::sync::OnceLock<Mutex<HashMap<QuotaCacheKey, LatestQuota>>> =
     std::sync::OnceLock::new();
 
-fn latest_five_hour_quota_cache() -> &'static Mutex<HashMap<String, LatestQuota>> {
+fn latest_five_hour_quota_cache() -> &'static Mutex<HashMap<QuotaCacheKey, LatestQuota>> {
     LATEST_FIVE_HOUR_QUOTA.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -696,14 +753,15 @@ impl Drop for DefaultCodexQuotaTestGuard {
 
 #[cfg(test)]
 fn forget_default_codex_quota() {
+    let key = (DEFAULT_CODEX_ACCOUNT.to_string(), QuotaBucket::Codex);
     latest_quota_cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .remove(DEFAULT_CODEX_ACCOUNT);
+        .remove(&key);
     latest_five_hour_quota_cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .remove(DEFAULT_CODEX_ACCOUNT);
+        .remove(&key);
     five_hour_cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -742,6 +800,7 @@ fn quota_observation_is_newer(current: LatestQuota, incoming: LatestQuota) -> bo
 
 fn record_latest_quota(
     agent: &str,
+    bucket: QuotaBucket,
     left_pct: u8,
     resets_at: Option<i64>,
     observed_at: Option<i64>,
@@ -750,6 +809,7 @@ fn record_latest_quota(
     record_latest_quota_in(
         latest_quota_cache(),
         agent,
+        bucket,
         left_pct,
         resets_at,
         observed_at,
@@ -758,8 +818,9 @@ fn record_latest_quota(
 }
 
 fn record_latest_quota_in(
-    cache: &Mutex<HashMap<String, LatestQuota>>,
+    cache: &Mutex<HashMap<QuotaCacheKey, LatestQuota>>,
     agent: &str,
+    bucket: QuotaBucket,
     left_pct: u8,
     resets_at: Option<i64>,
     observed_at: Option<i64>,
@@ -768,37 +829,40 @@ fn record_latest_quota_in(
     let Ok(mut quotas) = cache.lock() else {
         return (false, false);
     };
+    let key = (agent.to_string(), bucket);
     let incoming = LatestQuota {
         origin,
         left_pct: left_pct.min(100),
         resets_at,
         observed_at,
     };
-    let Some(current) = quotas.get(agent).copied() else {
-        quotas.insert(agent.to_string(), incoming);
+    let Some(current) = quotas.get(&key).copied() else {
+        quotas.insert(key, incoming);
         return (true, true);
     };
     if !quota_observation_is_newer(current, incoming) {
         return (false, false);
     }
     let changed = current.left_pct != incoming.left_pct || current.resets_at != incoming.resets_at;
-    quotas.insert(agent.to_string(), incoming);
+    quotas.insert(key, incoming);
     (true, changed)
 }
 
-fn latest_quota(agent: &str) -> Option<LatestQuota> {
+fn latest_quota(agent: &str, bucket: QuotaBucket) -> Option<LatestQuota> {
+    let key = (agent.to_string(), bucket);
     latest_quota_cache()
         .lock()
         .ok()
-        .and_then(|quotas| quotas.get(agent).copied())
+        .and_then(|quotas| quotas.get(&key).copied())
 }
 
 /// 5 小时窗口一天重置好几次,重置时刻已过的观测描述的是一个已经不存在的窗口,不拿来显示。
-fn latest_five_hour_quota(agent: &str, now: i64) -> Option<LatestQuota> {
+fn latest_five_hour_quota(agent: &str, bucket: QuotaBucket, now: i64) -> Option<LatestQuota> {
+    let key = (agent.to_string(), bucket);
     latest_five_hour_quota_cache()
         .lock()
         .ok()
-        .and_then(|quotas| quotas.get(agent).copied())
+        .and_then(|quotas| quotas.get(&key).copied())
         .filter(|quota| quota.resets_at.is_none_or(|resets_at| resets_at > now))
 }
 
@@ -3518,21 +3582,33 @@ pub fn cursor_config_options_shared(agent: &str, tag: &str) -> Vec<CursorAcpConf
         .unwrap_or_default()
 }
 
-/// 当前进程最后一次观测到的**额度剩余**百分比。账号额度按 agent 共享；exact chat 的
-/// RPC session 值只作为尚未进入账号缓存时的兼容回退。
-pub fn current_quota_shared(agent: &str, tag: &str) -> Option<u8> {
-    current_quota_with_reset_shared(agent, tag).map(|(left_pct, _)| left_pct)
+/// 当前进程最后一次观测到的**额度剩余**百分比(按分桶隔离)。
+/// 仅 `QuotaBucket::Codex` 在账号缓存尚未建立时允许回退到 exact chat 的 RPC session 值。
+pub fn current_quota_for_bucket_shared(agent: &str, tag: &str, bucket: QuotaBucket) -> Option<u8> {
+    current_quota_with_reset_for_bucket_shared(agent, tag, bucket).map(|(left_pct, _)| left_pct)
 }
 
-/// 同 [`current_quota_shared`],另带这份观测的重置时刻(Unix 秒)。百分比与重置时刻出自同一条
-/// 观测;会话级回退值没有重置时刻。
-pub fn current_quota_with_reset_shared(agent: &str, tag: &str) -> Option<(u8, Option<i64>)> {
-    quota_with_upcoming_reset(latest_quota(agent), unix_now_secs())
-        .or_else(|| current_session_quota_without_reset(agent, tag))
+/// 同 [`current_quota_for_bucket_shared`],另带这份观测的重置时刻(Unix 秒)。百分比与重置时刻
+/// 出自同一条观测;会话级回退值没有重置时刻。
+pub fn current_quota_with_reset_for_bucket_shared(
+    agent: &str,
+    tag: &str,
+    bucket: QuotaBucket,
+) -> Option<(u8, Option<i64>)> {
+    quota_with_upcoming_reset(latest_quota(agent, bucket), unix_now_secs()).or_else(|| {
+        (bucket == QuotaBucket::Codex)
+            .then(|| current_session_quota_without_reset(agent, tag))
+            .flatten()
+    })
+}
+
+#[cfg(test)]
+pub fn current_quota_shared(agent: &str, tag: &str) -> Option<u8> {
+    current_quota_for_bucket_shared(agent, tag, QuotaBucket::Codex)
 }
 
 /// 默认 Codex 后台账号观测没有 chat 身份；只有调用方已证明 agent 使用同一默认账号时才能
-/// 调用此入口。Trae、自定义 home/env/包装器必须只读 [`current_quota_shared`]。
+/// 调用此入口。Trae、自定义 home/env/包装器必须只读 [`current_quota_for_bucket_shared`]。
 pub fn current_default_codex_quota_shared(agent: &str, tag: &str) -> Option<u8> {
     current_default_codex_quota_with_reset_shared(agent, tag).map(|(left_pct, _)| left_pct)
 }
@@ -3543,7 +3619,10 @@ pub fn current_default_codex_quota_with_reset_shared(
     tag: &str,
 ) -> Option<(u8, Option<i64>)> {
     quota_with_upcoming_reset(
-        newer_quota(latest_quota(DEFAULT_CODEX_ACCOUNT), latest_quota(agent)),
+        newer_quota(
+            latest_quota(DEFAULT_CODEX_ACCOUNT, QuotaBucket::Codex),
+            latest_quota(agent, QuotaBucket::Codex),
+        ),
         unix_now_secs(),
     )
     .or_else(|| current_session_quota_without_reset(agent, tag))
@@ -3566,25 +3645,34 @@ fn current_session_quota_without_reset(agent: &str, tag: &str) -> Option<(u8, Op
         .map(|left_pct| (left_pct, None))
 }
 
-/// 账号最后一次观测到的 **5 小时窗口**:(剩余百分比, 重置时刻 Unix 秒)。只有 claude 与 codex 系
-/// 会写入。
+/// 账号最后一次观测到的 **5 小时窗口**:(剩余百分比, 重置时刻 Unix 秒),按来源分桶读取。
+pub fn current_five_hour_quota_for_bucket_shared(
+    agent: &str,
+    bucket: QuotaBucket,
+) -> Option<(u8, Option<i64>)> {
+    latest_five_hour_quota(agent, bucket, unix_now_secs())
+        .map(|quota| (quota.left_pct, quota.resets_at))
+}
+
+#[cfg(test)]
 pub fn current_five_hour_quota_shared(agent: &str) -> Option<(u8, Option<i64>)> {
-    latest_five_hour_quota(agent, unix_now_secs()).map(|quota| (quota.left_pct, quota.resets_at))
+    current_five_hour_quota_for_bucket_shared(agent, QuotaBucket::Codex)
 }
 
 /// 5 小时窗口版的 [`current_default_codex_quota_shared`],调用前提相同。
 pub fn current_default_codex_five_hour_quota_shared(agent: &str) -> Option<(u8, Option<i64>)> {
     let now = unix_now_secs();
     newer_quota(
-        latest_five_hour_quota(DEFAULT_CODEX_ACCOUNT, now),
-        latest_five_hour_quota(agent, now),
+        latest_five_hour_quota(DEFAULT_CODEX_ACCOUNT, QuotaBucket::Codex, now),
+        latest_five_hour_quota(agent, QuotaBucket::Codex, now),
     )
     .map(|quota| (quota.left_pct, quota.resets_at))
 }
 
-/// 记下 agent 账号最新的 5 小时窗口剩余百分比(claude statusLine 的实时观测)。
-pub fn record_five_hour_quota_observation_shared(
+/// 记下 agent 账号最新的 5 小时窗口剩余百分比(按来源分桶)。
+pub fn record_five_hour_quota_observation_for_bucket_shared(
     agent: &str,
+    bucket: QuotaBucket,
     left_pct: u8,
     resets_at: Option<i64>,
     observed_at: Option<i64>,
@@ -3592,6 +3680,7 @@ pub fn record_five_hour_quota_observation_shared(
     record_latest_quota_in(
         latest_five_hour_quota_cache(),
         agent,
+        bucket,
         left_pct,
         resets_at,
         observed_at,
@@ -3602,6 +3691,7 @@ pub fn record_five_hour_quota_observation_shared(
 pub fn agent_uses_default_codex_account(agent: &Agent) -> bool {
     if summon_core::driver::CliDriver::from_kind(agent.cli_kind())
         != summon_core::driver::CliDriver::Codex
+        || summon_core::cursor_quota::has_agent_token_command(agent)
         || std::env::var_os("CODEX_HOME").is_some()
     {
         return false;
@@ -3621,11 +3711,11 @@ pub fn current_ctx_budget_shared(agent: &str, tag: &str) -> Option<(u64, u64)> {
         .and_then(|pool| pool.current_ctx_budget(agent, tag))
 }
 
-/// 记下 agent 账号最新的额度剩余百分比，并同步更新仍存活的 exact chat RPC session。
-/// 即使共享池或 session 尚未建立，账号快照也会保留。返回账号值是否变化。
-/// `observed_at` 是这份观测产生的 Unix 秒:从盘上快照读来的传快照落盘时刻,实时读到的传当下。
-pub fn record_quota_observation_shared(
+/// 记下 agent 账号最新的长窗额度剩余百分比(按来源分桶)。仅 `QuotaBucket::Codex` 同步更新
+/// exact chat 的 RPC session。返回账号值是否变化。
+pub fn record_quota_observation_for_bucket_shared(
     agent: &str,
+    bucket: QuotaBucket,
     tag: &str,
     left_pct: u8,
     resets_at: Option<i64>,
@@ -3633,6 +3723,7 @@ pub fn record_quota_observation_shared(
 ) -> bool {
     record_quota_observation_with_origin(
         agent,
+        bucket,
         tag,
         left_pct,
         resets_at,
@@ -3641,16 +3732,36 @@ pub fn record_quota_observation_shared(
     )
 }
 
+#[cfg(test)]
+pub fn record_quota_observation_shared(
+    agent: &str,
+    tag: &str,
+    left_pct: u8,
+    resets_at: Option<i64>,
+    observed_at: Option<i64>,
+) -> bool {
+    record_quota_observation_for_bucket_shared(
+        agent,
+        QuotaBucket::Codex,
+        tag,
+        left_pct,
+        resets_at,
+        observed_at,
+    )
+}
+
 fn record_quota_observation_with_origin(
     agent: &str,
+    bucket: QuotaBucket,
     tag: &str,
     left_pct: u8,
     resets_at: Option<i64>,
     observed_at: Option<i64>,
     origin: QuotaOrigin,
 ) -> bool {
-    let (accepted, changed) = record_latest_quota(agent, left_pct, resets_at, observed_at, origin);
-    if accepted {
+    let (accepted, changed) =
+        record_latest_quota(agent, bucket, left_pct, resets_at, observed_at, origin);
+    if accepted && bucket == QuotaBucket::Codex {
         if let Some(pool) = SHARED.get() {
             pool.record_quota(agent, tag, left_pct);
         }
@@ -3658,7 +3769,7 @@ fn record_quota_observation_with_origin(
     changed
 }
 
-/// 主动拉取的额度:整值替换(`Some`)或清掉(`None`)该 agent 的账号额度。
+/// 主动拉取的 Cursor 额度:整值替换(`Some`)或清掉(`None`)该 agent 在 `QuotaBucket::Cursor` 的缓存。
 ///
 /// 不走 [`quota_observation_is_newer`] 的新旧排序 —— 那套排序防的是被动推送的乱序,而主动拉取
 /// 拿的是当前凭据此刻的答案,本身就是最新的。换了账号时新账号的周期可能反而更早结束,按窗口
@@ -3672,10 +3783,11 @@ pub fn replace_account_quota_shared(
     let Ok(mut quotas) = latest_quota_cache().lock() else {
         return;
     };
+    let key = (agent.to_string(), QuotaBucket::Cursor);
     match quota {
         Some((left_pct, resets_at)) => {
             quotas.insert(
-                agent.to_string(),
+                key,
                 LatestQuota {
                     origin: QuotaOrigin::Live,
                     left_pct: left_pct.min(100),
@@ -3685,7 +3797,7 @@ pub fn replace_account_quota_shared(
             );
         }
         None => {
-            quotas.remove(agent);
+            quotas.remove(&key);
         }
     }
 }
@@ -3728,6 +3840,7 @@ fn record_codex_quota_snapshot_with_origin(
             agent_chat
                 .map(|(agent, _)| agent)
                 .unwrap_or(DEFAULT_CODEX_ACCOUNT),
+            QuotaBucket::Codex,
             left_pct,
             resets_at,
             observed_at,
@@ -3740,6 +3853,7 @@ fn record_codex_quota_snapshot_with_origin(
     match agent_chat {
         Some((agent, tag)) => record_quota_observation_with_origin(
             agent,
+            QuotaBucket::Codex,
             tag,
             left_pct,
             resets_at,
@@ -3749,6 +3863,7 @@ fn record_codex_quota_snapshot_with_origin(
         None => {
             record_latest_quota(
                 DEFAULT_CODEX_ACCOUNT,
+                QuotaBucket::Codex,
                 left_pct,
                 resets_at,
                 observed_at,
@@ -5105,6 +5220,7 @@ mod tests {
         let agent = "quota-memory-codex-account-merge";
         record_latest_quota(
             DEFAULT_CODEX_ACCOUNT,
+            QuotaBucket::Codex,
             40,
             Some(1_000_000),
             Some(1_000),
@@ -5137,6 +5253,7 @@ mod tests {
         assert!(
             record_latest_quota(
                 DEFAULT_CODEX_ACCOUNT,
+                QuotaBucket::Codex,
                 100,
                 Some(1_794_272_826),
                 Some(1_791_679_628),
@@ -5158,6 +5275,7 @@ mod tests {
         assert!(
             !record_latest_quota(
                 agent,
+                QuotaBucket::Codex,
                 100,
                 Some(1_794_272_826),
                 Some(1_791_679_628),
@@ -5202,6 +5320,7 @@ mod tests {
         assert!(
             record_latest_quota(
                 DEFAULT_CODEX_ACCOUNT,
+                QuotaBucket::Codex,
                 100,
                 Some(1_794_272_826),
                 Some(1_791_679_628),
@@ -5212,6 +5331,7 @@ mod tests {
         assert!(
             record_latest_quota(
                 DEFAULT_CODEX_ACCOUNT,
+                QuotaBucket::Codex,
                 83,
                 Some(1_792_472_315),
                 Some(1_791_878_000),
@@ -5222,6 +5342,7 @@ mod tests {
         assert!(
             !record_latest_quota(
                 DEFAULT_CODEX_ACCOUNT,
+                QuotaBucket::Codex,
                 100,
                 Some(1_794_272_826),
                 Some(1_791_679_628),
@@ -5241,20 +5362,64 @@ mod tests {
         let agent = "pulled-quota-account-switch";
         replace_account_quota_shared(agent, Some((20, Some(1_790_812_800))), 1_000);
         replace_account_quota_shared(agent, Some((80, Some(1_790_294_400))), 2_000);
-        assert_eq!(current_quota_shared(agent, "g-any"), Some(80));
+        assert_eq!(
+            current_quota_for_bucket_shared(agent, "g-any", QuotaBucket::Cursor),
+            Some(80)
+        );
+        assert_eq!(
+            current_quota_for_bucket_shared(agent, "g-any", QuotaBucket::Claude),
+            None,
+            "Cursor 主动拉取的额度绝不能串到 Claude 桶"
+        );
 
         replace_account_quota_shared(agent, Some((70, None)), 3_000);
         assert_eq!(
-            current_quota_shared(agent, "g-any"),
+            current_quota_for_bucket_shared(agent, "g-any", QuotaBucket::Cursor),
             Some(70),
             "缺周期的结果同样生效"
         );
 
         replace_account_quota_shared(agent, None, 4_000);
         assert_eq!(
-            current_quota_shared(agent, "g-any"),
+            current_quota_for_bucket_shared(agent, "g-any", QuotaBucket::Cursor),
             None,
             "失效后不再显示旧值"
+        );
+    }
+
+    #[test]
+    fn quota_buckets_isolate_sources_for_the_same_agent() {
+        let agent = "quota-bucket-isolation-same-agent";
+        replace_account_quota_shared(agent, Some((85, Some(1_796_083_200))), 1_000);
+        record_quota_observation_for_bucket_shared(
+            agent,
+            QuotaBucket::Claude,
+            "g-any",
+            62,
+            Some(1_796_169_600),
+            Some(2_000),
+        );
+        assert_eq!(
+            current_quota_for_bucket_shared(agent, "g-any", QuotaBucket::Cursor),
+            Some(85)
+        );
+        assert_eq!(
+            current_quota_for_bucket_shared(agent, "g-any", QuotaBucket::Claude),
+            Some(62)
+        );
+        assert_eq!(
+            current_quota_for_bucket_shared(agent, "g-any", QuotaBucket::Codex),
+            None
+        );
+        replace_account_quota_shared(agent, None, 3_000);
+        assert_eq!(
+            current_quota_for_bucket_shared(agent, "g-any", QuotaBucket::Cursor),
+            None
+        );
+        assert_eq!(
+            current_quota_for_bucket_shared(agent, "g-any", QuotaBucket::Claude),
+            Some(62),
+            "清空 Cursor 桶不能影响同 agent 的 Claude 桶"
         );
     }
 

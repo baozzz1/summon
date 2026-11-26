@@ -45,16 +45,30 @@ impl TokenSource {
     }
 }
 
+/// 该 agent 是否显式声明了自己的 Cursor 额度凭据命令(`runtime.cursor_quota_token_command`)。
+/// 非 `cli: cursor` 的 agent(例如 `cli: claude` 经代理走 Cursor 模型)也能借此显式启用
+/// Cursor 个人月额度查询,同时保持对普通代理配置的 fail-closed。
+pub fn has_agent_token_command(agent: &Agent) -> bool {
+    agent
+        .runtime
+        .as_ref()
+        .and_then(|r| non_empty(r.cursor_quota_token_command.as_deref()))
+        .is_some()
+}
+
+/// 该 agent 本轮是否归属 Cursor 个人额度体系(`cli: cursor` 或显式配置了
+/// `runtime.cursor_quota_token_command`)。
+pub fn uses_cursor_quota(agent: &Agent) -> bool {
+    CliDriver::from_kind(agent.cli_kind()) == CliDriver::Cursor || has_agent_token_command(agent)
+}
+
 /// 这个 agent 的额度该拿哪份凭据查。证明不了凭据与 agent 实际登录的是同一个 Cursor 账号时
 /// 返回 None —— 拿错账号的额度比不显示更糟。
 ///
-/// 判据与 Codex 的默认账号判据同构:配了 `cli_cmd` 或 `env` 的 agent 可能换了账号
-/// (`HOME`、`XDG_CONFIG_HOME`、`AGENT_CLI_CREDENTIAL_STORE`、包装脚本都做得到),只有它自己的
+/// 判据与 Codex 的默认账号判据同构:配了 `cli_cmd` 或 `env` 的 agent(或非 `cli: cursor`
+/// 但经代理走 Cursor 模型的 agent)可能用了不同账号,只有它自己显式声明的
 /// `runtime.cursor_quota_token_command` 说了算。
 pub fn token_source(agent: &Agent, cfg: &CursorQuota) -> Option<TokenSource> {
-    if CliDriver::from_kind(agent.cli_kind()) != CliDriver::Cursor {
-        return None;
-    }
     let runtime = agent.runtime.as_ref();
     if let Some(command) = runtime.and_then(|r| non_empty(r.cursor_quota_token_command.as_deref()))
     {
@@ -62,6 +76,9 @@ pub fn token_source(agent: &Agent, cfg: &CursorQuota) -> Option<TokenSource> {
             agent: agent.name.clone(),
             command: command.to_string(),
         });
+    }
+    if CliDriver::from_kind(agent.cli_kind()) != CliDriver::Cursor {
+        return None;
     }
     let customized = runtime
         .is_some_and(|r| r.cli_cmd.is_some() || r.env.as_ref().is_some_and(|env| !env.is_empty()));
@@ -672,5 +689,49 @@ mod tests {
 
         let team_only = json!({"teamUsage": {"onDemand": {"used": 1, "limit": 10}}});
         assert_eq!(quota_from_usage_summary(&team_only), None);
+    }
+
+    #[test]
+    fn non_cursor_agent_can_opt_in_to_cursor_quota_via_agent_token_command() {
+        let cfg = CursorQuota::default();
+        let claude_proxy_without_cmd: Agent = serde_yaml::from_str(
+            "name: proxy-no-cmd
+runtime:
+  cli: claude
+  env:
+    ANTHROPIC_BASE_URL: http://127.0.0.1:18765
+",
+        )
+        .unwrap();
+        assert!(!uses_cursor_quota(&claude_proxy_without_cmd));
+        assert_eq!(token_source(&claude_proxy_without_cmd, &cfg), None);
+
+        let claude_proxy_with_cmd: Agent = serde_yaml::from_str(
+            "name: proxy-with-cmd
+runtime:
+  cli: claude
+  env:
+    ANTHROPIC_BASE_URL: http://127.0.0.1:18765
+  cursor_quota_token_command: security find-generic-password -s cursor-access-token -w
+",
+        )
+        .unwrap();
+        assert!(uses_cursor_quota(&claude_proxy_with_cmd));
+        assert_eq!(
+            token_source(&claude_proxy_with_cmd, &cfg),
+            Some(TokenSource::AgentCommand {
+                agent: "proxy-with-cmd".into(),
+                command: "security find-generic-password -s cursor-access-token -w".into(),
+            })
+        );
+
+        let disabled = CursorQuota {
+            enabled: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            source_for_turn(&claude_proxy_with_cmd, true, &disabled),
+            None
+        );
     }
 }
