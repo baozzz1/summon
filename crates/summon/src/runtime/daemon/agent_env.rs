@@ -1113,14 +1113,6 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// tmux 路径的飞书身份隔离材料:`(要 env -u 清掉的全部身份键, 要设回的本 agent 自己凭据)`。
-/// tmux pane 继承的是 tmux server 环境(无法在 Rust 里按前缀枚举),故按「所有已知 agent 的身份键名」
-/// 精确清——从 agents 目录(本 agent.dir 的父目录)整份 tolerant 加载收集每个 agent 的
-/// `app_id_env`/`app_secret_env` 名,再 `feishu_unset_keys` 去重 + 补规范名。registry 读不到则只清
-/// 规范名(降级,仍清掉 stray `FEISHU_APP_*`)。
-///
-/// why tolerant:这里收的是「要清掉的键名」,收得越全越安全。旧的 strict 语义下,任何一份
-/// agent.yaml 坏掉都会让 ① 整个失效——一个兄弟键都清不到,反而是更危险的降级。
 /// 收集 `agents_dir` 下所有在册 agent 配置中声明的飞书凭据键名（含非 `FEISHU_*` 自定义键名），
 /// 用于共享服务环境隔离与 `agent_env` 展开时拦截兄弟凭据换名引用。
 pub fn registered_feishu_identity_keys(
@@ -1142,6 +1134,14 @@ pub fn registered_feishu_identity_keys(
     keys
 }
 
+/// tmux 路径的飞书身份隔离材料:`(要 env -u 清掉的全部身份键, 要设回的本 agent 自己凭据)`。
+/// tmux pane 继承的是 tmux server 环境(无法在 Rust 里按前缀枚举),故按「所有已知 agent 的身份键名」
+/// 精确清——从 agents 目录(本 agent.dir 的父目录)整份 tolerant 加载收集每个 agent 的
+/// `app_id_env`/`app_secret_env` 名,再 `feishu_unset_keys` 去重 + 补规范名。registry 读不到则只清
+/// 规范名(降级,仍清掉 stray `FEISHU_APP_*`)。
+///
+/// why tolerant:这里收的是「要清掉的键名」,收得越全越安全。strict 加载时任何一份
+/// agent.yaml 坏掉都会让 ① 整个失效,一个兄弟键都清不到。
 pub fn agent_feishu_isolation_tmux(agent: &Agent) -> (Vec<String>, Vec<(String, String)>) {
     let inject = agent_identity_env(agent);
     let mut names: Vec<String> = Vec::new();
