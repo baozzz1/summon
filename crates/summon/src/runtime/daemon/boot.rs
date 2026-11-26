@@ -1579,7 +1579,8 @@ pub fn run() -> anyhow::Result<()> {
     );
     log(&summon_i18n::format!("redc1b3c72e"));
     // 仅清理 survive_daemon_restart: false 的 summon 兜底服务；默认 true 的服务与外部托管服务一律保留。
-    crate::runtime::services::stop_non_surviving_services();
+    // 只有全部临时服务确认退出后才允许落干净退出哨兵。
+    let services_clean = crate::runtime::services::stop_non_surviving_services();
     // 干净退出哨兵:走到这里 = 优雅停机(收到 SIGTERM/SIGINT 后正常收尾)。写下它,下次启动据其存在
     // 判定「上次是正常退」,不触发崩溃恢复扫描(优雅停机的中断通知已由 shutdown_interrupt_all 入队)。
     // SIGKILL/panic 跑不到这行 → 哨兵缺失 → 下次启动判为崩溃。
@@ -1602,8 +1603,12 @@ pub fn run() -> anyhow::Result<()> {
         mirror_fences: capture_mirror_stop_fences(&reg, &frozen_mirror_epochs),
         stopped_at_secs,
     };
-    if let Ok(clean_marker) = serde_json::to_vec(&clean_record) {
-        let _ = crate::runtime::fsio::atomic_write(&clean_shutdown_marker(), &clean_marker);
+    if services_clean {
+        if let Ok(clean_marker) = serde_json::to_vec(&clean_record) {
+            let _ = crate::runtime::fsio::atomic_write(&clean_shutdown_marker(), &clean_marker);
+        }
+    } else {
+        log("[services] skipping clean shutdown marker because non-surviving services did not converge cleanly");
     }
     crash_guard::clear_boot_record(daemon_pid);
     // sidecar 随本进程退出而 stdin-EOF 死随父,无需显式杀。

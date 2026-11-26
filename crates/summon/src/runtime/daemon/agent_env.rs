@@ -365,10 +365,17 @@ pub fn resolve_extra_env(agent: &Agent) -> Vec<(String, String)> {
     if !agent.required_services().is_empty() {
         let cfg_path = agent.effective_global_config_path();
         let global_env = crate::runtime::services::global_dotenv(cfg_path.as_deref());
-        // 共享服务 agent_env 的 `${VAR}` 展开禁止引用任何 runtime/飞书凭据键（防止把
-        // SUMMON_* 或其他 agent 的 FEISHU_* / 凭据键换名注入），且仅允许读取非保留键。
+        let registered_identity_keys = agent
+            .dir
+            .parent()
+            .map(registered_feishu_identity_keys)
+            .unwrap_or_default();
+        // 共享服务 agent_env 的 `${VAR}` 展开禁止引用任何 runtime/飞书凭据键（含兄弟 agent
+        // 自定义名称的 `app_id_env`/`app_secret_env`），防止凭据被换名注入。
         let service_lookup = |name: &str| -> Option<String> {
-            if summon_core::agent_identity::is_runtime_owned_env_key(name) {
+            if summon_core::agent_identity::is_runtime_owned_env_key(name)
+                || registered_identity_keys.contains(name)
+            {
                 return None;
             }
             envfile
@@ -1111,6 +1118,27 @@ fn shell_escape(s: &str) -> String {
 ///
 /// why tolerant:这里收的是「要清掉的键名」,收得越全越安全。旧的 strict 语义下,任何一份
 /// agent.yaml 坏掉都会让 ① 整个失效——一个兄弟键都清不到,反而是更危险的降级。
+/// 收集 `agents_dir` 下所有在册 agent 配置中声明的飞书凭据键名（含非 `FEISHU_*` 自定义键名），
+/// 用于共享服务环境隔离与 `agent_env` 展开时拦截兄弟凭据换名引用。
+pub fn registered_feishu_identity_keys(
+    agents_dir: &std::path::Path,
+) -> std::collections::HashSet<String> {
+    let mut keys = std::collections::HashSet::new();
+    if let Ok((reg, _warnings)) = summon_core::registry::Registry::load_tolerant(agents_dir) {
+        for a in &reg.agents {
+            if let Some(f) = a.feishu.as_ref() {
+                if let Some(n) = f.app_id_env.as_deref() {
+                    keys.insert(n.to_string());
+                }
+                if let Some(n) = f.app_secret_env.as_deref() {
+                    keys.insert(n.to_string());
+                }
+            }
+        }
+    }
+    keys
+}
+
 pub fn agent_feishu_isolation_tmux(agent: &Agent) -> (Vec<String>, Vec<(String, String)>) {
     let inject = agent_identity_env(agent);
     let mut names: Vec<String> = Vec::new();
@@ -1993,6 +2021,68 @@ runtime:
             map.get("PROXY_TOKEN").map(String::as_str),
             Some("synth-safe-token-11")
         );
+    }
+
+    #[test]
+    fn required_service_agent_env_blocks_sibling_custom_identity_key_refs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let summon_root = tmp.path();
+        std::fs::write(
+            summon_root.join(".env"),
+            "CUSTOM_SIBLING_BOT_SECRET=synth-custom-secret-66
+SAFE_TOKEN=synth-ok-66
+",
+        )
+        .unwrap();
+        std::fs::write(
+            summon_root.join("config.yaml"),
+            r#"services:
+  proxy:
+    healthcheck:
+      tcp: 127.0.0.1:18999
+    agent_env:
+      SMUGGLED_CUSTOM: "${CUSTOM_SIBLING_BOT_SECRET}"
+      SAFE_OUT: "${SAFE_TOKEN}"
+"#,
+        )
+        .unwrap();
+        let sibling_dir = summon_root.join("agents").join("sibling");
+        std::fs::create_dir_all(&sibling_dir).unwrap();
+        std::fs::write(
+            sibling_dir.join("agent.yaml"),
+            r#"name: sibling
+runtime:
+  cli: claude
+feishu:
+  app_id_env: CUSTOM_SIBLING_BOT_ID
+  app_secret_env: CUSTOM_SIBLING_BOT_SECRET
+"#,
+        )
+        .unwrap();
+        let agent_dir = summon_root.join("agents").join("caller");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            r#"name: caller
+runtime:
+  cli: claude
+  requires:
+    - proxy
+"#,
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(summon_root.join("config.yaml"));
+
+        std::env::set_var("CUSTOM_SIBLING_BOT_SECRET", "synth-custom-secret-66");
+        let merged = resolve_extra_env(&agent);
+        std::env::remove_var("CUSTOM_SIBLING_BOT_SECRET");
+
+        let map: std::collections::HashMap<_, _> = merged.into_iter().collect();
+        assert!(
+            !map.contains_key("SMUGGLED_CUSTOM"),
+            "sibling custom identity key must not be smuggled: {map:?}"
+        );
+        assert_eq!(map.get("SAFE_OUT").map(String::as_str), Some("synth-ok-66"));
     }
 
     #[test]

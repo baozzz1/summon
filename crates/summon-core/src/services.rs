@@ -129,6 +129,10 @@ pub struct ServiceSpec {
     /// 遵循 daemon 重启不影响外部会话的红线：默认脱离 daemon 进程组（setsid）。
     #[serde(default = "default_true")]
     pub survive_daemon_restart: bool,
+    /// `command` 是否为一次性交接启动命令（如 `launchctl kickstart` / `systemctl --user start`，默认 false）。
+    /// 为 true 时 summon 不写自管租约，必须同时确认命令以 0 退出且探活转绿才视为就绪，并按外部托管处理。
+    #[serde(default)]
+    pub oneshot: bool,
 }
 
 impl Default for ServiceSpec {
@@ -140,6 +144,7 @@ impl Default for ServiceSpec {
             env: HashMap::new(),
             agent_env: HashMap::new(),
             survive_daemon_restart: true,
+            oneshot: false,
         }
     }
 }
@@ -348,19 +353,42 @@ mod tests {
     fn strict_config_load_never_leaks_scalar_values_on_parse_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.yaml");
-        std::fs::write(
-            &path,
-            "services:\n  synth:\n    healthcheck:\n      tcp: 127.0.0.1:9999\n    survive_daemon_restart: synth-config-secret-4242\n",
-        )
-        .unwrap();
-        let err = crate::config::Config::load_strict_at(&path).unwrap_err();
+        let bad_yaml = "services:\n  synth:\n    healthcheck:\n      tcp: 127.0.0.1:9999\n    survive_daemon_restart: synth-config-secret-4242\n";
+        std::fs::write(&path, bad_yaml).unwrap();
+
+        let err_en = crate::i18n::with_language(crate::i18n::Language::English, || {
+            crate::config::Config::load_strict_at(&path).unwrap_err()
+        });
         assert!(
-            !err.contains("synth-config-secret-4242"),
-            "config parse error must not leak raw scalar values: {err}"
+            !err_en.contains("synth-config-secret-4242"),
+            "strict load (en) must not leak scalar values: {err_en}"
         );
         assert!(
-            err.contains("line"),
-            "error should still include location: {err}"
+            err_en.contains("line 5"),
+            "en error should include line: {err_en}"
         );
+
+        let err_zh = crate::i18n::with_language(crate::i18n::Language::Chinese, || {
+            crate::config::Config::load_strict_at(&path).unwrap_err()
+        });
+        assert!(
+            !err_zh.contains("synth-config-secret-4242"),
+            "strict load (zh) must not leak scalar values: {err_zh}"
+        );
+        assert!(
+            err_zh.contains("第 5 行"),
+            "zh error should include localized line: {err_zh}"
+        );
+
+        let (_, fallback_err_en) =
+            crate::i18n::with_language(crate::i18n::Language::English, || {
+                crate::config::parse_or_fallback(bad_yaml, crate::config::Config::default())
+            });
+        let fallback_err_en = fallback_err_en.expect("parse_or_fallback must report error");
+        assert!(
+            !fallback_err_en.contains("synth-config-secret-4242"),
+            "tolerant load must not leak scalar values: {fallback_err_en}"
+        );
+        assert!(fallback_err_en.contains("line 5"), "{fallback_err_en}");
     }
 }

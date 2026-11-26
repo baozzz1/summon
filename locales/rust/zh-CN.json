@@ -7056,5 +7056,17 @@
   "services.cli.owner_summon": "summon 托管 pid={pid}",
   "services.cli.owner_summon_ephemeral": "summon 托管 pid={pid}（随停机退出）",
   "services.cli.owner_stopped": "未运行",
-  "services.cli.check_failed_summary": "{count} 个前置服务不可用或配置无效"
+  "services.cli.check_failed_summary": "{count} 个前置服务不可用或配置无效",
+  "services.config_io_error": "I/O 错误（{kind}）",
+  "services.config_yaml_location": "YAML 格式或字段无效（第 {line} 行，第 {column} 列）",
+  "services.config_yaml_invalid": "YAML 语法或字段结构无效",
+  "services.lease_reason_unreadable": "租约文件不可读或已损坏",
+  "services.lease_reason_missing_fingerprint": "租约缺少进程启动指纹",
+  "services.lease_reason_fingerprint_unreadable": "无法读取存活进程的启动指纹",
+  "services.lease_reason_service_mismatch": "租约服务名 `{actual}` 与 `{expected}` 不一致",
+  "services.lease_reason_pgid_mismatch": "租约进程组 {pgid} 与进程号 {pid} 不一致",
+  "services.lease_reason_pid_out_of_range": "进程号超出平台范围",
+  "services.lease_reason_os_pgid_mismatch": "系统进程组 {actual} 与进程号 {pid} 不一致",
+  "services.lease_reason_os_pgid_error": "无法查询系统进程组（{err}）",
+  "services.cleanup_incomplete": "服务 `{service}`（pid={pid}）启动中止后未能确认整组退出（{reason}），已拒绝按干净回滚处理"
 }

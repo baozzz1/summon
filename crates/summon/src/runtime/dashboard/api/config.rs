@@ -1606,6 +1606,24 @@ mod tests {
     }
 
     #[test]
+    fn raw_get_refuses_unparseable_escaped_services_without_leaking_secret() {
+        let kit = Kit::new();
+        std::fs::write(
+            kit.dir.path().join("config.yaml"),
+            "{\"serv\\x69ces\": {\"proxy\": {\"env\": {\"TOKEN\": \"synth-raw-get-secret-88\"}}}, broken: [}\n",
+        )
+        .unwrap();
+        let err = kit
+            .call(&kit.owner(), raw_get, json!({"file": "config"}))
+            .unwrap_err();
+        let rendered = format!("{err:?}");
+        assert!(
+            !rendered.contains("synth-raw-get-secret-88"),
+            "raw_get error must not leak synthetic secret: {rendered}"
+        );
+    }
+
+    #[test]
     fn raw_get_hides_literal_env() {
         let kit = Kit::new();
         kit.add_agent(

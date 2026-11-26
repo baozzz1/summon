@@ -277,6 +277,7 @@ fn chat_session<'a>(
 ) -> Session<'a> {
     Session::with_name(agent, tmux_name.to_string(), poll, debounce)
         .with_run_env(chat_runtime_env(agent, chat_id, conversation_tag))
+        .with_dynamic_agent_env()
         .with_mirror_watermark(mirror_watermark.clone())
         .with_chat_id(chat_id)
         .with_menu_ledger(menu_ledger.clone())
@@ -3112,6 +3113,10 @@ pub(super) fn chat_thread_run(
                             summon_i18n::format!("rdaecaf5cdb")
                         );
                     }
+                    // 恢复会话同样会冷启/重连 CLI：必须在拆除现有会话之前先完成前置依赖服务准入，
+                    // 依赖不健康时 fail-closed 保留原会话不被误拆。
+                    crate::runtime::services::ensure_agent_services(&agent)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
                     interrupt_inflight_turn(&inflight, &agent.name, &chat_type, &chat_id);
                     drop(subagent_watcher.take());
                     drop(subagent_api_errors.take());
@@ -6151,6 +6156,7 @@ pub(super) fn handle_task(
         subagent_state,
         cot_followers,
         settings,
+        true,
     );
     message_protocol.record(
         agent,
@@ -6715,6 +6721,8 @@ pub(super) fn stream_turn(
     // 本轮生效的分级开关快照(四层已合并)。**按值传** —— 快照边界是一轮,
     // 轮中途的配置热重载/`/set` 不得让同一轮前后半段看到不同的值。
     settings: ResolvedSettings,
+    // `handle_task` 入口已完成前置依赖服务准入时传 `true`，避免同一轮对健康探针重复执行两次。
+    services_preflight_done: bool,
 ) -> TurnResult {
     let tag = chat_tag(chat_type, chat_id);
     // 接管只有 Transcript 形态(锚点认的是转录里的 marker)。无头路有自己的 pending 与续跑语义,
@@ -6729,8 +6737,8 @@ pub(super) fn stream_turn(
         }
     }
     // 前置依赖服务 fail-closed 准入（探活 + 按需拉起兜底）。接管轮（reattach=true）的
-    // Transcript 会话已在跑，只观测转录，不阻塞。
-    if !reattach {
+    // Transcript 会话已在跑，只观测转录，不阻塞；经 `handle_task` 入口已准入的普通轮不重复探测。
+    if !reattach && !services_preflight_done {
         if let Err(error) = crate::runtime::services::ensure_agent_services(agent) {
             log(&summon_i18n::format!(
                 "services.preflight_blocked_log",
@@ -23316,16 +23324,20 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
     #[test]
     fn handle_task_blocks_before_session_start_for_normal_and_goal_turns() {
         let dir = tempfile::tempdir().unwrap();
+        let probe_log = dir.path().join("probe.count");
         let cfg_path = dir.path().join("config.yaml");
         std::fs::write(
             &cfg_path,
-            r#"services:
+            format!(
+                r#"services:
   down-dep:
     healthcheck:
-      command: ["/bin/sh", "-c", "exit 1"]
+      command: ["/bin/sh", "-c", "echo 1 >> {}; exit 1"]
       timeout_secs: 1
       ready_timeout_secs: 2
 "#,
+                probe_log.display()
+            ),
         )
         .unwrap();
         let agent_dir = dir.path().join("agents").join("synth-claude");
@@ -23457,6 +23469,36 @@ runtime:
             !observed_live_goal,
             "handle_task must fail before sess.ensure_started() on /goal slash turns"
         );
+
+        // 每次不健康入口在无锁初检+持锁复检共触发 2 次，两次入口合计 4 次（未重复进入 stream_turn 准入）。
+        let count_lines = std::fs::read_to_string(&probe_log)
+            .expect("probe must have executed")
+            .lines()
+            .count();
+        assert_eq!(
+            count_lines, 4,
+            "normal + /goal turns should each run preflight once (initial + under-lock recheck), got {count_lines}"
+        );
+
+        // 核对 `/resume` 控制分支：服务准入必须排在拆除现有会话和恢复会话之前。
+        let prod = production_source();
+        let resume_idx = prod
+            .find("ctrl: Control::Resume,")
+            .expect("Control::Resume branch");
+        let resume_body = &prod[resume_idx..];
+        let preflight_pos = resume_body
+            .find("services::ensure_agent_services(&agent)")
+            .expect("/resume must run service preflight");
+        let teardown_pos = resume_body
+            .find("do_teardown_preserving_previous(")
+            .expect("/resume teardown");
+        let start_resumed_pos = resume_body
+            .find("start_resumed_session(")
+            .expect("/resume start_resumed_session");
+        assert!(
+            preflight_pos < teardown_pos && preflight_pos < start_resumed_pos,
+            "/resume service preflight must happen before teardown and session resume"
+        );
     }
 
     #[test]
@@ -23520,6 +23562,7 @@ runtime:
             None,
             None,
             settings,
+            false,
         );
 
         assert!(

@@ -618,10 +618,22 @@ pub const TMUX_CANDIDATE_DIRS: [&str; 6] = [
     "~/.local/bin",                   // 用户自装
 ];
 
+/// 脱敏格式化 `serde_yaml` 解析错误：仅保留错误类别与行列号，绝不透传配置标量原文。
+pub fn format_yaml_parse_error(e: &serde_yaml::Error) -> String {
+    match e.location() {
+        Some(loc) => summon_i18n::format!(
+            "services.config_yaml_location",
+            line = loc.line(),
+            column = loc.column()
+        ),
+        None => summon_i18n::text!("services.config_yaml_invalid").to_string(),
+    }
+}
+
 pub fn parse_or_fallback(yaml: &str, fallback: Config) -> (Config, Option<String>) {
     match serde_yaml::from_str::<Config>(yaml) {
         Ok(cfg) => (cfg, None),
-        Err(e) => (fallback, Some(e.to_string())),
+        Err(e) => (fallback, Some(format_yaml_parse_error(&e))),
     }
 }
 
@@ -663,22 +675,21 @@ impl Config {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(e) => {
+                let io_err = summon_i18n::format!(
+                    "services.config_io_error",
+                    kind = format!("{:?}", e.kind())
+                );
                 return Err(summon_i18n::format!(
                     "services.config_load_failed",
-                    error = format!("I/O error ({:?})", e.kind())
+                    error = io_err
                 ));
             }
         };
         serde_yaml::from_str(&text).map_err(|e| {
-            let detail = match e.location() {
-                Some(loc) => format!(
-                    "invalid YAML at line {}, column {}",
-                    loc.line(),
-                    loc.column()
-                ),
-                None => "invalid YAML syntax or schema".to_string(),
-            };
-            summon_i18n::format!("services.config_load_failed", error = detail)
+            summon_i18n::format!(
+                "services.config_load_failed",
+                error = format_yaml_parse_error(&e)
+            )
         })
     }
 

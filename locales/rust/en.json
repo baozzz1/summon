@@ -7056,5 +7056,17 @@
   "services.cli.owner_summon": "summon pid={pid}",
   "services.cli.owner_summon_ephemeral": "summon pid={pid} (ephemeral)",
   "services.cli.owner_stopped": "stopped",
-  "services.cli.check_failed_summary": "{count} service(s) unhealthy or invalid"
+  "services.cli.check_failed_summary": "{count} service(s) unhealthy or invalid",
+  "services.config_io_error": "I/O error ({kind})",
+  "services.config_yaml_location": "invalid YAML at line {line}, column {column}",
+  "services.config_yaml_invalid": "invalid YAML syntax or schema",
+  "services.lease_reason_unreadable": "lease file is unreadable or corrupted",
+  "services.lease_reason_missing_fingerprint": "missing process fingerprint",
+  "services.lease_reason_fingerprint_unreadable": "unable to read process start fingerprint",
+  "services.lease_reason_service_mismatch": "lease service `{actual}` does not match `{expected}`",
+  "services.lease_reason_pgid_mismatch": "lease pgid {pgid} does not match pid {pid}",
+  "services.lease_reason_pid_out_of_range": "pid out of platform range",
+  "services.lease_reason_os_pgid_mismatch": "OS process group {actual} does not match pid {pid}",
+  "services.lease_reason_os_pgid_error": "unable to query OS process group ({err})",
+  "services.cleanup_incomplete": "failed to terminate spawned process group for service `{service}` (pid={pid}) after abort ({reason}); refusing to claim clean rollback"
 }

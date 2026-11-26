@@ -266,8 +266,8 @@ fn fallback_config_services(text: &str) -> Result<(), RedactError> {
                 Err(refuse())
             }
         }
-        Err(_) if mentions_key(text, "services") => Err(refuse()),
-        Err(_) => Ok(()),
+        // 定位器与 YAML 解析器都无法解析时，无法证明不存在敏感 `services` 段，一律 fail-closed。
+        Err(_) => Err(refuse()),
     }
 }
 
@@ -376,6 +376,17 @@ mod tests {
         let restored =
             restore(RawKind::Config, &redacted, &hidden).expect("BOM restore must succeed");
         assert_eq!(restored, raw);
+    }
+
+    #[test]
+    fn escaped_services_key_with_syntax_error_fails_closed() {
+        let broken = "{\"serv\\x69ces\": {\"proxy\": {\"env\": {\"TOKEN\": \"synth-escaped-secret-77\"}}}, broken: [}\n";
+        let err = redact(RawKind::Config, broken).unwrap_err();
+        assert!(matches!(err, RedactError::Unsupported(_)), "{err:?}");
+        assert!(
+            !format!("{err:?}").contains("synth-escaped-secret-77"),
+            "error must not leak secret: {err:?}"
+        );
     }
 
     #[test]
