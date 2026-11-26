@@ -289,13 +289,14 @@ pub struct Runtime {
     /// 批准框,summon 对所有审批请求一律自动拒绝,所以调松它只会让操作被拒,不会让人来把关。
     #[serde(default)]
     pub codex_approval_policy: Option<String>,
-    /// cursor 专用:取本 agent 额度凭据的命令(经 `sh -c` 执行,stdout 第一行即 access token)。
-    /// 命令在本 agent 的环境里跑:系统基础环境加上本 agent 的 `runtime.env`,与它的 cursor
-    /// 子进程看到的一致,所以命令里引用的 `$XDG_CONFIG_HOME` 之类就是 agent 实际用的那个。
+    /// 取本 agent Cursor 个人额度凭据的命令(经 `sh -c` 执行,stdout 第一行即 access token)。
+    /// 命令在本 agent 的环境里跑:系统基础环境加上本 agent 的 `runtime.env`,与它的子进程看到的一致,
+    /// 所以命令里引用的 `$XDG_CONFIG_HOME` 之类就是 agent 实际用的那个。
     ///
-    /// 配了 `cli_cmd` 或 `env` 的 agent 可能登录的是另一个 Cursor 账号,summon 证明不了它和本机
-    /// 默认登录态是同一账号,就不替它查额度 —— 拿错账号的额度比不显示更糟。这类 agent 要显示
-    /// 额度,在这里给出它自己的凭据来源;配了就以它为准,全局 `cursor.quota.token_command` 不再参与。
+    /// 配了 `cli_cmd` 或 `env` 的 cursor agent,或通过代理接入 Cursor 模型的非 cursor agent
+    /// (例如 `cli: claude` + `ANTHROPIC_BASE_URL`),summon 证明不了它和本机默认登录态是同一账号,
+    /// 就不自动猜;在这里显式给出凭据来源后,按 Cursor 计费周期(`quota N%`)查询并展示,
+    /// 全局 `cursor.quota.token_command` 不再参与。
     #[serde(default)]
     pub cursor_quota_token_command: Option<String>,
     /// 按 chat_id 绑定的工作目录(per-chat 持久映射,无需每次 /cd)。

@@ -1497,11 +1497,13 @@ fn quota_badge() -> summon_core::feishu::TurnBadge {
         ctx: summon_core::context_budget::ContextBudget::from_reported_pct(12, Some(1_000_000)),
         quota_left_pct: Some(79),
         quota_resets_at: None,
+        quota_window: None,
         quota_5h_left_pct: Some(64),
         quota_5h_resets_at: None,
         // 本组测试验证的是「开着时的渲染形态」;默认关的行为由 core 的 badge 测试单独钉。
         show_quota: true,
         merge_default_codex_quota: false,
+        use_cursor_quota: false,
         hide_effort: false,
         hide_cli: false,
         hide_model: false,

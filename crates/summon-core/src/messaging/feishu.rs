@@ -1391,6 +1391,21 @@ fn local_md_hhmm(ts: i64) -> Option<String> {
 /// 返回 `None`,上下文行退回纯时间戳、逐字节等同没有角标的老路径。渲染出的文本是**未转义原文**,
 /// 由卡片层(`card_turn_summary` 的 `escape_lark_md`)统一转义,与 `card_turn_summary_pieces`
 /// 处置 context 的做法一致。
+/// 长窗额度的计费窗口语义:决定飞书角标与会话面板把长窗标成 `7d` 还是 `quota`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LongQuotaKind {
+    /// 7 天周窗口(Claude 原生 statusLine、Codex rate-limit):角标 `7d N% ↻M/D HH:MM`,面板「周 N%」。
+    Weekly,
+    /// 计费周期或其它非周窗口(Cursor 月度额度、Trae 等):角标 `quota N%`,面板「额度: N% 剩余」。
+    BillingCycle,
+}
+
+impl LongQuotaKind {
+    pub fn is_weekly(self) -> bool {
+        matches!(self, Self::Weekly)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TurnBadge {
     /// CLI 类型(`agent.cli`,稳定)。空串 = 不显示这一项。
@@ -1408,6 +1423,10 @@ pub struct TurnBadge {
     /// 长窗的重置时刻(Unix 秒)。只在标签是 `7d` 时渲染,写成本机时区的 `M/D HH:MM` 接在百分比
     /// 后面;取不到就不显示。
     pub quota_resets_at: Option<i64>,
+    /// 长窗额度的计费窗口语义。显式给出时优先于按 `cli` 推导的默认口径(如 `cli: claude`
+    /// 经代理走 Cursor 模型并显式配了 Cursor 额度来源时,应标 `quota` 而非 `7d`);`None` 回退
+    /// [`crate::driver::CliDriver::has_five_hour_and_weekly_quota`]。
+    pub quota_window: Option<LongQuotaKind>,
     /// 5 小时窗口额度**剩余**百分比 0..=100,口径同 `quota_left_pct`。只有
     /// [`crate::driver::CliDriver::has_five_hour_and_weekly_quota`]
     /// 的 CLI 有这个窗口,其余恒为 None。
@@ -1422,6 +1441,9 @@ pub struct TurnBadge {
     /// 该 Codex agent 已证明与 daemon rollout watcher 使用同一默认账号；仅供收尾刷新选择
     /// 正确的内存分桶，不参与卡片渲染。
     pub merge_default_codex_quota: bool,
+    /// 该 agent 的额度来源为 Cursor 个人额度(`cli: cursor` 或显式配了
+    /// `runtime.cursor_quota_token_command`)；仅供收尾刷新选择 Cursor 分桶，不参与卡片渲染。
+    pub use_cursor_quota: bool,
     /// 思考档位(如 `xhigh`)。claude 取 statusLine 的 `effort.level`(实时),其余取配置里会被下发的值
     /// (本会话覆盖 > agent.yaml);没配、或 CLI 没有独立 effort 轴(cursor 烤进模型名)→ None。
     pub effort: Option<String>,
@@ -1504,19 +1526,25 @@ impl TurnBadge {
     /// 两个窗口的显示范围见 [`crate::driver::CliDriver::has_five_hour_and_weekly_quota`];
     /// 其余 CLI 只显示长窗,标签用 `quota N%`、不带重置时刻。缺哪个窗口就省哪一半。
     fn render_quota(&self) -> Option<String> {
-        let weekly =
-            crate::driver::CliDriver::from_kind(self.cli.trim()).has_five_hour_and_weekly_quota();
+        let weekly = self.quota_window.map_or_else(
+            || {
+                crate::driver::CliDriver::from_kind(self.cli.trim())
+                    .has_five_hour_and_weekly_quota()
+            },
+            LongQuotaKind::is_weekly,
+        );
         let long_window = if weekly { "7d" } else { "quota" };
         let long_reset = self
             .quota_resets_at
             .filter(|_| weekly)
             .and_then(local_md_hhmm);
         let parts: Vec<String> = [
-            self.quota_5h_left_pct
-                .map(|pct| match self.quota_5h_resets_at.and_then(local_hhmm) {
+            self.quota_5h_left_pct.filter(|_| weekly).map(|pct| {
+                match self.quota_5h_resets_at.and_then(local_hhmm) {
                     Some(at) => format!("5h {pct}% ↻{at}"),
                     None => format!("5h {pct}%"),
-                }),
+                }
+            }),
             self.quota_left_pct.map(|pct| match &long_reset {
                 Some(at) => format!("{long_window} {pct}% ↻{at}"),
                 None => format!("{long_window} {pct}%"),
@@ -2605,10 +2633,11 @@ pub struct SessionPanelControls {
     pub badge_model: bool,
     /// 同上,上下文用量(`badge.ctx`)。
     pub badge_ctx: bool,
-    /// 当前 agent 账号最后一次可靠的周额度剩余百分比；采集与 `quota_badge` 展示开关解耦。
+    /// 当前 agent 账号最后一次可靠的长窗额度剩余百分比；采集与 `quota_badge` 展示开关解耦。
     pub quota_left_pct: Option<u8>,
-    /// 同上,5 小时窗口;只有 [`crate::driver::CliDriver::has_five_hour_and_weekly_quota`]
-    /// 的 CLI 显示。
+    /// 长窗额度的计费窗口语义;`None` 回退 [`crate::driver::CliDriver::has_five_hour_and_weekly_quota`]。
+    pub quota_window: Option<LongQuotaKind>,
+    /// 同上,5 小时窗口;只有周窗口径的额度来源显示。
     pub quota_5h_left_pct: Option<u8>,
     /// 当前会话最后一次可靠的上下文占用快照。各维度可缺，渲染侧会明确标出不可用项。
     pub context: crate::context_budget::ContextBudget,
@@ -2638,6 +2667,7 @@ impl From<bool> for SessionPanelControls {
             badge_model: true,
             badge_ctx: true,
             quota_left_pct: None,
+            quota_window: None,
             quota_5h_left_pct: None,
             context: Default::default(),
             cot: Default::default(),
@@ -3655,22 +3685,25 @@ fn session_panel_elements_with(
     // 群卡默认不露;owner 2026-08-10)。按钮标签即当前态,点击发相反值;开态高亮(primary),
     // 与模型/effort 按钮的高亮语义一致。
     let quota_content = if controls.quota_badge {
-        let windows: Vec<String> =
-            if crate::driver::CliDriver::from_kind(cli).has_five_hour_and_weekly_quota() {
-                [
-                    controls
-                        .quota_5h_left_pct
-                        .map(|pct| format!("5h **{}%**", pct.min(100))),
-                    controls
-                        .quota_left_pct
-                        .map(|pct| summon_i18n::format!("rad699b4e14", pct.min(100))),
-                ]
-                .into_iter()
-                .flatten()
-                .collect()
-            } else {
-                Vec::new()
-            };
+        let weekly = controls.quota_window.map_or_else(
+            || crate::driver::CliDriver::from_kind(cli).has_five_hour_and_weekly_quota(),
+            LongQuotaKind::is_weekly,
+        );
+        let windows: Vec<String> = if weekly {
+            [
+                controls
+                    .quota_5h_left_pct
+                    .map(|pct| format!("5h **{}%**", pct.min(100))),
+                controls
+                    .quota_left_pct
+                    .map(|pct| summon_i18n::format!("rad699b4e14", pct.min(100))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect()
+        } else {
+            Vec::new()
+        };
         match (windows.is_empty(), controls.quota_left_pct) {
             (false, _) => summon_i18n::format!("r6fa079d022", windows.join(" · ")),
             (true, Some(pct)) => summon_i18n::format!("r0890c54b6c", pct.min(100)),
@@ -11622,10 +11655,12 @@ mod tests {
             ctx: ContextBudget::from_reported_pct(35, Some(1_000_000)),
             quota_left_pct: Some(87),
             quota_resets_at: Some(1_786_356_600),
+            quota_window: None,
             quota_5h_left_pct: Some(92),
             quota_5h_resets_at: Some(1_786_097_400),
             show_quota: true,
             merge_default_codex_quota: false,
+            use_cursor_quota: false,
             hide_effort: false,
             hide_cli: false,
             hide_model: false,
@@ -12103,6 +12138,7 @@ mod tests {
                 badge_model: true,
                 badge_ctx: true,
                 quota_left_pct: None,
+                quota_window: None,
                 quota_5h_left_pct: None,
                 context: Default::default(),
                 cot: Default::default(),
@@ -12163,6 +12199,7 @@ mod tests {
                     badge_model: true,
                     badge_ctx: true,
                     quota_left_pct: None,
+                    quota_window: None,
                     quota_5h_left_pct: None,
                     context: Default::default(),
                     cot: Default::default(),
@@ -12262,6 +12299,7 @@ mod tests {
                 badge_model: true,
                 badge_ctx: true,
                 quota_left_pct: None,
+                quota_window: None,
                 quota_5h_left_pct: None,
                 context: Default::default(),
                 cot: Default::default(),
@@ -14673,5 +14711,67 @@ mod claude_permission_card_tests {
         });
         assert!(card.contains("multi_select_static"));
         assert!(!card.contains("<at"), "没有提问人就不 @");
+    }
+
+    #[test]
+    fn billing_cycle_quota_window_renders_quota_without_7d_or_5h_even_under_claude_cli() {
+        let badge = TurnBadge {
+            cli: "claude".into(),
+            model: Some("gemini-4-neon-high".into()),
+            quota_left_pct: Some(85),
+            quota_resets_at: Some(1_796_083_200),
+            quota_window: Some(LongQuotaKind::BillingCycle),
+            quota_5h_left_pct: Some(40),
+            quota_5h_resets_at: Some(1_796_000_000),
+            show_quota: true,
+            ..Default::default()
+        };
+        let rendered = badge.render().expect("应渲染角标");
+        assert!(rendered.contains("quota 85%"), "{rendered}");
+        assert!(
+            !rendered.contains("7d"),
+            "月度计费周期不能标成 7d: {rendered}"
+        );
+        assert!(
+            !rendered.contains("5h"),
+            "非 5h+周额度来源不能显 5h: {rendered}"
+        );
+        assert!(
+            !rendered.contains("↻"),
+            "月度计费周期角标不带重置时刻: {rendered}"
+        );
+
+        let panel = card_session_panel(
+            "tag-billing-cycle",
+            "claude",
+            "tmux",
+            &crate::model_effort::ResolvedModel {
+                value: Some("gemini-4-neon-high".into()),
+                source: crate::model_effort::ModelSource::SessionLive,
+            },
+            &crate::model_effort::ResolvedEffort {
+                value: Some("high".into()),
+                source: crate::model_effort::EffortSource::ChatOverride,
+            },
+            &[],
+            &[],
+            &crate::subagent::SubagentDisplay::default(),
+            SessionPanelControls {
+                quota_badge: true,
+                quota_left_pct: Some(85),
+                quota_window: Some(LongQuotaKind::BillingCycle),
+                quota_5h_left_pct: Some(40),
+                ..Default::default()
+            },
+        );
+        assert!(panel.contains("额度:**85% 剩余**"), "{panel}");
+        assert!(
+            !panel.contains("周 85%"),
+            "月度计费周期面板不能标成周额度: {panel}"
+        );
+        assert!(
+            !panel.contains("5h 40%"),
+            "月度计费周期面板不能混入 5h: {panel}"
+        );
     }
 }

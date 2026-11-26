@@ -2932,16 +2932,18 @@ pub(super) fn record_claude_snapshot_quota(
     snapshot: &crate::setup::claude_quota::ClaudeQuotaSnapshot,
 ) {
     if let Some(window) = &snapshot.five_hour {
-        crate::capture::rpc_pool::record_five_hour_quota_observation_shared(
+        crate::capture::rpc_pool::record_five_hour_quota_observation_for_bucket_shared(
             agent_name,
+            crate::capture::rpc_pool::QuotaBucket::Claude,
             quota_left_from_used(window.used_percentage),
             Some(window.resets_at),
             snapshot.observed_at,
         );
     }
     if let Some(window) = &snapshot.seven_day {
-        crate::capture::rpc_pool::record_quota_observation_shared(
+        crate::capture::rpc_pool::record_quota_observation_for_bucket_shared(
             agent_name,
+            crate::capture::rpc_pool::QuotaBucket::Claude,
             tag,
             quota_left_from_used(window.used_percentage),
             Some(window.resets_at),
@@ -2953,28 +2955,49 @@ pub(super) fn record_claude_snapshot_quota(
 /// agent 账号的 5 小时窗口剩余额度。claude 的快照由周额度那条读取路径一并记入缓存,
 /// 这里只读缓存;默认 Codex 账号的判据同 [`current_session_quota_at`]。
 pub(super) fn five_hour_quota_for(agent: &Agent) -> Option<(u8, Option<i64>)> {
-    five_hour_quota_shared(
-        summon_core::driver::CliDriver::from_kind(agent.cli_kind()),
+    let bucket = crate::capture::rpc_pool::QuotaBucket::for_agent(agent)?;
+    five_hour_quota_for_bucket_shared(
+        agent.cli_kind(),
+        bucket,
         crate::capture::rpc_pool::agent_uses_default_codex_account(agent),
         &agent.name,
     )
 }
 
-/// 5 小时额度的唯一读取口:面板、轮初角标与收尾角标都从这里取。返回 (剩余百分比, 重置时刻)。`default_codex_account` 只在
-/// 调用方已证明该 Codex agent 用默认账号时为 true(rollout 回放的观测只记在默认账号名下)。
+/// 5 小时额度的唯一读取口:面板、轮初角标与收尾角标都从这里取。返回 (剩余百分比, 重置时刻)。
+/// `default_codex_account` 只在调用方已证明该 Codex agent 用默认账号时为 true(rollout 回放的
+/// 观测只记在默认账号名下)。
+pub(super) fn five_hour_quota_for_bucket_shared(
+    cli: &str,
+    bucket: crate::capture::rpc_pool::QuotaBucket,
+    default_codex_account: bool,
+    agent_name: &str,
+) -> Option<(u8, Option<i64>)> {
+    if !bucket.has_five_hour(cli) {
+        return None;
+    }
+    if bucket == crate::capture::rpc_pool::QuotaBucket::Codex && default_codex_account {
+        crate::capture::rpc_pool::current_default_codex_five_hour_quota_shared(agent_name)
+    } else {
+        crate::capture::rpc_pool::current_five_hour_quota_for_bucket_shared(agent_name, bucket)
+    }
+}
+
+#[cfg(test)]
 pub(super) fn five_hour_quota_shared(
     driver: summon_core::driver::CliDriver,
     default_codex_account: bool,
     agent_name: &str,
 ) -> Option<(u8, Option<i64>)> {
-    if !driver.has_five_hour_and_weekly_quota() {
-        return None;
-    }
-    if driver == summon_core::driver::CliDriver::Codex && default_codex_account {
-        crate::capture::rpc_pool::current_default_codex_five_hour_quota_shared(agent_name)
-    } else {
-        crate::capture::rpc_pool::current_five_hour_quota_shared(agent_name)
-    }
+    let cli = match driver {
+        summon_core::driver::CliDriver::Claude => "claude",
+        summon_core::driver::CliDriver::Codex => "codex",
+        summon_core::driver::CliDriver::Traex => "traex",
+        summon_core::driver::CliDriver::Cursor => "cursor",
+        summon_core::driver::CliDriver::Other => "",
+    };
+    let bucket = crate::capture::rpc_pool::QuotaBucket::for_cli(cli, false)?;
+    five_hour_quota_for_bucket_shared(cli, bucket, default_codex_account, agent_name)
 }
 
 fn current_session_quota(agent: &Agent, tag: &str, session: &str) -> Option<u8> {
@@ -2990,8 +3013,8 @@ fn current_session_quota_at(
     session: &str,
     claude_snapshot_root: Option<&std::path::Path>,
 ) -> Option<u8> {
-    let driver = summon_core::driver::CliDriver::from_kind(agent.cli_kind());
-    if driver == summon_core::driver::CliDriver::Claude {
+    let bucket = crate::capture::rpc_pool::QuotaBucket::for_agent(agent)?;
+    if bucket == crate::capture::rpc_pool::QuotaBucket::Claude {
         let snapshot = crate::session::resume_store::read_id(agent, session, agent.cli_kind())
             .and_then(|id| {
                 claude_snapshot_root
@@ -3001,21 +3024,15 @@ fn current_session_quota_at(
             record_claude_snapshot_quota(&agent.name, tag, &snapshot);
         }
     }
-    match driver {
-        summon_core::driver::CliDriver::Claude => {
-            crate::capture::rpc_pool::current_quota_shared(&agent.name, tag)
+    match bucket {
+        crate::capture::rpc_pool::QuotaBucket::Codex
+            if crate::capture::rpc_pool::agent_uses_default_codex_account(agent) =>
+        {
+            crate::capture::rpc_pool::current_default_codex_quota_shared(&agent.name, tag)
         }
-        summon_core::driver::CliDriver::Codex => {
-            if crate::capture::rpc_pool::agent_uses_default_codex_account(agent) {
-                crate::capture::rpc_pool::current_default_codex_quota_shared(&agent.name, tag)
-            } else {
-                crate::capture::rpc_pool::current_quota_shared(&agent.name, tag)
-            }
+        bucket => {
+            crate::capture::rpc_pool::current_quota_for_bucket_shared(&agent.name, tag, bucket)
         }
-        summon_core::driver::CliDriver::Traex => {
-            crate::capture::rpc_pool::current_quota_shared(&agent.name, tag)
-        }
-        _ => None,
     }
 }
 
@@ -3144,8 +3161,10 @@ pub(super) fn session_panel_controls(
             }
         })
     };
-    // 周额度那条读取路径会把 claude 快照记进账号缓存,5 小时额度要排在它之后读。
+    // 长窗额度那条读取路径会把 claude 快照记进账号缓存,5 小时额度要排在它之后读。
     let quota_left_pct = current_session_quota(agent, tag, session);
+    let quota_window = crate::capture::rpc_pool::QuotaBucket::for_agent(agent)
+        .map(|bucket| bucket.long_window_kind(agent.cli_kind()));
     summon_core::feishu::SessionPanelControls {
         quota_badge: quota_badge_enabled(agent, tag),
         badge_effort: settings.badge_effort(),
@@ -3153,6 +3172,7 @@ pub(super) fn session_panel_controls(
         badge_model: settings.badge_model(),
         badge_ctx: settings.badge_ctx(),
         quota_left_pct,
+        quota_window,
         quota_5h_left_pct: five_hour_quota_for(agent).map(|(left_pct, _)| left_pct),
         context: current_session_context_budget(agent, tag, session),
         cot,
@@ -6436,7 +6456,11 @@ mod tests {
             Some(86)
         );
         assert_eq!(
-            crate::capture::rpc_pool::current_quota_shared(&agent.name, "g-other"),
+            crate::capture::rpc_pool::current_quota_for_bucket_shared(
+                &agent.name,
+                "g-other",
+                crate::capture::rpc_pool::QuotaBucket::Claude,
+            ),
             Some(86),
             "session 卡读到的 Claude 快照应进入账号级内存"
         );
@@ -9175,5 +9199,71 @@ mod cursor_cli_parameter_tests {
         let shown = panel(&agent, &tag).unwrap();
         assert!(!shown.catalog_live && shown.controls.is_empty());
         assert!(apply_cursor_config_option(&agent, &tag, "fast", Some("true")).is_err());
+    }
+
+    #[test]
+    fn session_panel_reads_cursor_quota_for_cursor_and_proxy_agents_and_isolates_plain_claude() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut cursor_agent: Agent = serde_yaml::from_str(
+            "name: panel-cursor-quota
+runtime:
+  cli: cursor
+",
+        )
+        .unwrap();
+        cursor_agent.dir = tmp.path().join("agents").join(&cursor_agent.name);
+        std::fs::create_dir_all(cursor_agent.state_dir()).unwrap();
+        crate::capture::rpc_pool::replace_account_quota_shared(
+            &cursor_agent.name,
+            Some((85, Some(1_796_083_200))),
+            1_000,
+        );
+        assert_eq!(
+            current_session_quota_at(&cursor_agent, "g-cursor", "s-cursor", None),
+            Some(85)
+        );
+
+        // 同名热切为普通 claude（无 cursor_quota_token_command）：不能把旧 Cursor 额度当周额度显示。
+        let mut plain_claude: Agent = serde_yaml::from_str(
+            "name: panel-cursor-quota
+runtime:
+  cli: claude
+",
+        )
+        .unwrap();
+        plain_claude.dir = cursor_agent.dir.clone();
+        assert_eq!(
+            current_session_quota_at(&plain_claude, "g-cursor", "s-cursor", None),
+            None
+        );
+
+        // 显式配置了 cursor_quota_token_command 的 claude 代理：读 Cursor 桶且标记 BillingCycle。
+        let mut proxy_claude: Agent = serde_yaml::from_str(
+            "name: panel-cursor-quota
+runtime:
+  cli: claude
+  env:
+    ANTHROPIC_BASE_URL: http://127.0.0.1:18765
+  cursor_quota_token_command: echo tok
+",
+        )
+        .unwrap();
+        proxy_claude.dir = cursor_agent.dir.clone();
+        assert_eq!(
+            current_session_quota_at(&proxy_claude, "g-cursor", "s-cursor", None),
+            Some(85)
+        );
+        let model = summon_core::model_effort::ResolvedModel {
+            value: Some("gemini-4-neon-high".into()),
+            source: summon_core::model_effort::ModelSource::SessionLive,
+        };
+        let controls = session_panel_controls(&proxy_claude, "g-cursor", "s-cursor", &model);
+        assert_eq!(controls.quota_left_pct, Some(85));
+        assert_eq!(
+            controls.quota_window,
+            Some(summon_core::feishu::LongQuotaKind::BillingCycle)
+        );
+        assert_eq!(controls.quota_5h_left_pct, None);
     }
 }
