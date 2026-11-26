@@ -7042,5 +7042,19 @@
   "services.cli.not_running": "Service `{name}` is not running",
   "services.cli.external_refused": "Service `{name}` is running externally (not started by summon); refusing to stop it",
   "services.stop_failed": "failed to stop prerequisite service `{service}` (pid={pid}); process group is still alive and lease was kept",
-  "services.existing_still_running": "prerequisite service `{service}` already has a summon-started instance (pid={pid}) that could not be stopped (last probe: {detail}); refusing to spawn a duplicate and keeping existing lease"
+  "services.existing_still_running": "prerequisite service `{service}` already has a summon-started instance (pid={pid}) that could not be stopped (last probe: {detail}); refusing to spawn a duplicate and keeping existing lease",
+  "services.shutting_down": "daemon is shutting down; cancelled startup of ephemeral service `{service}`",
+  "services.lease_ownership_invalid": "cannot verify process group ownership for service `{service}` (pid={pid}: {reason}); refusing to send signal and keeping lease",
+  "services.cli.started_external": "Service `{name}` launcher exited cleanly and external service is ready ({detail}, log: {log})",
+  "services.cli.mode_fallback": "probe+fallback",
+  "services.cli.mode_probe_only": "probe-only",
+  "services.cli.requires_prefix": " | requires: {agents}",
+  "services.cli.status_invalid": "INVALID",
+  "services.cli.status_ok": "OK",
+  "services.cli.status_unhealthy": "UNHEALTHY",
+  "services.cli.owner_external": "external",
+  "services.cli.owner_summon": "summon pid={pid}",
+  "services.cli.owner_summon_ephemeral": "summon pid={pid} (ephemeral)",
+  "services.cli.owner_stopped": "stopped",
+  "services.cli.check_failed_summary": "{count} service(s) unhealthy or invalid"
 }

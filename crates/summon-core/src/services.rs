@@ -343,4 +343,24 @@ mod tests {
         let issues = bad_env.validate("svc");
         assert_eq!(issues.len(), 2, "{issues:?}");
     }
+
+    #[test]
+    fn strict_config_load_never_leaks_scalar_values_on_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "services:\n  synth:\n    healthcheck:\n      tcp: 127.0.0.1:9999\n    survive_daemon_restart: synth-config-secret-4242\n",
+        )
+        .unwrap();
+        let err = crate::config::Config::load_strict_at(&path).unwrap_err();
+        assert!(
+            !err.contains("synth-config-secret-4242"),
+            "config parse error must not leak raw scalar values: {err}"
+        );
+        assert!(
+            err.contains("line"),
+            "error should still include location: {err}"
+        );
+    }
 }

@@ -655,6 +655,36 @@ impl Config {
         }
         cfg
     }
+
+    /// 严格读取全局 `config.yaml`：文件不存在返回默认配置；I/O 或 YAML 解析失败只返回脱敏后的错误类别与行列，
+    /// 不把解析器原文中可能携带的配置标量值透传到日志或会话通知。
+    pub fn load_strict_at(path: &std::path::Path) -> Result<Self, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => {
+                return Err(summon_i18n::format!(
+                    "services.config_load_failed",
+                    error = format!("I/O error ({:?})", e.kind())
+                ));
+            }
+        };
+        serde_yaml::from_str(&text).map_err(|e| {
+            let detail = match e.location() {
+                Some(loc) => format!(
+                    "invalid YAML at line {}, column {}",
+                    loc.line(),
+                    loc.column()
+                ),
+                None => "invalid YAML syntax or schema".to_string(),
+            };
+            summon_i18n::format!("services.config_load_failed", error = detail)
+        })
+    }
+
+    pub fn load_strict() -> Result<Self, String> {
+        Self::load_strict_at(&config_path())
+    }
 }
 
 /// 完整(resolved)消息层配置。内置默认来自 `assets/messaging.default.yaml`,**不在代码里 hardcode**;

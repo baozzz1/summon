@@ -365,7 +365,12 @@ pub fn resolve_extra_env(agent: &Agent) -> Vec<(String, String)> {
     if !agent.required_services().is_empty() {
         let cfg_path = agent.effective_global_config_path();
         let global_env = crate::runtime::services::global_dotenv(cfg_path.as_deref());
+        // 共享服务 agent_env 的 `${VAR}` 展开禁止引用任何 runtime/飞书凭据键（防止把
+        // SUMMON_* 或其他 agent 的 FEISHU_* / 凭据键换名注入），且仅允许读取非保留键。
         let service_lookup = |name: &str| -> Option<String> {
+            if summon_core::agent_identity::is_runtime_owned_env_key(name) {
+                return None;
+            }
             envfile
                 .get(name)
                 .filter(|v| !v.is_empty())
@@ -1936,6 +1941,58 @@ mod runtime_env_expand_tests {
         let got = resolve_extra_env(&agent);
         std::env::remove_var("SUMMON_TEST_EMPTY_VAR");
         assert_eq!(got, vec![("V".to_string(), "from-process".to_string())]);
+    }
+
+    #[test]
+    fn required_service_agent_env_blocks_renamed_runtime_and_feishu_credential_refs() {
+        let _guard = crate::test_support::process_test_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let summon_root = tmp.path();
+        std::fs::write(
+            summon_root.join(".env"),
+            "FEISHU_APP_SECRET_OTHER=synth-other-secret-99\nSAFE_PROXY_TOKEN=synth-safe-token-11\n",
+        )
+        .unwrap();
+        std::fs::write(
+            summon_root.join("config.yaml"),
+            r#"services:
+  proxy:
+    healthcheck:
+      tcp: 127.0.0.1:18999
+    agent_env:
+      SMUGGLED_FEISHU: "${FEISHU_APP_SECRET_OTHER}"
+      SMUGGLED_HANDOFF: "${SUMMON_TEST_AGENT_ENV_HANDOFF_TOKEN}"
+      PROXY_TOKEN: "${SAFE_PROXY_TOKEN}"
+"#,
+        )
+        .unwrap();
+        let agent_dir = summon_root.join("agents").join("synth-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            r#"name: synth-agent
+runtime:
+  cli: claude
+  requires:
+    - proxy
+"#,
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(summon_root.join("config.yaml"));
+
+        std::env::set_var(
+            "SUMMON_TEST_AGENT_ENV_HANDOFF_TOKEN",
+            "synth-handoff-secret-88",
+        );
+        let merged = resolve_extra_env(&agent);
+        std::env::remove_var("SUMMON_TEST_AGENT_ENV_HANDOFF_TOKEN");
+        let map: std::collections::HashMap<_, _> = merged.into_iter().collect();
+        assert!(!map.contains_key("SMUGGLED_FEISHU"));
+        assert!(!map.contains_key("SMUGGLED_HANDOFF"));
+        assert_eq!(
+            map.get("PROXY_TOKEN").map(String::as_str),
+            Some("synth-safe-token-11")
+        );
     }
 
     #[test]

@@ -7042,5 +7042,19 @@
   "services.cli.not_running": "服务 `{name}` 当前未运行",
   "services.cli.external_refused": "服务 `{name}` 当前由外部托管运行（非 summon 拉起），已跳过停止操作",
   "services.stop_failed": "停止前置服务 `{service}`（pid={pid}）失败，进程组仍存活；已保留租约文件",
-  "services.existing_still_running": "前置服务 `{service}` 已有由 summon 拉起的实例（pid={pid}）仍在运行且无法停止（最后探测：{detail}）；已拒绝重复启动并保留原租约"
+  "services.existing_still_running": "前置服务 `{service}` 已有由 summon 拉起的实例（pid={pid}）仍在运行且无法停止（最后探测：{detail}）；已拒绝重复启动并保留原租约",
+  "services.shutting_down": "daemon 正在停机，已取消随 daemon 退出的服务 `{service}` 的启动",
+  "services.lease_ownership_invalid": "无法核实服务 `{service}` 的进程组归属（pid={pid}：{reason}）；已拒绝发信号并保留租约",
+  "services.cli.started_external": "服务 `{name}` 启动命令已正常退出，外部服务已就绪（{detail}，日志：{log}）",
+  "services.cli.mode_fallback": "探活+兜底拉起",
+  "services.cli.mode_probe_only": "仅探活",
+  "services.cli.requires_prefix": " | 依赖方：{agents}",
+  "services.cli.status_invalid": "配置无效",
+  "services.cli.status_ok": "正常",
+  "services.cli.status_unhealthy": "不可用",
+  "services.cli.owner_external": "外部托管",
+  "services.cli.owner_summon": "summon 托管 pid={pid}",
+  "services.cli.owner_summon_ephemeral": "summon 托管 pid={pid}（随停机退出）",
+  "services.cli.owner_stopped": "未运行",
+  "services.cli.check_failed_summary": "{count} 个前置服务不可用或配置无效"
 }

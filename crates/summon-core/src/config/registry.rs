@@ -557,25 +557,12 @@ impl Agent {
         })
     }
 
-    /// 现读本 agent 所属的全局 `config.yaml`。文件不存在返回默认配置；读不出或解析失败返回错误（fail-closed）。
+    /// 现读本 agent 所属的全局 `config.yaml`。文件不存在返回默认配置；读不出或解析失败返回脱敏错误（fail-closed）。
     pub fn load_global_config(&self) -> Result<crate::config::Config, String> {
         let Some(path) = self.effective_global_config_path() else {
             return Ok(crate::config::Config::default());
         };
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(crate::config::Config::default())
-            }
-            Err(e) => {
-                return Err(summon_i18n::format!(
-                    "services.config_load_failed",
-                    error = e
-                ))
-            }
-        };
-        serde_yaml::from_str(&text)
-            .map_err(|e| summon_i18n::format!("services.config_load_failed", error = e))
+        crate::config::Config::load_strict_at(&path)
     }
 
     /// 按 chat_id 查 `runtime.chat_working_dirs` 映射配置的工作目录(已展开 ~/)。

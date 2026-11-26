@@ -5569,6 +5569,48 @@ pub(super) fn handle_task(
         agent_name: &agent.name,
         delivery_scope,
     };
+    // 前置依赖服务 fail-closed 准入（探活 + 按需拉起兜底）：必须在身份准入通过之后、
+    // 首次冷启 CLI (`sess.ensure_started`) 或 slash 命令注入（如 `/goal`）之前统一执行。
+    if !task.reattach {
+        if let Err(error) = crate::runtime::services::ensure_agent_services(agent) {
+            let tag = chat_tag(chat_type, chat_id);
+            log(&summon_i18n::format!(
+                "services.preflight_blocked_log",
+                agent = agent.name,
+                tag = tag,
+                error = error
+            ));
+            if task.kind.is_slash() {
+                return fail_slash_command(
+                    agent,
+                    fc,
+                    chat_id,
+                    chat_type,
+                    task,
+                    m,
+                    &error.to_string(),
+                );
+            }
+            let main_msg = MsgRef {
+                message_id: task.feishu_anchor().unwrap_or_default(),
+            };
+            let _ = frontend.react(&main_msg, error_reaction(m));
+            let notice = agent_error_notice(
+                agent.name.as_str(),
+                agent.capture_mode(),
+                &tag,
+                &error.to_string(),
+            );
+            let send_result = match attach_hint_card(agent, &notice) {
+                Some(card) => frontend.send_card(&chat_ref, &card),
+                None => frontend.send_message(&chat_ref, &notice),
+            };
+            if let Err(send_err) = send_result {
+                log(&summon_i18n::format!("rb523487fbf", agent.name));
+            }
+            return TurnResult::Failed;
+        }
+    }
     // 工程表情文件队列(slice 3):这条「真送达 claude 的飞书消息」入 working,记 OnIt id + 送达时刻。
     // 跨 daemon 重启可恢复(启动扫描据它把孤儿 OnIt 收尾,不再永远卡着);per-chat 串行,done 时按
     // message_id 精确清。`resolve_done`(FIFO 归因)留给会话镜像 pub-sub 路的「无 message 的 turn 完成」。
@@ -23269,6 +23311,154 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
 
     /// agent 声明了 `runtime.requires` 但依赖服务未就绪（或未定义）时，`stream_turn` 必须
     /// fail-closed：不启动会话、直接通过 frontend 向用户发故障提示并返回 `TurnResult::Failed`。
+    /// `handle_task` 在首次启动 CLI (`sess.ensure_started`) 与 `/goal` slash 注入之前必须先执行
+    /// 前置依赖服务准入；依赖不健康时两种入口都必须 fail-closed 且不启动 tmux 会话。
+    #[test]
+    fn handle_task_blocks_before_session_start_for_normal_and_goal_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.yaml");
+        std::fs::write(
+            &cfg_path,
+            r#"services:
+  down-dep:
+    healthcheck:
+      command: ["/bin/sh", "-c", "exit 1"]
+      timeout_secs: 1
+      ready_timeout_secs: 2
+"#,
+        )
+        .unwrap();
+        let agent_dir = dir.path().join("agents").join("synth-claude");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            r#"name: synth-claude
+runtime:
+  cli: claude
+  requires:
+    - down-dep
+"#,
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(cfg_path);
+
+        let fc = std::sync::Arc::new(FeishuClient::new(
+            "feishu.cn",
+            String::new(),
+            String::new(),
+            true,
+        ));
+        let sess = Session::for_agent(&agent, 200, 800);
+        let core = std::sync::Arc::new(crate::runtime::core::Core::new(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            Vec::new(),
+        ));
+        let inflight = crate::runtime::inflight::InFlight::new();
+        let mirror = super::dispatcher::MirrorDeliveryTracker::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut settings = ChatOverrides::default();
+
+        let wal = crate::runtime::inbox_wal::InboxWal::new(dir.path().join("inbox"));
+        let run_via_barrier = |task: &ChatTask,
+                               primed: &mut bool,
+                               settings: &mut ChatOverrides,
+                               observed_live: &mut bool|
+         -> TurnResult {
+            wal.append(
+                &agent.name,
+                "scope",
+                &Inbound {
+                    anchor_message_id: None,
+                    chat_id: "oc_synth_chat".into(),
+                    chat_type: Some("p2p".into()),
+                    text: task.text.clone(),
+                    sender: task.who_id.clone(),
+                    sender_union_id: task.who_union_id.clone(),
+                    sender_type: "user".into(),
+                    message_id: task.message_id.clone(),
+                    parent_id: None,
+                    thread_id: None,
+                    root_id: None,
+                    mentions: Vec::new(),
+                    resources: Vec::new(),
+                    create_time_ms: 1_000,
+                    replayed: false,
+                    reattach: false,
+                },
+            )
+            .unwrap();
+            let (_, result) = run_after_durable_start(
+                &wal,
+                &agent.name,
+                "scope",
+                &task.message_id,
+                false,
+                || {
+                    handle_task(
+                        &agent,
+                        "scope",
+                        &sess,
+                        &fc,
+                        task,
+                        "合成用户",
+                        "oc_synth_chat",
+                        "p2p",
+                        primed,
+                        &core,
+                        &inflight,
+                        &mirror,
+                        &rx,
+                        &tx,
+                        1,
+                        observed_live,
+                        None,
+                        None,
+                        None,
+                        settings,
+                        None,
+                        &SessionEndEvidence::default(),
+                    )
+                },
+            )
+            .unwrap();
+            result.expect("durable start barrier must admit fresh task")
+        };
+
+        // 1. 普通冷启动消息：在 sess.ensure_started() 之前拦截，observed_live 必须仍为 false。
+        let ThreadMsg::Task(normal_task) = task_msg("om_svc_normal", "你好") else {
+            unreachable!()
+        };
+        let mut primed = false;
+        let mut observed_live = false;
+        let res = run_via_barrier(&normal_task, &mut primed, &mut settings, &mut observed_live);
+        assert_eq!(res, TurnResult::Failed);
+        assert!(
+            !observed_live,
+            "handle_task must fail before sess.ensure_started() on normal turns"
+        );
+
+        // 2. `/goal` slash 命令：同样在 ensure_started 与注入前拦截。
+        let ThreadMsg::Task(mut goal_task) = task_msg("om_svc_goal", "/goal check") else {
+            unreachable!()
+        };
+        goal_task.kind = ChatTaskKind::SlashCommand;
+        goal_task.slash_admitted = true;
+        let mut primed_goal = false;
+        let mut observed_live_goal = false;
+        let res_goal = run_via_barrier(
+            &goal_task,
+            &mut primed_goal,
+            &mut settings,
+            &mut observed_live_goal,
+        );
+        assert_eq!(res_goal, TurnResult::Failed);
+        assert!(
+            !observed_live_goal,
+            "handle_task must fail before sess.ensure_started() on /goal slash turns"
+        );
+    }
+
     #[test]
     fn stream_turn_fails_closed_when_required_service_is_unhealthy() {
         let dir = tempfile::tempdir().unwrap();

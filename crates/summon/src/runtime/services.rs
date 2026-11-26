@@ -10,22 +10,26 @@
 //!   （仅从全局 `~/.summon/.env` 与进程环境展开，绝不读任何 agent 的 `.env`）。
 
 use crate::observe::log::log;
-use crate::runtime::daemon::{env_from_file, essential_system_env, expand_env_value, pid_is_alive};
+use crate::runtime::daemon::{env_from_file, expand_env_value, pid_is_alive};
 use crate::runtime::fsio::atomic_write;
 use crate::runtime::paths::{run_dir, summon_home};
 use crate::runtime::process::retry_text_file_busy;
 use nix::errno::Errno;
 use nix::sys::signal::{killpg, Signal};
-use nix::unistd::Pid;
+use nix::unistd::{getpgid, Pid};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::net::{IpAddr, TcpStream, ToSocketAddrs};
+use std::io::Write as _;
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+static SERVICES_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 use summon_core::agent_identity::is_runtime_owned_env_key;
 use summon_core::config::Config;
 use summon_core::registry::{collapse_tilde, expand_tilde, Agent};
@@ -115,6 +119,12 @@ pub(crate) enum EnsureOutcome {
         probe: ProbeResult,
         log_path: PathBuf,
     },
+    /// 一次性启动命令（如 `launchctl kickstart` / `systemctl start`）以 0 退出并由外部管理器接管，
+    /// 后续探活在超时预算内就绪；summon 不保留进程租约。
+    StartedExternal {
+        probe: ProbeResult,
+        log_path: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,6 +169,14 @@ pub(crate) enum ServiceError {
         pid: u32,
         detail: String,
     },
+    #[error("{}", summon_i18n::format!("services.shutting_down", service = .service))]
+    ShuttingDown { service: String },
+    #[error("{}", summon_i18n::format!("services.lease_ownership_invalid", service = .service, pid = .pid, reason = .reason))]
+    LeaseOwnershipInvalid {
+        service: String,
+        pid: u32,
+        reason: String,
+    },
     #[error("service `{service}` I/O error: {error}")]
     Io { service: String, error: String },
 }
@@ -181,28 +199,90 @@ fn log_path(services_dir: &Path, name: &str) -> PathBuf {
     services_dir.join(format!("{name}.log"))
 }
 
-/// 构造隔离后的服务进程环境：
-/// `essential_system_env()`（剔除 lark-cli wrapper 目录）+ 服务自身 `spec.env`（仅从全局 `.env` 与进程环境展开）。
-fn build_service_env(
-    spec: &ServiceSpec,
-    global_env: &HashMap<String, String>,
-) -> Vec<(String, String)> {
-    let mut env_map: Vec<(String, String)> = essential_system_env()
-        .into_iter()
-        .map(|(k, v)| {
-            if k == "PATH" {
+/// 共享前置服务允许继承的最小系统环境白名单：不含任何 `SUMMON_*` / `FEISHU_*` 键，
+/// 杜绝调用方身份、控制 socket 或 bridge handoff token 泄入共享服务进程。
+fn service_base_system_env() -> Vec<(String, String)> {
+    const KEYS: &[&str] = &[
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TERM",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_COLLATE",
+        "LC_MESSAGES",
+        "LC_NUMERIC",
+        "LC_TIME",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_RUNTIME_DIR",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
+        "GPG_AGENT_INFO",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "__CF_USER_TEXT_ENCODING",
+    ];
+    let mut out = Vec::new();
+    for k in KEYS {
+        if let Ok(v) = std::env::var(k) {
+            if *k == "PATH" {
                 let clean =
                     crate::setup::env::path_without_lark_cli_wrappers(std::ffi::OsStr::new(&v))
                         .to_string_lossy()
                         .into_owned();
-                (k, clean)
+                out.push(((*k).to_string(), clean));
             } else {
-                (k, v)
+                out.push(((*k).to_string(), v));
             }
-        })
-        .collect();
+        }
+    }
+    out
+}
+
+/// 仅记录脱敏后的服务生命周期状态行（时间、程序名、退出码/探活结果/耗时）；
+/// 绝不把子进程原始 stdout/stderr 或环境变量值落入本机日志。
+fn append_service_lifecycle_log(path: &Path, line: &str) {
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)
+    {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(file, "[{ts}] {line}");
+    }
+}
+
+/// 构造隔离后的服务进程环境：
+/// 最小系统白名单（不含任何 `SUMMON_*`/`FEISHU_*`，并剔除 lark-cli wrapper 目录）+ 服务自身 `spec.env`。
+fn build_service_env(
+    spec: &ServiceSpec,
+    global_env: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut env_map = service_base_system_env();
 
     let lookup = |name: &str| -> Option<String> {
+        if is_runtime_owned_env_key(name) {
+            return None;
+        }
         global_env
             .get(name)
             .filter(|v| !v.is_empty())
@@ -315,12 +395,41 @@ fn probe_http(url: &str, timeout: Duration) -> (bool, String) {
 }
 
 fn probe_tcp(addr: &str, timeout: Duration) -> (bool, String) {
+    probe_tcp_with_resolver(addr, timeout, |host, port| {
+        (host, port)
+            .to_socket_addrs()
+            .map(|iter| iter.collect())
+            .map_err(|e| e.to_string())
+    })
+}
+
+fn probe_tcp_with_resolver<F>(addr: &str, timeout: Duration, resolver: F) -> (bool, String)
+where
+    F: FnOnce(String, u16) -> Result<Vec<SocketAddr>, String> + Send + 'static,
+{
     let Some((host, port)) = parse_tcp_host_port(addr) else {
         return (false, format!("invalid TCP address `{addr}`"));
     };
-    let addrs: Vec<_> = match (host, port).to_socket_addrs() {
-        Ok(iter) => iter.collect(),
-        Err(e) => return (false, format!("TCP resolve failed for `{addr}`: {e}")),
+    let deadline = Instant::now() + timeout;
+    let addrs: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
+        vec![SocketAddr::new(ip, port)]
+    } else {
+        let host_owned = host.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(resolver(host_owned, port));
+        });
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(remaining) {
+            Ok(Ok(list)) => list,
+            Ok(Err(e)) => return (false, format!("TCP resolve failed for `{addr}`: {e}")),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                return (false, format!("TCP resolve timed out for `{addr}`"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return (false, format!("TCP resolve aborted for `{addr}`"));
+            }
+        }
     };
     if addrs.is_empty() {
         return (
@@ -328,7 +437,6 @@ fn probe_tcp(addr: &str, timeout: Duration) -> (bool, String) {
             format!("TCP resolve returned no addresses for `{addr}`"),
         );
     }
-    let deadline = Instant::now() + timeout;
     let mut last_err = String::new();
     for sock_addr in addrs {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -458,15 +566,66 @@ fn write_lease(path: &Path, lease: &ServiceLease) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 校验租约所指进程仍存活且启动指纹完全一致（fail-closed：无指纹一律视为不可验证）。
-fn lease_is_live_match(lease: &ServiceLease) -> bool {
-    let Some(expected) = lease.process_fingerprint.as_deref() else {
-        return false;
-    };
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LeaseOwnership {
+    /// 进程存活，且服务名、租约 PGID、系统 getpgid 与进程启动指纹全部吻合。
+    Owned { pid: u32 },
+    /// 进程已退出或 PID 已被无关进程复用（指纹不匹配），可安全清理陈旧租约且不得发信号。
+    Stale,
+    /// 进程存活但归属字段不一致（缺少指纹、服务名不符、pgid != pid 或系统 PGID 不符），
+    /// 必须 fail-closed：绝不发信号，保留租约并返回错误。
+    UnverifiedLive { pid: u32, reason: String },
+}
+
+/// 严格校验租约归属：将服务名、PID、租约 PGID、系统 `getpgid(pid)` 与启动指纹绑定在同一进程上。
+fn verify_lease_ownership(expected_service: &str, lease: &ServiceLease) -> LeaseOwnership {
     if !pid_is_alive(lease.pid) {
-        return false;
+        return LeaseOwnership::Stale;
     }
-    read_process_fingerprint(lease.pid).as_deref() == Some(expected)
+    let Some(expected_fp) = lease.process_fingerprint.as_deref() else {
+        return LeaseOwnership::UnverifiedLive {
+            pid: lease.pid,
+            reason: "missing process fingerprint".to_string(),
+        };
+    };
+    let Some(actual_fp) = read_process_fingerprint(lease.pid) else {
+        return LeaseOwnership::Stale;
+    };
+    if actual_fp != expected_fp {
+        return LeaseOwnership::Stale;
+    }
+    if lease.service != expected_service {
+        return LeaseOwnership::UnverifiedLive {
+            pid: lease.pid,
+            reason: format!("lease service `{}` != `{expected_service}`", lease.service),
+        };
+    }
+    if lease.pgid != lease.pid {
+        return LeaseOwnership::UnverifiedLive {
+            pid: lease.pid,
+            reason: format!("lease pgid {} != pid {}", lease.pgid, lease.pid),
+        };
+    }
+    let Ok(raw_pid) = i32::try_from(lease.pid) else {
+        return LeaseOwnership::UnverifiedLive {
+            pid: lease.pid,
+            reason: "pid out of i32 range".to_string(),
+        };
+    };
+    match getpgid(Some(Pid::from_raw(raw_pid))) {
+        Ok(actual_pgid) if actual_pgid.as_raw() == raw_pid => {
+            LeaseOwnership::Owned { pid: lease.pid }
+        }
+        Ok(actual_pgid) => LeaseOwnership::UnverifiedLive {
+            pid: lease.pid,
+            reason: format!("OS pgid {} != pid {}", actual_pgid.as_raw(), lease.pid),
+        },
+        Err(Errno::ESRCH) => LeaseOwnership::Stale,
+        Err(e) => LeaseOwnership::UnverifiedLive {
+            pid: lease.pid,
+            reason: format!("getpgid failed: {e}"),
+        },
+    }
 }
 
 fn acquire_service_lock(
@@ -574,6 +733,22 @@ pub(crate) fn ensure_service_at(
     services_dir: &Path,
     global_env: &HashMap<String, String>,
 ) -> Result<EnsureOutcome, ServiceError> {
+    ensure_service_at_with_shutdown(
+        name,
+        spec,
+        services_dir,
+        global_env,
+        &SERVICES_SHUTTING_DOWN,
+    )
+}
+
+fn ensure_service_at_with_shutdown(
+    name: &str,
+    spec: &ServiceSpec,
+    services_dir: &Path,
+    global_env: &HashMap<String, String>,
+    shutdown: &AtomicBool,
+) -> Result<EnsureOutcome, ServiceError> {
     let issues = spec.validate(name);
     if !issues.is_empty() {
         return Err(ServiceError::InvalidConfig {
@@ -588,9 +763,21 @@ pub(crate) fn ensure_service_at(
         return Ok(EnsureOutcome::AlreadyHealthy { probe: initial });
     }
 
+    if !spec.survive_daemon_restart && shutdown.load(Ordering::SeqCst) {
+        return Err(ServiceError::ShuttingDown {
+            service: name.to_string(),
+        });
+    }
+
     // 慢路径：取每服务独占 flock，防多轮并发重复拉起。
     let lock_budget = spec.healthcheck.ready_timeout() + Duration::from_secs(5);
     let _lock = acquire_service_lock(services_dir, name, lock_budget)?;
+
+    if !spec.survive_daemon_restart && shutdown.load(Ordering::SeqCst) {
+        return Err(ServiceError::ShuttingDown {
+            service: name.to_string(),
+        });
+    }
 
     // 拿锁后双检：等待锁期间可能已被并发轮次或外部拉起就绪。
     let recheck = probe_service(spec, global_env);
@@ -605,51 +792,56 @@ pub(crate) fn ensure_service_at(
         });
     };
 
-    // 已有有效租约时（summon 拉起的实例仍存活但连续探活失败）：先受控停掉旧进程组再重启，
-    // 绝不直接覆盖有效租约；若旧进程组无法停止则 fail-closed 并保留原租约，避免产生孤儿。
+    // 已有租约时先严格核验归属：
+    // - 归属吻合（服务名/PID/PGID/指纹全一致）→ 先受控停掉旧组再重启；停不掉则 fail-closed 保租约；
+    // - 存活但归属无法核实 → 拒绝发信号、保租约、fail-closed 报错；
+    // - 陈旧（进程已死或 PID 被复用）→ 仅删陈旧租约。
     let lp = lease_path(services_dir, name);
     if let Some(old_lease) = read_lease(&lp) {
-        if lease_is_live_match(&old_lease) {
-            if !terminate_process_group(old_lease.pgid, Duration::from_secs(3)) {
-                return Err(ServiceError::ExistingInstanceStillRunning {
+        match verify_lease_ownership(name, &old_lease) {
+            LeaseOwnership::Owned { pid: owned_pid } => {
+                if !terminate_process_group(owned_pid, Duration::from_secs(3)) {
+                    return Err(ServiceError::ExistingInstanceStillRunning {
+                        service: name.to_string(),
+                        pid: owned_pid,
+                        detail: recheck.detail,
+                    });
+                }
+                let _ = std::fs::remove_file(&lp);
+                log(&format!(
+                    "[services] stopped unhealthy summon-managed service `{name}` pid={owned_pid} before fallback restart"
+                ));
+            }
+            LeaseOwnership::UnverifiedLive { pid, reason } => {
+                return Err(ServiceError::LeaseOwnershipInvalid {
                     service: name.to_string(),
-                    pid: old_lease.pid,
-                    detail: recheck.detail,
+                    pid,
+                    reason,
                 });
             }
-            let _ = std::fs::remove_file(&lp);
-            log(&format!(
-                "[services] stopped unhealthy summon-managed service `{name}` pid={} before fallback restart",
-                old_lease.pid
-            ));
-        } else {
-            let _ = std::fs::remove_file(&lp);
+            LeaseOwnership::Stale => {
+                let _ = std::fs::remove_file(&lp);
+            }
         }
     }
 
     let svc_log = log_path(services_dir, name);
-    let log_out = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(&svc_log)
-        .map_err(|e| ServiceError::Io {
-            service: name.to_string(),
-            error: e.to_string(),
-        })?;
-    let log_err = log_out.try_clone().map_err(|e| ServiceError::Io {
-        service: name.to_string(),
-        error: e.to_string(),
-    })?;
-
     let program = expand_tilde(&argv[0]);
+    let program_label = Path::new(&program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("service")
+        .to_string();
+
+    // 子进程 stdout/stderr 一律丢弃，绝不把可能含凭据的原始进程输出落盘；
+    // 本机 0600 日志文件只记录脱敏后的生命周期事件。
     let mut cmd = Command::new(&program);
     cmd.args(&argv[1..])
         .env_clear()
         .envs(build_service_env(spec, global_env))
         .stdin(Stdio::null())
-        .stdout(Stdio::from(log_out))
-        .stderr(Stdio::from(log_err));
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
     if let Some(dir) = spec.working_dir.as_deref().filter(|d| !d.trim().is_empty()) {
         cmd.current_dir(expand_tilde(dir));
@@ -668,32 +860,119 @@ pub(crate) fn ensure_service_at(
         cmd.process_group(0);
     }
 
+    let spawn_started = Instant::now();
     let mut child =
         retry_text_file_busy(|| cmd.spawn()).map_err(|e| ServiceError::SpawnFailed {
             service: name.to_string(),
-            error: e.to_string(),
+            error: e.kind().to_string(),
         })?;
     let pid = child.id();
-    let fingerprint = read_process_fingerprint(pid);
-    let started_at_unix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    append_service_lifecycle_log(
+        &svc_log,
+        &format!("spawn service={name} program={program_label} pid={pid}"),
+    );
 
-    let lease = ServiceLease {
-        service: name.to_string(),
-        pid,
-        pgid: pid,
-        started_at_unix,
-        command: argv.to_vec(),
-        survive_daemon_restart: spec.survive_daemon_restart,
-        log_path: svc_log.clone(),
-        process_fingerprint: fingerprint,
-    };
-    if let Err(e) = write_lease(&lp, &lease) {
-        log(&format!(
-            "[services] failed to write lease for `{name}` (pid={pid}): {e}"
-        ));
+    // 区分常驻自管进程与一次性启动命令（如 `launchctl kickstart` / `systemctl --user start`）：
+    // 若启动命令刚拉起即以 0 退出，则视为外部管理器接管，不写 summon 租约并继续等待探活就绪；
+    // 若以非 0 退出则立即报错；若仍在运行则必须取得有效启动指纹并成功持久化租约，否则 fail-closed 清理子进程组。
+    let mut child_exited_cleanly = false;
+    match child.try_wait() {
+        Ok(Some(status)) if status.success() => {
+            child_exited_cleanly = true;
+            append_service_lifecycle_log(
+                &svc_log,
+                "launcher exited cleanly (exit 0); waiting for external readiness",
+            );
+        }
+        Ok(Some(status)) => {
+            let _ = terminate_process_group(pid, Duration::from_millis(200));
+            append_service_lifecycle_log(
+                &svc_log,
+                &format!(
+                    "exited early status={status} elapsed_ms={}",
+                    spawn_started.elapsed().as_millis()
+                ),
+            );
+            return Err(ServiceError::ExitedEarly {
+                service: name.to_string(),
+                status: status.to_string(),
+                log_path: svc_log,
+            });
+        }
+        Ok(None) | Err(_) => {}
+    }
+
+    if !child_exited_cleanly {
+        let fingerprint = match read_process_fingerprint(pid) {
+            Some(fp) => Some(fp),
+            None => match child.try_wait() {
+                Ok(Some(status)) if status.success() => {
+                    child_exited_cleanly = true;
+                    append_service_lifecycle_log(
+                        &svc_log,
+                        "launcher exited cleanly (exit 0); waiting for external readiness",
+                    );
+                    None
+                }
+                Ok(Some(status)) => {
+                    let _ = terminate_process_group(pid, Duration::from_millis(200));
+                    append_service_lifecycle_log(
+                        &svc_log,
+                        &format!(
+                            "exited early status={status} elapsed_ms={}",
+                            spawn_started.elapsed().as_millis()
+                        ),
+                    );
+                    return Err(ServiceError::ExitedEarly {
+                        service: name.to_string(),
+                        status: status.to_string(),
+                        log_path: svc_log,
+                    });
+                }
+                Ok(None) | Err(_) => {
+                    let _ = terminate_process_group_reaping(
+                        pid,
+                        Duration::from_secs(2),
+                        Some(&mut child),
+                    );
+                    append_service_lifecycle_log(
+                        &svc_log,
+                        "aborted: failed to read process fingerprint",
+                    );
+                    return Err(ServiceError::Io {
+                        service: name.to_string(),
+                        error: "failed to read process fingerprint".to_string(),
+                    });
+                }
+            },
+        };
+
+        if let Some(fp) = fingerprint {
+            let started_at_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let lease = ServiceLease {
+                service: name.to_string(),
+                pid,
+                pgid: pid,
+                started_at_unix,
+                command: vec![program_label.clone()],
+                survive_daemon_restart: spec.survive_daemon_restart,
+                log_path: svc_log.clone(),
+                process_fingerprint: Some(fp),
+            };
+            if let Err(e) = write_lease(&lp, &lease) {
+                let _ =
+                    terminate_process_group_reaping(pid, Duration::from_secs(2), Some(&mut child));
+                let _ = remove_lease_if_pid_matches(&lp, pid);
+                append_service_lifecycle_log(&svc_log, "aborted: failed to persist service lease");
+                return Err(ServiceError::Io {
+                    service: name.to_string(),
+                    error: format!("failed to persist lease: {e}"),
+                });
+            }
+        }
     }
 
     let ready_budget = spec.healthcheck.ready_timeout();
@@ -701,22 +980,54 @@ pub(crate) fn ensure_service_at(
     let mut last_probe_detail = recheck.detail;
 
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // 组长已退出，再确保进程组内无残留工作子进程后再清租约。
-                let group_gone = terminate_process_group(pid, Duration::from_millis(200));
+        if !spec.survive_daemon_restart && shutdown.load(Ordering::SeqCst) {
+            if !child_exited_cleanly {
+                let group_gone =
+                    terminate_process_group_reaping(pid, Duration::from_secs(2), Some(&mut child));
                 if group_gone {
                     let _ = remove_lease_if_pid_matches(&lp, pid);
                 }
-                return Err(ServiceError::ExitedEarly {
-                    service: name.to_string(),
-                    status: status.to_string(),
-                    log_path: svc_log.clone(),
-                });
             }
-            Ok(None) => {}
-            Err(e) => {
-                last_probe_detail = format!("try_wait failed: {e}");
+            append_service_lifecycle_log(&svc_log, "aborted during daemon shutdown");
+            return Err(ServiceError::ShuttingDown {
+                service: name.to_string(),
+            });
+        }
+
+        if !child_exited_cleanly {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => {
+                    // 一次性启动命令正常退出（如 launchctl/systemctl）：撤回 summon 租约，
+                    // 继续在就绪超时内等待外部管理器拉起的服务探活转绿。
+                    child_exited_cleanly = true;
+                    let _ = remove_lease_if_pid_matches(&lp, pid);
+                    append_service_lifecycle_log(
+                        &svc_log,
+                        "launcher exited cleanly (exit 0); waiting for external readiness",
+                    );
+                }
+                Ok(Some(status)) => {
+                    let group_gone = terminate_process_group(pid, Duration::from_millis(200));
+                    if group_gone {
+                        let _ = remove_lease_if_pid_matches(&lp, pid);
+                    }
+                    append_service_lifecycle_log(
+                        &svc_log,
+                        &format!(
+                            "exited early status={status} elapsed_ms={}",
+                            spawn_started.elapsed().as_millis()
+                        ),
+                    );
+                    return Err(ServiceError::ExitedEarly {
+                        service: name.to_string(),
+                        status: status.to_string(),
+                        log_path: svc_log,
+                    });
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    last_probe_detail = format!("try_wait failed: {}", e.kind());
+                }
             }
         }
 
@@ -727,6 +1038,40 @@ pub(crate) fn ensure_service_at(
         let probe_timeout = spec.healthcheck.timeout().min(remaining);
         let probe = probe_service_with_timeout(spec, global_env, probe_timeout);
         if probe.healthy {
+            if !spec.survive_daemon_restart && shutdown.load(Ordering::SeqCst) {
+                if !child_exited_cleanly {
+                    let group_gone = terminate_process_group_reaping(
+                        pid,
+                        Duration::from_secs(2),
+                        Some(&mut child),
+                    );
+                    if group_gone {
+                        let _ = remove_lease_if_pid_matches(&lp, pid);
+                    }
+                }
+                append_service_lifecycle_log(&svc_log, "aborted during daemon shutdown");
+                return Err(ServiceError::ShuttingDown {
+                    service: name.to_string(),
+                });
+            }
+            append_service_lifecycle_log(
+                &svc_log,
+                &format!(
+                    "ready elapsed_ms={} detail={}",
+                    spawn_started.elapsed().as_millis(),
+                    probe.detail
+                ),
+            );
+            if child_exited_cleanly {
+                log(&format!(
+                    "[services] launcher for `{name}` handed off to external manager ({})",
+                    probe.detail
+                ));
+                return Ok(EnsureOutcome::StartedExternal {
+                    probe,
+                    log_path: svc_log,
+                });
+            }
             // 后台回收线程防止长驻 daemon 下子进程后续退出变成僵尸进程。
             let thread_name = format!("svc-reap-{name}");
             let _ = std::thread::Builder::new()
@@ -753,17 +1098,27 @@ pub(crate) fn ensure_service_at(
         std::thread::sleep(sleep_for);
     }
 
-    // 超时未就绪：清理本次启动的整个进程组；确认全组退出后才清租约，避免留孤儿。
-    let group_gone = terminate_process_group_reaping(pid, Duration::from_secs(2), Some(&mut child));
-    if group_gone {
-        let _ = remove_lease_if_pid_matches(&lp, pid);
+    // 超时未就绪：若子进程仍由 summon 持有则清理整组并回收；确认全组退出后才清租约。
+    if !child_exited_cleanly {
+        let group_gone =
+            terminate_process_group_reaping(pid, Duration::from_secs(2), Some(&mut child));
+        if group_gone {
+            let _ = remove_lease_if_pid_matches(&lp, pid);
+        }
     }
+    append_service_lifecycle_log(
+        &svc_log,
+        &format!(
+            "ready timeout secs={} last_probe={last_probe_detail}",
+            ready_budget.as_secs()
+        ),
+    );
 
     Err(ServiceError::StartTimeout {
         service: name.to_string(),
         secs: ready_budget.as_secs(),
         detail: last_probe_detail,
-        log_path: svc_log.clone(),
+        log_path: svc_log,
     })
 }
 
@@ -774,7 +1129,8 @@ fn remove_lease_if_pid_matches(path: &Path, expected_pid: u32) -> std::io::Resul
     Ok(())
 }
 
-/// 停止指定服务：**仅停止由 summon 兜底拉起且 PID/指纹吻合的进程**；外部托管服务一律拒绝操作。
+/// 停止指定服务：**仅停止由 summon 兜底拉起且服务名/PID/PGID/指纹全部吻合的进程组**；
+/// 外部托管服务一律拒绝操作；归属无法核实的存活租约 fail-closed 报错并保留租约。
 pub(crate) fn stop_service_at(
     name: &str,
     spec: &ServiceSpec,
@@ -790,22 +1146,32 @@ pub(crate) fn stop_service_at(
     let _lock = acquire_service_lock(services_dir, name, Duration::from_secs(10))?;
     let lp = lease_path(services_dir, name);
     if let Some(lease) = read_lease(&lp) {
-        if lease_is_live_match(&lease) {
-            if !terminate_process_group(lease.pgid, Duration::from_secs(5)) {
-                return Err(ServiceError::StopFailed {
+        match verify_lease_ownership(name, &lease) {
+            LeaseOwnership::Owned { pid: owned_pid } => {
+                if !terminate_process_group(owned_pid, Duration::from_secs(5)) {
+                    return Err(ServiceError::StopFailed {
+                        service: name.to_string(),
+                        pid: owned_pid,
+                    });
+                }
+                let _ = std::fs::remove_file(&lp);
+                log(&format!(
+                    "[services] stopped summon-managed service `{name}` pid={owned_pid}"
+                ));
+                return Ok(StopOutcome::Stopped { pid: owned_pid });
+            }
+            LeaseOwnership::UnverifiedLive { pid, reason } => {
+                return Err(ServiceError::LeaseOwnershipInvalid {
                     service: name.to_string(),
-                    pid: lease.pid,
+                    pid,
+                    reason,
                 });
             }
-            let _ = std::fs::remove_file(&lp);
-            log(&format!(
-                "[services] stopped summon-managed service `{name}` pid={}",
-                lease.pid
-            ));
-            return Ok(StopOutcome::Stopped { pid: lease.pid });
+            LeaseOwnership::Stale => {
+                // 租约陈旧（进程已死或 PID 被复用）：仅清理租约，绝不发信号。
+                let _ = std::fs::remove_file(&lp);
+            }
         }
-        // 租约陈旧（进程已死或 PID 被复用）：仅清理租约，绝不发信号。
-        let _ = std::fs::remove_file(&lp);
     }
 
     let probe = probe_service(spec, global_env);
@@ -825,11 +1191,10 @@ pub(crate) fn service_status_at(
     required_by: Vec<String>,
 ) -> ServiceStatus {
     let validation_issues = spec.validate(name);
-    let has_command = spec.start_command().is_some();
     if !validation_issues.is_empty() {
         return ServiceStatus {
             name: name.to_string(),
-            has_command,
+            has_command: spec.start_command().is_some(),
             validation_issues,
             probe: None,
             ownership: ServiceOwnership::Stopped,
@@ -839,20 +1204,26 @@ pub(crate) fn service_status_at(
 
     let probe = probe_service(spec, global_env);
     let lp = lease_path(services_dir, name);
-    let live_lease = read_lease(&lp).filter(lease_is_live_match);
-    let ownership = match live_lease {
-        Some(lease) => ServiceOwnership::SummonManaged {
-            pid: lease.pid,
-            survive_daemon_restart: lease.survive_daemon_restart,
-            log_path: lease.log_path,
-        },
-        None if probe.healthy => ServiceOwnership::External,
-        None => ServiceOwnership::Stopped,
+    let ownership = match read_lease(&lp) {
+        Some(lease)
+            if matches!(
+                verify_lease_ownership(name, &lease),
+                LeaseOwnership::Owned { .. }
+            ) =>
+        {
+            ServiceOwnership::SummonManaged {
+                pid: lease.pid,
+                survive_daemon_restart: lease.survive_daemon_restart,
+                log_path: lease.log_path,
+            }
+        }
+        _ if probe.healthy => ServiceOwnership::External,
+        _ => ServiceOwnership::Stopped,
     };
 
     ServiceStatus {
         name: name.to_string(),
-        has_command,
+        has_command: spec.start_command().is_some(),
         validation_issues,
         probe: Some(probe),
         ownership,
@@ -860,22 +1231,22 @@ pub(crate) fn service_status_at(
     }
 }
 
-/// 对 `agent.runtime.requires` 声明的全部前置服务执行 fail-closed 准入检查与按需兜底拉起。
-/// 没配 `requires` 的 agent 零开销立即放行。
+/// 入口准入：按 `agent.runtime.requires` 声明顺序逐个确保前置依赖服务已就绪。
+/// 无依赖时零 I/O 直接返回 `Ok(())`；任一依赖未定义、配置非法或不可用即 fail-closed 返回错误。
 pub(crate) fn ensure_agent_services(agent: &Agent) -> Result<(), ServiceError> {
     if agent.required_services().is_empty() {
         return Ok(());
     }
-    let cfg_path = agent.effective_global_config_path();
     let cfg = agent
         .load_global_config()
         .map_err(ServiceError::ConfigLoadFailed)?;
+    let cfg_path = agent.effective_global_config_path();
     let services_dir = services_run_dir_for(cfg_path.as_deref());
     let global_env = global_dotenv(cfg_path.as_deref());
-    ensure_agent_services_at(agent, &cfg, &services_dir, &global_env)
+    ensure_agent_services_with(agent, &cfg, &services_dir, &global_env)
 }
 
-pub(crate) fn ensure_agent_services_at(
+pub(crate) fn ensure_agent_services_with(
     agent: &Agent,
     cfg: &Config,
     services_dir: &Path,
@@ -898,13 +1269,21 @@ pub(crate) fn ensure_agent_services_at(
     Ok(())
 }
 
-/// daemon 优雅停机钩子：只停止 `survive_daemon_restart: false` 且经指纹验真的 summon 兜底服务；
+/// daemon 优雅停机钩子：先关停临时服务的新启动入口并通知在途就绪循环撤销，再逐一停止
+/// `survive_daemon_restart: false` 且经完整归属核验的 summon 兜底服务；
 /// 默认 `survive_daemon_restart: true` 的服务与任何外部托管服务一律不碰。
 pub(crate) fn stop_non_surviving_services() {
-    stop_non_surviving_services_at(&services_run_dir());
+    stop_non_surviving_services_at_with_shutdown(&services_run_dir(), &SERVICES_SHUTTING_DOWN);
 }
 
+#[cfg(test)]
 pub(crate) fn stop_non_surviving_services_at(services_dir: &Path) {
+    let flag = AtomicBool::new(false);
+    stop_non_surviving_services_at_with_shutdown(services_dir, &flag);
+}
+
+fn stop_non_surviving_services_at_with_shutdown(services_dir: &Path, shutdown: &AtomicBool) {
+    shutdown.store(true, Ordering::SeqCst);
     let Ok(entries) = std::fs::read_dir(services_dir) else {
         return;
     };
@@ -913,41 +1292,55 @@ pub(crate) fn stop_non_surviving_services_at(services_dir: &Path) {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
+        let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if !is_valid_service_name(file_stem) {
+            continue;
+        }
         let Some(lease) = read_lease(&path) else {
             continue;
         };
         if lease.survive_daemon_restart {
             continue;
         }
-        if !is_valid_service_name(&lease.service) {
-            continue;
-        }
-        let Ok(_lock) = acquire_service_lock(services_dir, &lease.service, Duration::from_secs(3))
+        // 在途启动收到 shutdown 后会在一个轮询周期（<= 200ms + 清理宽限）内释放锁，
+        // 给足 10s 等待锁以避免漏掉正在启动中的临时服务。
+        let Ok(_lock) = acquire_service_lock(services_dir, file_stem, Duration::from_secs(10))
         else {
+            log(&format!(
+                "[services] timed out waiting for service lock `{file_stem}` on daemon shutdown"
+            ));
             continue;
         };
-        // 拿锁后重读租约并核对指纹。
+        // 拿锁后重读租约并核对服务名/文件名/PID/PGID/指纹。
         let Some(current) = read_lease(&path) else {
             continue;
         };
         if current.survive_daemon_restart {
             continue;
         }
-        if lease_is_live_match(&current) {
-            if terminate_process_group(current.pgid, Duration::from_secs(3)) {
+        match verify_lease_ownership(file_stem, &current) {
+            LeaseOwnership::Owned { pid: owned_pid } => {
+                if terminate_process_group(owned_pid, Duration::from_secs(3)) {
+                    log(&format!(
+                        "[services] stopped non-surviving service `{file_stem}` pid={owned_pid} on daemon shutdown"
+                    ));
+                    let _ = std::fs::remove_file(&path);
+                } else {
+                    log(&format!(
+                        "[services] failed to stop non-surviving service `{file_stem}` pid={owned_pid} on daemon shutdown; keeping lease"
+                    ));
+                }
+            }
+            LeaseOwnership::UnverifiedLive { pid, reason } => {
                 log(&format!(
-                    "[services] stopped non-surviving service `{}` pid={} on daemon shutdown",
-                    current.service, current.pid
-                ));
-                let _ = std::fs::remove_file(&path);
-            } else {
-                log(&format!(
-                    "[services] failed to stop non-surviving service `{}` pid={} on daemon shutdown; keeping lease",
-                    current.service, current.pid
+                    "[services] refusing to signal unverified lease `{file_stem}` pid={pid} on daemon shutdown ({reason}); keeping lease"
                 ));
             }
-        } else {
-            let _ = std::fs::remove_file(&path);
+            LeaseOwnership::Stale => {
+                let _ = std::fs::remove_file(&path);
+            }
         }
     }
 }
@@ -1235,7 +1628,14 @@ mod tests {
         match err {
             ServiceError::ExitedEarly { log_path, .. } => {
                 let logged = std::fs::read_to_string(&log_path).unwrap();
-                assert!(logged.contains("startup-secret-token-abc"), "{logged}");
+                assert!(
+                    !logged.contains("startup-secret-token-abc"),
+                    "on-disk service log must never capture raw child stderr/secrets: {logged}"
+                );
+                assert!(
+                    logged.contains("exited early"),
+                    "lifecycle log should record sanitized exit status: {logged}"
+                );
             }
             other => panic!("expected ExitedEarly, got {other:?}"),
         }
@@ -1432,5 +1832,263 @@ mod tests {
 
         // 清理测试进程
         let _ = stop_service_at("keep-svc", &keep_spec, tmp.path(), &HashMap::new());
+    }
+
+    #[test]
+    fn one_shot_launcher_exit_zero_waits_for_external_health_and_leaves_no_lease() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ready_file = tmp.path().join("external.ready");
+        // 模拟 launchctl kickstart / systemctl start：主命令立即 0 退出，外部守护进程 250ms 后就绪。
+        let launcher_script = format!(
+            "(sleep 0.25; touch {}) >/dev/null 2>&1 & exit 0",
+            ready_file.display()
+        );
+        let probe_script = format!("test -f {}", ready_file.display());
+        let spec = ServiceSpec {
+            healthcheck: ServiceHealthcheck {
+                command: Some(vec!["/bin/sh".into(), "-c".into(), probe_script]),
+                timeout_secs: 2,
+                ready_timeout_secs: 5,
+                ..Default::default()
+            },
+            command: Some(vec!["/bin/sh".into(), "-c".into(), launcher_script]),
+            ..Default::default()
+        };
+
+        let outcome = ensure_service_at("oneshot-svc", &spec, tmp.path(), &HashMap::new()).unwrap();
+        assert!(
+            matches!(outcome, EnsureOutcome::StartedExternal { .. }),
+            "expected StartedExternal, got {outcome:?}"
+        );
+        assert!(
+            !lease_path(tmp.path(), "oneshot-svc").exists(),
+            "one-shot launcher must not leave a summon lease"
+        );
+        assert_eq!(
+            stop_service_at("oneshot-svc", &spec, tmp.path(), &HashMap::new()).unwrap(),
+            StopOutcome::ExternallyManaged
+        );
+    }
+
+    #[test]
+    fn ensure_service_fails_closed_and_cleans_up_when_lease_write_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid_file = tmp.path().join("spawned.pid");
+        let ready_file = tmp.path().join("never-used.ready");
+        // 预先把租约目标路径占成目录，使 atomic_write rename 必然失败。
+        std::fs::create_dir_all(lease_path(tmp.path(), "lease-fail-svc")).unwrap();
+
+        let start_script = format!(
+            "echo $$ > {}; touch {}; exec sleep 60",
+            pid_file.display(),
+            ready_file.display()
+        );
+        let probe_script = format!("test -f {}", ready_file.display());
+        let spec = ServiceSpec {
+            healthcheck: ServiceHealthcheck {
+                command: Some(vec!["/bin/sh".into(), "-c".into(), probe_script]),
+                timeout_secs: 2,
+                ready_timeout_secs: 5,
+                ..Default::default()
+            },
+            command: Some(vec!["/bin/sh".into(), "-c".into(), start_script]),
+            ..Default::default()
+        };
+
+        let err =
+            ensure_service_at("lease-fail-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err();
+        assert!(
+            matches!(err, ServiceError::Io { .. }),
+            "expected Io error on lease write failure, got {err:?}"
+        );
+        if let Ok(raw_pid) = std::fs::read_to_string(&pid_file) {
+            if let Ok(pid) = raw_pid.trim().parse::<u32>() {
+                assert!(
+                    !pid_is_alive(pid),
+                    "spawned process pid={pid} must be terminated when lease write fails"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stop_and_ensure_refuse_to_signal_when_lease_pgid_or_service_name_mismatches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ready_file = tmp.path().join("tamper.ready");
+        let start_script = format!("touch {}; exec sleep 60", ready_file.display());
+        let probe_script = format!("test -f {}", ready_file.display());
+        let spec = ServiceSpec {
+            healthcheck: ServiceHealthcheck {
+                command: Some(vec!["/bin/sh".into(), "-c".into(), probe_script]),
+                timeout_secs: 2,
+                ready_timeout_secs: 5,
+                ..Default::default()
+            },
+            command: Some(vec!["/bin/sh".into(), "-c".into(), start_script]),
+            ..Default::default()
+        };
+
+        let pid = match ensure_service_at("tamper-svc", &spec, tmp.path(), &HashMap::new()).unwrap()
+        {
+            EnsureOutcome::Started { pid, .. } => pid,
+            other => panic!("expected Started, got {other:?}"),
+        };
+
+        // 篡改租约中的 pgid（使其与 pid 不一致），验证 stop 绝不发信号、保留租约并返回错误。
+        let lp = lease_path(tmp.path(), "tamper-svc");
+        let mut lease = read_lease(&lp).unwrap();
+        lease.pgid = pid.saturating_add(1);
+        write_lease(&lp, &lease).unwrap();
+
+        let err = stop_service_at("tamper-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err();
+        assert!(
+            matches!(err, ServiceError::LeaseOwnershipInvalid { .. }),
+            "expected LeaseOwnershipInvalid, got {err:?}"
+        );
+        assert!(
+            pid_is_alive(pid),
+            "process must not be signalled on tampered pgid"
+        );
+        assert!(
+            lp.exists(),
+            "tampered lease must be kept for operator inspection"
+        );
+
+        // 还原 pgid 以便正常清理测试进程。
+        lease.pgid = pid;
+        write_lease(&lp, &lease).unwrap();
+        assert_eq!(
+            stop_service_at("tamper-svc", &spec, tmp.path(), &HashMap::new()).unwrap(),
+            StopOutcome::Stopped { pid }
+        );
+    }
+
+    #[test]
+    fn shutdown_cancels_inflight_ephemeral_service_start_and_cleans_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid_file = tmp.path().join("ephem.pid");
+        let start_script = format!("echo $$ > {}; exec sleep 60", pid_file.display());
+        let spec = ServiceSpec {
+            healthcheck: ServiceHealthcheck {
+                // 永远不健康，确保启动方处于持锁等待就绪状态。
+                command: Some(vec!["/bin/sh".into(), "-c".into(), "exit 1".into()]),
+                timeout_secs: 1,
+                ready_timeout_secs: 30,
+                ..Default::default()
+            },
+            command: Some(vec!["/bin/sh".into(), "-c".into(), start_script]),
+            survive_daemon_restart: false,
+            ..Default::default()
+        };
+
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let dir_for_t1 = tmp.path().to_path_buf();
+        let spec_for_t1 = spec.clone();
+        let shutdown_for_t1 = std::sync::Arc::clone(&shutdown);
+        let t1 = std::thread::spawn(move || {
+            ensure_service_at_with_shutdown(
+                "ephem-inflight",
+                &spec_for_t1,
+                &dir_for_t1,
+                &HashMap::new(),
+                &shutdown_for_t1,
+            )
+        });
+
+        // 等到子进程真正起起来并落盘 PID。
+        let wait_deadline = Instant::now() + Duration::from_secs(5);
+        let spawned_pid = loop {
+            if let Ok(raw) = std::fs::read_to_string(&pid_file) {
+                if let Ok(p) = raw.trim().parse::<u32>() {
+                    break p;
+                }
+            }
+            assert!(
+                Instant::now() < wait_deadline,
+                "timed out waiting for spawned pid"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+
+        // 模拟 daemon 收到停机信号：立即取消在途临时服务并完成停机清理。
+        let stop_started = Instant::now();
+        stop_non_surviving_services_at_with_shutdown(tmp.path(), &shutdown);
+        let res = t1.join().unwrap();
+        assert!(
+            matches!(res, Err(ServiceError::ShuttingDown { .. })),
+            "expected ShuttingDown, got {res:?}"
+        );
+        assert!(
+            stop_started.elapsed() < Duration::from_secs(5),
+            "shutdown should abort in-flight ephemeral start promptly"
+        );
+        assert!(
+            !pid_is_alive(spawned_pid),
+            "in-flight ephemeral process pid={spawned_pid} must be terminated on shutdown"
+        );
+        assert!(
+            !lease_path(tmp.path(), "ephem-inflight").exists(),
+            "ephemeral lease must be cleaned up"
+        );
+    }
+
+    #[test]
+    fn tcp_probe_bounds_slow_dns_resolution_within_timeout() {
+        let started = Instant::now();
+        let (ok, detail) = probe_tcp_with_resolver(
+            "slow-synth.invalid:18999",
+            Duration::from_millis(150),
+            |_host, _port| {
+                std::thread::sleep(Duration::from_secs(3));
+                Ok(Vec::new())
+            },
+        );
+        let elapsed = started.elapsed();
+        assert!(!ok);
+        assert!(detail.contains("timed out"), "{detail}");
+        assert!(
+            elapsed < Duration::from_millis(800),
+            "slow DNS must be bounded by timeout budget, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn service_env_never_inherits_or_expands_summon_or_feishu_secrets() {
+        std::env::set_var("SUMMON_TEST_SVC_HANDOFF_TOKEN", "synth-handoff-token-77");
+        std::env::set_var("FEISHU_TEST_SVC_APP_SECRET", "synth-feishu-secret-77");
+        let mut spec = ServiceSpec::default();
+        spec.env.insert(
+            "RENAMED_HANDOFF".to_string(),
+            "${SUMMON_TEST_SVC_HANDOFF_TOKEN}".to_string(),
+        );
+        spec.env.insert(
+            "RENAMED_FEISHU".to_string(),
+            "${FEISHU_TEST_SVC_APP_SECRET}".to_string(),
+        );
+        spec.env.insert(
+            "RENAMED_GLOBAL_FEISHU".to_string(),
+            "${FEISHU_OTHER_APP_SECRET}".to_string(),
+        );
+        spec.env
+            .insert("ALLOWED_OPT".to_string(), "${SAFE_GLOBAL_VAR}".to_string());
+        let mut global = HashMap::new();
+        global.insert(
+            "FEISHU_OTHER_APP_SECRET".to_string(),
+            "synth-global-feishu-77".to_string(),
+        );
+        global.insert("SAFE_GLOBAL_VAR".to_string(), "ok-value".to_string());
+        let env_map: HashMap<String, String> =
+            build_service_env(&spec, &global).into_iter().collect();
+        std::env::remove_var("SUMMON_TEST_SVC_HANDOFF_TOKEN");
+        std::env::remove_var("FEISHU_TEST_SVC_APP_SECRET");
+        assert!(!env_map.contains_key("SUMMON_TEST_SVC_HANDOFF_TOKEN"));
+        assert!(!env_map.contains_key("FEISHU_TEST_SVC_APP_SECRET"));
+        assert!(!env_map.contains_key("RENAMED_HANDOFF"));
+        assert!(!env_map.contains_key("RENAMED_FEISHU"));
+        assert!(!env_map.contains_key("RENAMED_GLOBAL_FEISHU"));
+        assert_eq!(
+            env_map.get("ALLOWED_OPT").map(String::as_str),
+            Some("ok-value")
+        );
     }
 }

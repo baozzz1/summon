@@ -180,8 +180,9 @@ fn collect_config_service_env_entries(text: &str) -> Result<Option<Vec<RedactEnt
 fn redact_config_services(text: &str) -> Result<(String, Vec<Hidden>), RedactError> {
     let entries = match collect_config_service_env_entries(text) {
         Ok(Some(entries)) => entries,
-        Ok(None) => return Ok((text.to_string(), Vec::new())),
-        Err(()) => return fallback_config_services(text).map(|()| (text.to_string(), Vec::new())),
+        Ok(None) | Err(()) => {
+            return fallback_config_services(text).map(|()| (text.to_string(), Vec::new()))
+        }
     };
     let mut out = text.to_string();
     let mut hidden = Vec::new();
@@ -356,6 +357,25 @@ mod tests {
             redact(RawKind::Config, cfg).unwrap(),
             (cfg.to_string(), Vec::new())
         );
+    }
+
+    #[test]
+    fn config_services_with_utf8_bom_redacts_and_restores_round_trip() {
+        let raw = "\u{feff}services:\n  synth-svc:\n    env:\n      API_TOKEN: synth-bom-secret-01\n      PASS_REF: \"${UPSTREAM_TOKEN}\"\n    agent_env:\n      AGENT_KEY: synth-bom-secret-02\n";
+        let (redacted, hidden) = redact(RawKind::Config, raw).expect("BOM config must redact");
+        assert!(
+            !redacted.contains("synth-bom-secret-01"),
+            "BOM service env secret leaked: {redacted}"
+        );
+        assert!(
+            !redacted.contains("synth-bom-secret-02"),
+            "BOM service agent_env secret leaked: {redacted}"
+        );
+        assert!(redacted.contains("${UPSTREAM_TOKEN}"));
+        assert_eq!(hidden.len(), 2);
+        let restored =
+            restore(RawKind::Config, &redacted, &hidden).expect("BOM restore must succeed");
+        assert_eq!(restored, raw);
     }
 
     #[test]

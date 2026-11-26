@@ -295,7 +295,7 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 - `command`（可选 argv 列表，不经 shell）：探活失败时的兜底拉起命令；省略时只做探活，适合已由 launchd / systemd 托管的外部服务。可配 `working_dir`（支持 `~/`）、`env`（仅展开全局 `.env` 与进程环境，绝不读各 agent `.env`）、`survive_daemon_restart`（默认 `true`，daemon 重启时保留兜底进程；设为 `false` 则在 daemon 优雅停机时一并清理）。
 - `agent_env`（可选键值表）：注入给所有 `runtime.requires` 声明了该服务的 agent，优先级低于 agent 自己的 `runtime.env`，且不允许覆盖 `SUMMON_*` 等运行时保留变量；支持 `${VAR}` 引用（按 agent `.env` → 全局 `.env` → 进程环境展开）。
 
-健康服务不会被重复拉起；外部托管服务永远不会被 `summon services stop` 或 daemon 停机误杀。修改 `services` 或 `runtime.requires` 后下一轮自动生效。
+健康服务不会被重复拉起；若 `command` 是一次性启动命令（如 `launchctl kickstart` / `systemctl --user start`）并以 0 退出，summon 会继续等待探活就绪并按外部托管服务对待；外部托管服务永远不会被 `summon services stop` 或 daemon 停机误杀。修改 `healthcheck`、`command` 或 `runtime.requires` 后下一轮生效；`agent_env` 在 agent CLI 进程启动时注入，常驻 tmux 会话需新建或重启会话后生效。
 
 自动升级 `upgrade`:`auto: false`(默认关)、`check_interval_hours: 6`、`min_age_hours: 2`(新版发布满这么久
 才采用)、`idle_minutes: 10`(整机连续空闲这么久才换代)、`range: minor`(`patch` 只跟同一 x.y 的补丁版本;

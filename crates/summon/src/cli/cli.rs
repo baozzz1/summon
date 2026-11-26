@@ -1162,7 +1162,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Cmd::CommentReader { .. } => unreachable!("comment reader handled before config"),
         Cmd::RemoteTools { action } => crate::remote_tools::run(&cfg, action),
-        Cmd::Services { action } => services_cmd(&cfg, action),
+        Cmd::Services { action } => services_cmd(action),
         Cmd::ProgramStatusRun { .. } => unreachable!("program status handled before config"),
         Cmd::InstallStamp { .. } => unreachable!("install stamp handled before config"),
         Cmd::Agents { action } => agents_cmd(&cfg, action),
@@ -7024,42 +7024,46 @@ fn service_required_by_map(
 fn format_service_status_line(status: &crate::runtime::services::ServiceStatus) -> String {
     use crate::runtime::services::ServiceOwnership;
     let mode = if status.has_command {
-        "probe+fallback"
+        summon_i18n::text!("services.cli.mode_fallback")
     } else {
-        "probe-only"
+        summon_i18n::text!("services.cli.mode_probe_only")
     };
     let req = if status.required_by.is_empty() {
         String::new()
     } else {
-        format!(" | requires: {}", status.required_by.join(","))
+        summon_i18n::format!(
+            "services.cli.requires_prefix",
+            agents = status.required_by.join(",")
+        )
     };
     if !status.validation_issues.is_empty() {
+        let invalid = summon_i18n::text!("services.cli.status_invalid");
         return format!(
-            "  {:<22} : INVALID ({}) [{mode}]{req}",
+            "  {:<22} : {invalid} ({}) [{mode}]{req}",
             status.name,
             status.validation_issues.join("; ")
         );
     }
     let probe = status.probe.as_ref();
     let health = if probe.is_some_and(|p| p.healthy) {
-        "OK"
+        summon_i18n::text!("services.cli.status_ok")
     } else {
-        "UNHEALTHY"
+        summon_i18n::text!("services.cli.status_unhealthy")
     };
     let owner = match &status.ownership {
-        ServiceOwnership::External => "external".to_string(),
+        ServiceOwnership::External => summon_i18n::text!("services.cli.owner_external").to_string(),
         ServiceOwnership::SummonManaged {
             pid,
             survive_daemon_restart,
             ..
         } => {
             if *survive_daemon_restart {
-                format!("summon pid={pid}")
+                summon_i18n::format!("services.cli.owner_summon", pid = pid)
             } else {
-                format!("summon pid={pid} (ephemeral)")
+                summon_i18n::format!("services.cli.owner_summon_ephemeral", pid = pid)
             }
         }
-        ServiceOwnership::Stopped => "stopped".to_string(),
+        ServiceOwnership::Stopped => summon_i18n::text!("services.cli.owner_stopped").to_string(),
     };
     let detail = probe.map(|p| p.detail.as_str()).unwrap_or("");
     format!(
@@ -7078,7 +7082,10 @@ fn format_services_doctor_section(
     if cfg.services.is_empty() && findings.is_empty() {
         return String::new();
     }
-    let mut out = String::from("services        :\n");
+    let mut out = String::from(
+        "services        :
+",
+    );
     for finding in &findings {
         out.push_str(&finding.doctor_line());
         out.push('\n');
@@ -7102,10 +7109,21 @@ fn format_services_doctor_section(
     out
 }
 
-fn services_cmd(cfg: &Config, action: Option<ServicesAction>) -> anyhow::Result<()> {
+fn services_cmd(action: Option<ServicesAction>) -> anyhow::Result<()> {
+    // 严格解析 config.yaml：坏配置返回非零，不静默回落成空服务表。
+    let cfg = Config::load_strict().map_err(|e| anyhow::anyhow!("{e}"))?;
     let services_dir = crate::runtime::services::services_run_dir();
     let global_env =
         crate::runtime::services::global_dotenv(Some(&summon_core::config::config_path()));
+    services_cmd_with(&cfg, action, &services_dir, &global_env)
+}
+
+fn services_cmd_with(
+    cfg: &Config,
+    action: Option<ServicesAction>,
+    services_dir: &std::path::Path,
+    global_env: &std::collections::HashMap<String, String>,
+) -> anyhow::Result<()> {
     let agents_storage = Registry::load_tolerant(&cfg.agents_dir)
         .ok()
         .map(|(reg, _)| reg);
@@ -7117,7 +7135,7 @@ fn services_cmd(cfg: &Config, action: Option<ServicesAction>) -> anyhow::Result<
 
     match action.unwrap_or(ServicesAction::Status { name: None }) {
         ServicesAction::Status { name } => {
-            if cfg.services.is_empty() {
+            if name.is_none() && cfg.services.is_empty() {
                 println!("{}", summon_i18n::text!("services.cli.none_configured"));
                 return Ok(());
             }
@@ -7127,8 +7145,8 @@ fn services_cmd(cfg: &Config, action: Option<ServicesAction>) -> anyhow::Result<
                 let status = crate::runtime::services::service_status_at(
                     &svc,
                     spec,
-                    &services_dir,
-                    &global_env,
+                    services_dir,
+                    global_env,
                     req_map.get(&svc).cloned().unwrap_or_default(),
                 );
                 println!("{}", format_service_status_line(&status));
@@ -7136,7 +7154,7 @@ fn services_cmd(cfg: &Config, action: Option<ServicesAction>) -> anyhow::Result<
             Ok(())
         }
         ServicesAction::Check { name } => {
-            if cfg.services.is_empty() {
+            if name.is_none() && cfg.services.is_empty() {
                 println!("{}", summon_i18n::text!("services.cli.none_configured"));
                 return Ok(());
             }
@@ -7147,8 +7165,8 @@ fn services_cmd(cfg: &Config, action: Option<ServicesAction>) -> anyhow::Result<
                 let status = crate::runtime::services::service_status_at(
                     &svc,
                     spec,
-                    &services_dir,
-                    &global_env,
+                    services_dir,
+                    global_env,
                     req_map.get(&svc).cloned().unwrap_or_default(),
                 );
                 println!("{}", format_service_status_line(&status));
@@ -7159,7 +7177,10 @@ fn services_cmd(cfg: &Config, action: Option<ServicesAction>) -> anyhow::Result<
                 }
             }
             if failed > 0 {
-                anyhow::bail!("{failed} service(s) unhealthy or invalid");
+                anyhow::bail!(
+                    "{}",
+                    summon_i18n::format!("services.cli.check_failed_summary", count = failed)
+                );
             }
             Ok(())
         }
@@ -7173,8 +7194,8 @@ fn services_cmd(cfg: &Config, action: Option<ServicesAction>) -> anyhow::Result<
             match crate::runtime::services::ensure_service_at(
                 &name,
                 spec,
-                &services_dir,
-                &global_env,
+                services_dir,
+                global_env,
             )? {
                 crate::runtime::services::EnsureOutcome::AlreadyHealthy { probe } => {
                     println!(
@@ -7198,7 +7219,22 @@ fn services_cmd(cfg: &Config, action: Option<ServicesAction>) -> anyhow::Result<
                             name = name,
                             pid = pid,
                             detail = probe.detail,
-                            log = log_path.display()
+                            log = summon_core::registry::collapse_tilde(
+                                &log_path.display().to_string()
+                            )
+                        )
+                    );
+                }
+                crate::runtime::services::EnsureOutcome::StartedExternal { probe, log_path } => {
+                    println!(
+                        "{}",
+                        summon_i18n::format!(
+                            "services.cli.started_external",
+                            name = name,
+                            detail = probe.detail,
+                            log = summon_core::registry::collapse_tilde(
+                                &log_path.display().to_string()
+                            )
                         )
                     );
                 }
@@ -7212,12 +7248,8 @@ fn services_cmd(cfg: &Config, action: Option<ServicesAction>) -> anyhow::Result<
                     summon_i18n::format!("services.cli.not_found", name = name)
                 );
             };
-            match crate::runtime::services::stop_service_at(
-                &name,
-                spec,
-                &services_dir,
-                &global_env,
-            )? {
+            match crate::runtime::services::stop_service_at(&name, spec, services_dir, global_env)?
+            {
                 crate::runtime::services::StopOutcome::Stopped { pid } => {
                     println!(
                         "{}",
@@ -10527,7 +10559,10 @@ mod config_field_effect_tests {
 
 #[cfg(test)]
 mod services_cli_tests {
-    use super::{format_services_doctor_section, Cli, Cmd, ServicesAction};
+    use super::{
+        format_service_status_line, format_services_doctor_section, services_cmd_with, Cli, Cmd,
+        ServicesAction,
+    };
     use clap::Parser;
     use std::collections::HashMap;
     use summon_core::config::Config;
@@ -10610,5 +10645,58 @@ mod services_cli_tests {
             "missing dangling service: {out}"
         );
         assert!(out.contains("bot"), "missing referencing agent: {out}");
+    }
+
+    #[test]
+    fn services_check_and_status_reject_missing_name_even_when_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let err = services_cmd_with(
+            &cfg,
+            Some(ServicesAction::Check {
+                name: Some("missing-svc".into()),
+            }),
+            tmp.path(),
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("missing-svc"), "{err}");
+
+        let err_status = services_cmd_with(
+            &cfg,
+            Some(ServicesAction::Status {
+                name: Some("missing-svc".into()),
+            }),
+            tmp.path(),
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(
+            err_status.to_string().contains("missing-svc"),
+            "{err_status}"
+        );
+    }
+
+    #[test]
+    fn service_status_line_uses_localized_chinese_labels() {
+        let status = crate::runtime::services::ServiceStatus {
+            name: "demo-svc".into(),
+            has_command: false,
+            validation_issues: Vec::new(),
+            probe: Some(crate::runtime::services::ProbeResult {
+                healthy: true,
+                detail: "HTTP 200".into(),
+                elapsed_ms: 2,
+            }),
+            ownership: crate::runtime::services::ServiceOwnership::External,
+            required_by: vec!["agent-a".into()],
+        };
+        let line = summon_core::i18n::with_language(summon_core::i18n::Language::Chinese, || {
+            format_service_status_line(&status)
+        });
+        assert!(line.contains("正常"), "{line}");
+        assert!(line.contains("外部托管"), "{line}");
+        assert!(line.contains("仅探活"), "{line}");
+        assert!(line.contains("依赖方：agent-a"), "{line}");
     }
 }
