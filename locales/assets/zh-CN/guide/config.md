@@ -290,11 +290,10 @@ CLI 使用 `summon comments list` 查看完整任务 ID，再运行 `summon comm
 `blocklist` 排除 chat；`aliases` 设称呼；`owner_open_id` 绑定发起者，`lark_profile` 选择身份配置。
 这份指南只说明配置；身份能力仍受部署环境和用户授权约束。
 
-前置依赖服务 `services`：用于把多个 agent 共享的本机守护服务（例如本地代理、桥接器、MCP 服务）从具体 CLI 里抽离出来。每项键名为服务名（`[A-Za-z0-9_-]`），常用字段：
-- `healthcheck`（必填，三选一）：`http`（期望 2xx，不跟重定向）、`tcp`（`host:port`）或 `command`（直接 argv 列表，不经 shell），配 `timeout_secs`（默认 3）。
-- `command`（可选 argv 列表）：探活失败时的兜底拉起命令；省略时只做探活，适合已由 launchd / systemd 托管的外部服务。可配 `working_dir`、`env`（仅展开全局 `.env`，绝不读各 agent `.env`）、`startup_timeout_secs`（默认 15）、`survive_daemon_restart`（默认 `true`，daemon 重启时保留兜底进程；设为 `false` 则在 daemon 优雅停机时一并清理）。
-- `agent_env`（可选键值表）：注入给所有 `runtime.requires` 声明了该服务的 agent，优先级低于 agent 自己的 `runtime.env`，且不允许覆盖 `SUMMON_*` 等运行时保留变量；支持 `${VAR}` 引用。
-- `description`（可选）：在 `summon services` 与 `summon doctor` 里显示用途说明。
+前置依赖服务 `services`：用于把多个 agent 共享的本机守护服务（例如本地代理、桥接器、MCP 服务）从具体 CLI 里抽离出来。每项键名为服务名（1~48 个 `[A-Za-z0-9_-]`），字段：
+- `healthcheck`（必填，`http` / `tcp` / `command` 三选一）：`http`（期望 2xx，不跟重定向，回环地址绕过代理）、`tcp`（`host:port` 或 `[ipv6]:port`）或 `command`（直接 argv 列表，不经 shell，退出码 0 视为健康）；另支持 `timeout_secs`（单次探测超时，默认 2，范围 1..=30）与 `ready_timeout_secs`（兜底拉起等待就绪总超时，默认 15，范围 1..=120）。
+- `command`（可选 argv 列表，不经 shell）：探活失败时的兜底拉起命令；省略时只做探活，适合已由 launchd / systemd 托管的外部服务。可配 `working_dir`（支持 `~/`）、`env`（仅展开全局 `.env` 与进程环境，绝不读各 agent `.env`）、`survive_daemon_restart`（默认 `true`，daemon 重启时保留兜底进程；设为 `false` 则在 daemon 优雅停机时一并清理）。
+- `agent_env`（可选键值表）：注入给所有 `runtime.requires` 声明了该服务的 agent，优先级低于 agent 自己的 `runtime.env`，且不允许覆盖 `SUMMON_*` 等运行时保留变量；支持 `${VAR}` 引用（按 agent `.env` → 全局 `.env` → 进程环境展开）。
 
 健康服务不会被重复拉起；外部托管服务永远不会被 `summon services stop` 或 daemon 停机误杀。修改 `services` 或 `runtime.requires` 后下一轮自动生效。
 

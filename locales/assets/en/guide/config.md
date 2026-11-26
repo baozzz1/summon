@@ -324,11 +324,10 @@ Chinese phrases; invite_verbs is /invite. Configure trigger strings in join_verb
 create_verbs. blocklist excludes chats; aliases adds names; owner_open_id binds requester;
 lark_profile selects login identity. Deployment/user authorization still bounds capabilities.
 
-Prerequisite services `services`: declare machine-shared local services (such as local proxies, bridges, or MCP servers) independently of any single agent CLI. Each key is a service name (`[A-Za-z0-9_-]`):
-- `healthcheck` (required, choose exactly one): `http` (expects 2xx, no redirects), `tcp` (`host:port`), or `command` (direct argv list, no shell), plus `timeout_secs` (default 3).
-- `command` (optional argv list): fallback startup command when the probe fails; omit for probe-only services managed externally by launchd/systemd. Supports `working_dir`, `env` (expanded from global `.env` only, never per-agent `.env`), `startup_timeout_secs` (default 15), and `survive_daemon_restart` (default `true`; set `false` to stop on graceful daemon shutdown).
-- `agent_env` (optional map): injected into agents that list the service in `runtime.requires`, with lower precedence than the agent's own `runtime.env`; cannot override runtime-owned `SUMMON_*` keys. Supports `${VAR}` references.
-- `description` (optional): short label shown in `summon services` and `summon doctor`.
+Prerequisite services `services`: declare machine-shared local services (such as local proxies, bridges, or MCP servers) independently of any single agent CLI. Each key is a service name (1-48 chars in `[A-Za-z0-9_-]`):
+- `healthcheck` (required, choose exactly one of `http`, `tcp`, or `command`): `http` (expects 2xx, no redirects, loopback bypasses proxy), `tcp` (`host:port` or `[ipv6]:port`), or `command` (direct argv list, no shell, exit 0 = healthy); plus `timeout_secs` (per-probe timeout, default 2, range 1..=30) and `ready_timeout_secs` (fallback startup readiness timeout, default 15, range 1..=120).
+- `command` (optional argv list, no shell): fallback startup command when the probe fails; omit for probe-only services managed externally by launchd/systemd. Supports `working_dir` (`~/` supported), `env` (expanded from global `.env` and process env only, never per-agent `.env`), and `survive_daemon_restart` (default `true`; set `false` to stop summon-started fallback processes on graceful daemon shutdown).
+- `agent_env` (optional map): injected into agents that list the service in `runtime.requires`, with lower precedence than the agent's own `runtime.env`; cannot override runtime-owned `SUMMON_*` keys. Supports `${VAR}` references (resolved from agent `.env` -> global `.env` -> process env).
 
 Already-healthy services are never restarted, and externally managed services are never stopped by `summon services stop` or daemon shutdown. Changes to `services` or `runtime.requires` take effect on the next turn.
 
