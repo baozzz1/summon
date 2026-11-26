@@ -10,6 +10,10 @@
 
 - 支持全局前置依赖 / 托管服务抽象：可在 `~/.summon/config.yaml` 的 `services` 中声明共享本地服务（支持 `http` / `tcp` / `command` 健康检查、可选兜底拉起 `command`、`survive_daemon_restart` 生命周期控制，以及向依赖 agent 注入低优先级的 `agent_env`），并在 `agent.yaml` 中用 `runtime.requires` 声明依赖。每轮开跑前自动探活并按需单飞兜底拉起，不就绪时 fail-closed 报错；外部托管服务只探活不误杀。配套新增 `summon services [status|check|start|stop]`、`summon doctor` 服务状态段与配置校验，以及 Web 控制台对 `services.<name>.env` / `agent_env` 字面值的自动脱敏。
 
+### 修复
+
+- Claude Code 2.1.332 起 `/model` 切换确认框（「Switch model?」）顶线改画 `▔`，菜单卡不再误标「对话框开头不在屏幕上」：卡片显示完整问句，可以直接在飞书里选。
+
 ## 0.7.5 · 2026-11-26
 
 ### 修复

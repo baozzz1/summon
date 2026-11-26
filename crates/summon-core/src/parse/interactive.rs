@@ -224,6 +224,8 @@ const RAW_TAIL_LINES: usize = 20;
 /// 下面跟 1~n 行缩进描述,描述行不是编号选项,块扩展须跨过它们去找下一个选项,否则只收得到
 /// 锚点那一个选项、凑不够 ≥2 而漏检。
 const MAX_INTER_OPTION_GAP: usize = 6;
+/// 以 `▔` 为顶线的切换确认框标题(claude 2.1.332)。
+const SWITCH_CONFIRM_TITLES: [&str; 2] = ["Switch model?", "Change effort level?"];
 /// 对话框开头不在屏上时,标题第一行的说明。
 const TITLE_CUT_MARKER: &str = summon_i18n::source!("r67d6e43803");
 /// 选项块之下最多看几个非空行找对话框页脚。最后一个选项可以带几行描述(AskUserQuestion),页脚
@@ -371,14 +373,26 @@ fn menu_title(lines: &[&str], start: usize, footer: bool) -> String {
     }
 }
 
-/// 对话框顶线:选项上方最近的一条满宽 `─`,且确实属于这个对话框。输入框的上下边框也是这种横线,
-/// 靠它框住的输入行认出来 —— 上边框下一行就是输入行,下边框与上边框之间夹着输入行;顶线到选项之间
-/// 只有对话框自己的标题与正文,再出现输入行就说明这条横线属于更早的转录。
+/// 对话框顶线:选项上方最近的一条满宽 `─` 或 `▔`,且确实属于这个对话框。顶线到选项之间只有对话框
+/// 自己的标题与正文,再出现输入行就说明这条横线属于更早的转录。
+///
+/// `▔` 只画 `/model`、`/effort` 切换确认框的顶线。转录与文件内容里也可能出现满宽 `▔`,所以只有
+/// 顶线下首个非空行是这两种框的标题、第一个选项是「Yes, switch to …」时才认;其它对话框(工具授权)
+/// 找不到自己的顶线时仍按开头不在屏上处理。判定只看屏幕文本,证明不了框的来源:模型自己弹的
+/// 选择框能写出同样的标题与选项,点下去也只是在它自己列出的选项里选。`─` 还是输入框的上下边框,靠它框住的输入行认出来 ——
+/// 上边框下一行就是输入行,下边框与上边框之间夹着输入行。
 ///
 /// 顶线之上是什么不参与判断:用户发一条消息、claude 直接弹框时,紧贴顶线的就是那条 prompt 回显。
 fn dialog_top(lines: &[&str], start: usize) -> Option<usize> {
-    let rule = lines[..start].iter().rposition(|l| is_dialog_rule(l))?;
+    let rule = lines[..start]
+        .iter()
+        .rposition(|l| is_dialog_rule(l) || is_dialog_top_bar(l))?;
     let has_prompt = |block: &[&str]| block.iter().any(|l| prompt_rest(l).is_some());
+    if is_dialog_top_bar(lines[rule]) {
+        return (is_switch_confirm(&lines[rule + 1..start], lines[start])
+            && !has_prompt(&lines[rule + 1..start]))
+        .then_some(rule);
+    }
     let input_top = rule + 1 < start && prompt_rest(lines[rule + 1]).is_some();
     let input_bottom = lines[..rule]
         .iter()
@@ -402,8 +416,28 @@ fn has_dialog_footer(below: &[&str]) -> bool {
 }
 
 fn is_dialog_rule(line: &str) -> bool {
+    is_full_rule(line, '─')
+}
+
+fn is_dialog_top_bar(line: &str) -> bool {
+    is_full_rule(line, '▔')
+}
+
+/// `▔` 顶线之下是不是 `/model`、`/effort` 的切换确认框:第一行是它的标题,第一个选项是切换。
+fn is_switch_confirm(body: &[&str], first_option: &str) -> bool {
+    let titled = body
+        .iter()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .is_some_and(|title| SWITCH_CONFIRM_TITLES.contains(&title));
+    let switches = parse_numbered(strip_cursor(first_option).1)
+        .is_some_and(|(_, label)| label.starts_with("Yes, switch to "));
+    titled && switches
+}
+
+fn is_full_rule(line: &str, stroke: char) -> bool {
     let line = line.trim_end();
-    line.chars().count() >= DIALOG_RULE_MIN && line.chars().all(|c| c == '─')
+    line.chars().count() >= DIALOG_RULE_MIN && line.chars().all(|c| c == stroke)
 }
 
 /// 屏幕行整理成一段可读的块:去行尾空白、去首尾空行、连续空行并成一行、整体去掉公共的前导空格。
@@ -711,6 +745,83 @@ This conversation is cached for the current effort level. Switching to xhigh mea
         );
         assert!(st.title.contains("Change effort level?"));
         assert!(st.raw.contains("❯ 1. Yes"));
+    }
+
+    /// claude 2.1.332 `/model` 切换确认:顶线是 `▔`,不是 `─`。顶线上方的回显与输入行不影响取标题。
+    #[test]
+    fn switch_model_dialog_with_upper_bar_top_is_not_cut() {
+        let bar = "▔".repeat(120);
+        let pane = format!(
+            "\
+❯ reply with just: hi
+
+⏺ hi
+
+✻ Brewed for 3s · done 3:21 PM
+
+{bar}
+  Switch model?
+
+  Your next response will be slower and use more tokens
+
+  This conversation is cached for the current model. Switching to Sonnet 5.5 means the full history gets re-read.
+
+  ❯ 1. Yes, switch to Sonnet 5.5
+    2. No, go back
+
+  Enter to confirm · Esc to cancel
+"
+        );
+        let st = awaiting_choice(&pane).expect("应识别为等人选的对话框");
+        assert!(!title_is_cut(&st.title), "顶线在屏上,标题不该标成缺开头");
+        assert!(st.title.starts_with("Switch model?"), "{}", st.title);
+        assert!(!st.title.contains("Brewed"), "顶线上方的转录不进标题");
+        assert_eq!(st.options.len(), 2);
+        assert_eq!(st.options[0].label, "Yes, switch to Sonnet 5.5");
+    }
+
+    /// `▔` 顶线与选项之间夹着输入行时,这条横线属于更早的转录,不能当成这个对话框的顶线。
+    #[test]
+    fn upper_bar_above_a_prompt_line_is_not_the_dialog_top() {
+        let bar = "▔".repeat(40);
+        let pane = format!(
+            "{bar}\n  Old dialog\n❯ typed later\n  Question?\n  ❯ 1. Yes\n    2. No\n\n  Esc to cancel\n"
+        );
+        let st = awaiting_choice(&pane).expect("仍是等人选的菜单");
+        assert!(title_is_cut(&st.title));
+    }
+
+    /// 转录里的 `▔` 行不能充当开头不在屏上的授权框的顶线。
+    #[test]
+    fn upper_bar_in_transcript_does_not_complete_a_cut_permission_dialog() {
+        let bar = "▔".repeat(60);
+        let pane = format!(
+            "{bar}\nsome tool output text\nmore\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend\n"
+        );
+        let st = awaiting_choice(&pane).expect("仍是等人选的菜单");
+        assert!(title_is_cut(&st.title), "{}", st.title);
+    }
+
+    /// 转录里伪造的切换框标题配上授权框的选项,也不认作顶线。
+    #[test]
+    fn forged_switch_title_above_permission_options_is_still_cut() {
+        let bar = "▔".repeat(60);
+        let pane = format!(
+            "{bar}\n  Switch model?\n  rm -rf something\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend\n"
+        );
+        let st = awaiting_choice(&pane).expect("仍是等人选的菜单");
+        assert!(title_is_cut(&st.title), "{}", st.title);
+    }
+
+    /// 顶线下第一行不是切换框标题时,哪怕选项是切换也不认。
+    #[test]
+    fn upper_bar_without_switch_title_is_not_the_dialog_top() {
+        let bar = "▔".repeat(60);
+        let pane = format!(
+            "{bar}\n  banner text\n  Switch model?\n\n  ❯ 1. Yes, switch to Sonnet 5.5\n    2. No, go back\n\n  Enter to confirm · Esc to cancel\n"
+        );
+        let st = awaiting_choice(&pane).expect("仍是等人选的菜单");
+        assert!(title_is_cut(&st.title), "{}", st.title);
     }
 
     /// 正常输出里的编号列表(无 `❯` 光标)绝不能误判成菜单。
