@@ -7090,6 +7090,17 @@ fn format_services_doctor_section(
         out.push_str(&finding.doctor_line());
         out.push('\n');
     }
+    let mut blocked_keys = crate::runtime::services::blocked_identity_keys_for_config(cfg);
+    for a in agents {
+        if let Some(f) = a.feishu.as_ref() {
+            if let Some(k) = f.app_id_env.as_deref() {
+                blocked_keys.insert(k.to_string());
+            }
+            if let Some(k) = f.app_secret_env.as_deref() {
+                blocked_keys.insert(k.to_string());
+            }
+        }
+    }
     let req_map = service_required_by_map(agents);
     let mut names: Vec<&String> = cfg.services.keys().collect();
     names.sort();
@@ -7101,6 +7112,7 @@ fn format_services_doctor_section(
             spec,
             services_dir,
             global_env,
+            &blocked_keys,
             required_by,
         );
         out.push_str(&format_service_status_line(&status));
@@ -7132,6 +7144,7 @@ fn services_cmd_with(
         .map(|reg| reg.routable())
         .unwrap_or_default();
     let req_map = service_required_by_map(&agent_refs);
+    let blocked_keys = crate::runtime::services::blocked_identity_keys_for_config(cfg);
 
     match action.unwrap_or(ServicesAction::Status { name: None }) {
         ServicesAction::Status { name } => {
@@ -7147,6 +7160,7 @@ fn services_cmd_with(
                     spec,
                     services_dir,
                     global_env,
+                    &blocked_keys,
                     req_map.get(&svc).cloned().unwrap_or_default(),
                 );
                 println!("{}", format_service_status_line(&status));
@@ -7167,6 +7181,7 @@ fn services_cmd_with(
                     spec,
                     services_dir,
                     global_env,
+                    &blocked_keys,
                     req_map.get(&svc).cloned().unwrap_or_default(),
                 );
                 println!("{}", format_service_status_line(&status));
@@ -7196,6 +7211,7 @@ fn services_cmd_with(
                 spec,
                 services_dir,
                 global_env,
+                &blocked_keys,
             )? {
                 crate::runtime::services::EnsureOutcome::AlreadyHealthy { probe } => {
                     println!(
@@ -7248,8 +7264,13 @@ fn services_cmd_with(
                     summon_i18n::format!("services.cli.not_found", name = name)
                 );
             };
-            match crate::runtime::services::stop_service_at(&name, spec, services_dir, global_env)?
-            {
+            match crate::runtime::services::stop_service_at(
+                &name,
+                spec,
+                services_dir,
+                global_env,
+                &blocked_keys,
+            )? {
                 crate::runtime::services::StopOutcome::Stopped { pid } => {
                     println!(
                         "{}",
@@ -10698,5 +10719,71 @@ mod services_cli_tests {
         assert!(line.contains("外部托管"), "{line}");
         assert!(line.contains("仅探活"), "{line}");
         assert!(line.contains("依赖方：agent-a"), "{line}");
+    }
+
+    #[test]
+    fn services_cmd_blocks_custom_agent_secret_from_non_default_agents_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let custom_agents_dir = tmp.path().join("custom-agents");
+        let bot_dir = custom_agents_dir.join("bot-a");
+        std::fs::create_dir_all(&bot_dir).unwrap();
+        std::fs::write(
+            bot_dir.join("agent.yaml"),
+            r#"name: bot-a
+runtime:
+  cli: claude
+feishu:
+  app_id_env: CLI_CUSTOM_BOT_ID
+  app_secret_env: CLI_CUSTOM_BOT_SECRET
+"#,
+        )
+        .unwrap();
+
+        let dump = tmp.path().join("cli_probe_env.txt");
+        let mut env = std::collections::HashMap::new();
+        env.insert("LEAKED".into(), "${CLI_CUSTOM_BOT_SECRET}".into());
+        env.insert("ALLOWED".into(), "${CLI_SAFE_OPT}".into());
+
+        let mut cfg = summon_core::config::Config {
+            agents_dir: custom_agents_dir,
+            ..Default::default()
+        };
+        cfg.services.insert(
+            "probe-svc".into(),
+            summon_core::services::ServiceSpec {
+                healthcheck: summon_core::services::ServiceHealthcheck {
+                    command: Some(vec![
+                        "sh".into(),
+                        "-c".into(),
+                        format!(
+                            "printf 'LEAK=%s;OK=%s\n' \"$LEAKED\" \"$ALLOWED\" > '{}'",
+                            dump.display()
+                        ),
+                    ]),
+                    timeout_secs: 3,
+                    ..Default::default()
+                },
+                env,
+                ..Default::default()
+            },
+        );
+
+        let mut global_env = std::collections::HashMap::new();
+        global_env.insert("CLI_CUSTOM_BOT_SECRET".into(), "synth-cli-secret-88".into());
+        global_env.insert("CLI_SAFE_OPT".into(), "ok-88".into());
+
+        let services_dir = tmp.path().join("isolated-run").join("services");
+        services_cmd_with(
+            &cfg,
+            Some(ServicesAction::Check {
+                name: Some("probe-svc".into()),
+            }),
+            &services_dir,
+            &global_env,
+        )
+        .unwrap();
+
+        let out = std::fs::read_to_string(&dump).unwrap();
+        assert_eq!(out.trim(), "LEAK=;OK=ok-88");
     }
 }

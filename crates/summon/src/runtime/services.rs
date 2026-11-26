@@ -363,14 +363,30 @@ fn append_service_lifecycle_log(path: &Path, line: &str) {
     }
 }
 
-/// 按 `services_dir`（`<summon_root>/run/services`）定位对应的 `agents` 目录并收集全部在册飞书凭据键名。
-fn blocked_identity_keys_for_services_dir(services_dir: Option<&Path>) -> HashSet<String> {
-    let agents_dir = services_dir
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .map(|root| root.join("agents"))
-        .unwrap_or_else(|| summon_home().join("agents"));
-    crate::runtime::daemon::registered_feishu_identity_keys(&agents_dir)
+fn expand_path_tilde(path: &Path) -> PathBuf {
+    path.to_str()
+        .map(|s| PathBuf::from(expand_tilde(s)))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+/// 从实际配置的 `agents_dir`（以及可选的调用方额外目录）收集全部在册飞书凭据键名（含非 `FEISHU_*` 自定义键名）。
+pub(crate) fn blocked_identity_keys_for_agents_dirs(agents_dirs: &[&Path]) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    let mut visited = HashSet::new();
+    for dir in agents_dirs {
+        let expanded = expand_path_tilde(dir);
+        if visited.insert(expanded.clone()) {
+            keys.extend(crate::runtime::daemon::registered_feishu_identity_keys(
+                &expanded,
+            ));
+        }
+    }
+    keys
+}
+
+/// 从全局配置指定的 `cfg.agents_dir` 收集全部在册飞书凭据键名。
+pub(crate) fn blocked_identity_keys_for_config(cfg: &Config) -> HashSet<String> {
+    blocked_identity_keys_for_agents_dirs(&[cfg.agents_dir.as_path()])
 }
 
 /// 构造隔离后的服务进程环境：
@@ -441,7 +457,7 @@ pub(crate) fn probe_service(
     spec: &ServiceSpec,
     global_env: &HashMap<String, String>,
 ) -> ProbeResult {
-    let blocked = blocked_identity_keys_for_services_dir(None);
+    let blocked = HashSet::new();
     probe_service_with_timeout(spec, global_env, &blocked, spec.healthcheck.timeout()).0
 }
 
@@ -994,12 +1010,14 @@ pub(crate) fn ensure_service_at(
     spec: &ServiceSpec,
     services_dir: &Path,
     global_env: &HashMap<String, String>,
+    blocked_identity_keys: &HashSet<String>,
 ) -> Result<EnsureOutcome, ServiceError> {
     ensure_service_at_inner(
         name,
         spec,
         services_dir,
         global_env,
+        blocked_identity_keys,
         &SHUTDOWN_COORDINATOR,
         write_lease,
     )
@@ -1010,6 +1028,7 @@ fn ensure_service_at_inner<W>(
     spec: &ServiceSpec,
     services_dir: &Path,
     global_env: &HashMap<String, String>,
+    blocked_keys: &HashSet<String>,
     coordinator: &ShutdownCoordinator,
     lease_writer: W,
 ) -> Result<EnsureOutcome, ServiceError>
@@ -1024,12 +1043,11 @@ where
         });
     }
 
-    let blocked_keys = blocked_identity_keys_for_services_dir(Some(services_dir));
     let kind_label = probe_kind_label(spec);
 
     // 热路径无锁快速探活：服务已健康（launchd/systemd/已拉起）时零锁开销立即放行。
     let (initial, _) =
-        probe_service_with_timeout(spec, global_env, &blocked_keys, spec.healthcheck.timeout());
+        probe_service_with_timeout(spec, global_env, blocked_keys, spec.healthcheck.timeout());
     if initial.healthy {
         return Ok(EnsureOutcome::AlreadyHealthy { probe: initial });
     }
@@ -1054,7 +1072,7 @@ where
 
     // 拿锁后双检：等待锁期间可能已被并发轮次或外部拉起就绪。
     let (recheck, mut last_probe_category) =
-        probe_service_with_timeout(spec, global_env, &blocked_keys, spec.healthcheck.timeout());
+        probe_service_with_timeout(spec, global_env, blocked_keys, spec.healthcheck.timeout());
     if recheck.healthy {
         return Ok(EnsureOutcome::AlreadyHealthy { probe: recheck });
     }
@@ -1121,7 +1139,7 @@ where
     let mut cmd = Command::new(&program);
     cmd.args(&argv[1..])
         .env_clear()
-        .envs(build_service_env(spec, global_env, &blocked_keys))
+        .envs(build_service_env(spec, global_env, blocked_keys))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -1349,7 +1367,7 @@ where
             if oneshot_healthy_probe.is_none() || child_exited_cleanly {
                 let probe_timeout = spec.healthcheck.timeout().min(remaining);
                 let (probe, category) =
-                    probe_service_with_timeout(spec, global_env, &blocked_keys, probe_timeout);
+                    probe_service_with_timeout(spec, global_env, blocked_keys, probe_timeout);
                 if probe.healthy {
                     oneshot_healthy_probe = Some(probe);
                 } else {
@@ -1418,7 +1436,7 @@ where
 
         let probe_timeout = spec.healthcheck.timeout().min(remaining);
         let (probe, category) =
-            probe_service_with_timeout(spec, global_env, &blocked_keys, probe_timeout);
+            probe_service_with_timeout(spec, global_env, blocked_keys, probe_timeout);
         if probe.healthy {
             if !spec.survive_daemon_restart && coordinator.is_shutting_down() {
                 if !child_exited_cleanly {
@@ -1555,6 +1573,7 @@ pub(crate) fn stop_service_at(
     spec: &ServiceSpec,
     services_dir: &Path,
     global_env: &HashMap<String, String>,
+    blocked_keys: &HashSet<String>,
 ) -> Result<StopOutcome, ServiceError> {
     if !is_valid_service_name(name) {
         return Err(ServiceError::InvalidConfig {
@@ -1601,9 +1620,8 @@ pub(crate) fn stop_service_at(
         },
     }
 
-    let blocked_keys = blocked_identity_keys_for_services_dir(Some(services_dir));
     let (probe, _) =
-        probe_service_with_timeout(spec, global_env, &blocked_keys, spec.healthcheck.timeout());
+        probe_service_with_timeout(spec, global_env, blocked_keys, spec.healthcheck.timeout());
     if probe.healthy {
         Ok(StopOutcome::ExternallyManaged)
     } else {
@@ -1617,6 +1635,7 @@ pub(crate) fn service_status_at(
     spec: &ServiceSpec,
     services_dir: &Path,
     global_env: &HashMap<String, String>,
+    blocked_keys: &HashSet<String>,
     required_by: Vec<String>,
 ) -> ServiceStatus {
     let validation_issues = spec.validate(name);
@@ -1631,9 +1650,8 @@ pub(crate) fn service_status_at(
         };
     }
 
-    let blocked_keys = blocked_identity_keys_for_services_dir(Some(services_dir));
     let (probe, _) =
-        probe_service_with_timeout(spec, global_env, &blocked_keys, spec.healthcheck.timeout());
+        probe_service_with_timeout(spec, global_env, blocked_keys, spec.healthcheck.timeout());
     let lp = lease_path(services_dir, name);
     let ownership = match read_lease(&lp) {
         LeaseRead::Present(lease)
@@ -1683,6 +1701,20 @@ pub(crate) fn ensure_agent_services_with(
     services_dir: &Path,
     global_env: &HashMap<String, String>,
 ) -> Result<(), ServiceError> {
+    let mut agents_dirs: Vec<&Path> = vec![cfg.agents_dir.as_path()];
+    if let Some(parent) = agent.dir.parent() {
+        agents_dirs.push(parent);
+    }
+    let mut blocked_keys = blocked_identity_keys_for_agents_dirs(&agents_dirs);
+    if let Some(feishu) = agent.feishu.as_ref() {
+        if let Some(k) = feishu.app_id_env.as_deref() {
+            blocked_keys.insert(k.to_string());
+        }
+        if let Some(k) = feishu.app_secret_env.as_deref() {
+            blocked_keys.insert(k.to_string());
+        }
+    }
+
     let mut seen = HashSet::new();
     for raw_name in agent.required_services() {
         let name = raw_name.trim();
@@ -1695,7 +1727,7 @@ pub(crate) fn ensure_agent_services_with(
                 service: name.to_string(),
             });
         };
-        ensure_service_at(name, spec, services_dir, global_env)?;
+        ensure_service_at(name, spec, services_dir, global_env, &blocked_keys)?;
     }
     Ok(())
 }
@@ -1921,7 +1953,14 @@ mod tests {
             },
             ..Default::default()
         };
-        let err = ensure_service_at("ext-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err();
+        let err = ensure_service_at(
+            "ext-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, ServiceError::ProbeOnlyUnhealthy { .. }),
             "unexpected err: {err:?}"
@@ -1949,7 +1988,14 @@ mod tests {
             ..Default::default()
         };
 
-        let first = ensure_service_at("demo-svc", &spec, tmp.path(), &HashMap::new()).unwrap();
+        let first = ensure_service_at(
+            "demo-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         let pid = match first {
             EnsureOutcome::Started { pid, .. } => pid,
             other => panic!("expected Started, got {other:?}"),
@@ -1958,7 +2004,14 @@ mod tests {
         assert!(lease_path(tmp.path(), "demo-svc").exists());
 
         // 第二次调用应直接复用，不重起。
-        let second = ensure_service_at("demo-svc", &spec, tmp.path(), &HashMap::new()).unwrap();
+        let second = ensure_service_at(
+            "demo-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert!(matches!(second, EnsureOutcome::AlreadyHealthy { .. }));
 
         // status 应识别为 SummonManaged。
@@ -1967,6 +2020,7 @@ mod tests {
             &spec,
             tmp.path(),
             &HashMap::new(),
+            &HashSet::new(),
             vec!["a".into()],
         );
         assert!(status.probe.as_ref().is_some_and(|p| p.healthy));
@@ -1976,7 +2030,14 @@ mod tests {
         ));
 
         // stop 应精准停掉由 summon 拉起的进程并删除租约。
-        let stopped = stop_service_at("demo-svc", &spec, tmp.path(), &HashMap::new()).unwrap();
+        let stopped = stop_service_at(
+            "demo-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert_eq!(stopped, StopOutcome::Stopped { pid });
         assert!(!pid_is_alive(pid));
         assert!(!lease_path(tmp.path(), "demo-svc").exists());
@@ -1989,8 +2050,14 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let spec = tcp_spec(addr.to_string());
 
-        let outcome =
-            stop_service_at("external-proxy", &spec, tmp.path(), &HashMap::new()).unwrap();
+        let outcome = stop_service_at(
+            "external-proxy",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert_eq!(outcome, StopOutcome::ExternallyManaged);
         // 外部监听器仍然存活。
         assert!(probe_service(&spec, &HashMap::new()).healthy);
@@ -2025,7 +2092,7 @@ mod tests {
             let s = Arc::clone(&spec);
             let d = dir.clone();
             handles.push(std::thread::spawn(move || {
-                ensure_service_at("sf-svc", &s, &d, &HashMap::new()).unwrap()
+                ensure_service_at("sf-svc", &s, &d, &HashMap::new(), &HashSet::new()).unwrap()
             }));
         }
         let outcomes: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
@@ -2040,7 +2107,13 @@ mod tests {
         let lines = std::fs::read_to_string(&count_file).unwrap();
         assert_eq!(lines.lines().count(), 1, "start script must execute once");
 
-        let _ = stop_service_at("sf-svc", &spec, tmp.path(), &HashMap::new());
+        let _ = stop_service_at(
+            "sf-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
     }
 
     #[test]
@@ -2067,7 +2140,14 @@ mod tests {
         };
 
         let started = Instant::now();
-        let err = ensure_service_at("crash-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err();
+        let err = ensure_service_at(
+            "crash-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(4));
         let rendered = err.to_string();
         assert!(
@@ -2108,9 +2188,14 @@ mod tests {
             },
             ..Default::default()
         };
-        let probe_err =
-            ensure_service_at("probe-only-svc", &probe_only, tmp.path(), &HashMap::new())
-                .unwrap_err();
+        let probe_err = ensure_service_at(
+            "probe-only-svc",
+            &probe_only,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap_err();
         assert!(
             !probe_err.to_string().contains("probe-only-secret-999"),
             "probe error must not leak stdout/stderr: {probe_err}"
@@ -2134,22 +2219,36 @@ mod tests {
             ..Default::default()
         };
 
-        let first_pid =
-            match ensure_service_at("restart-svc", &spec, tmp.path(), &HashMap::new()).unwrap() {
-                EnsureOutcome::Started { pid, .. } => pid,
-                other => panic!("expected Started, got {other:?}"),
-            };
+        let first_pid = match ensure_service_at(
+            "restart-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap()
+        {
+            EnsureOutcome::Started { pid, .. } => pid,
+            other => panic!("expected Started, got {other:?}"),
+        };
         assert!(pid_is_alive(first_pid));
 
         // 模拟实例进程仍在运行但健康检查变为不健康。
         std::fs::remove_file(&ready_file).unwrap();
         assert!(pid_is_alive(first_pid));
 
-        let second_pid =
-            match ensure_service_at("restart-svc", &spec, tmp.path(), &HashMap::new()).unwrap() {
-                EnsureOutcome::Started { pid, .. } => pid,
-                other => panic!("expected Started replacement, got {other:?}"),
-            };
+        let second_pid = match ensure_service_at(
+            "restart-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap()
+        {
+            EnsureOutcome::Started { pid, .. } => pid,
+            other => panic!("expected Started replacement, got {other:?}"),
+        };
         assert_ne!(first_pid, second_pid);
         assert!(
             !crate::runtime::inflight::group_alive(first_pid as i32),
@@ -2161,7 +2260,13 @@ mod tests {
         };
         assert_eq!(lease.pid, second_pid);
 
-        let _ = stop_service_at("restart-svc", &spec, tmp.path(), &HashMap::new());
+        let _ = stop_service_at(
+            "restart-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
     }
 
     #[test]
@@ -2188,11 +2293,18 @@ mod tests {
             ..Default::default()
         };
 
-        let leader_pid =
-            match ensure_service_at("pg-svc", &spec, tmp.path(), &HashMap::new()).unwrap() {
-                EnsureOutcome::Started { pid, .. } => pid,
-                other => panic!("expected Started, got {other:?}"),
-            };
+        let leader_pid = match ensure_service_at(
+            "pg-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap()
+        {
+            EnsureOutcome::Started { pid, .. } => pid,
+            other => panic!("expected Started, got {other:?}"),
+        };
         let worker_pid: u32 = std::fs::read_to_string(&worker_pid_file)
             .unwrap()
             .trim()
@@ -2261,16 +2373,30 @@ mod tests {
             ..Default::default()
         };
 
-        let keep_pid =
-            match ensure_service_at("keep-svc", &keep_spec, tmp.path(), &HashMap::new()).unwrap() {
-                EnsureOutcome::Started { pid, .. } => pid,
-                other => panic!("expected Started: {other:?}"),
-            };
-        let drop_pid =
-            match ensure_service_at("drop-svc", &drop_spec, tmp.path(), &HashMap::new()).unwrap() {
-                EnsureOutcome::Started { pid, .. } => pid,
-                other => panic!("expected Started: {other:?}"),
-            };
+        let keep_pid = match ensure_service_at(
+            "keep-svc",
+            &keep_spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap()
+        {
+            EnsureOutcome::Started { pid, .. } => pid,
+            other => panic!("expected Started: {other:?}"),
+        };
+        let drop_pid = match ensure_service_at(
+            "drop-svc",
+            &drop_spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap()
+        {
+            EnsureOutcome::Started { pid, .. } => pid,
+            other => panic!("expected Started: {other:?}"),
+        };
 
         stop_non_surviving_services_at(tmp.path());
 
@@ -2286,7 +2412,13 @@ mod tests {
         assert!(!lease_path(tmp.path(), "drop-svc").exists());
 
         // 清理测试进程
-        let _ = stop_service_at("keep-svc", &keep_spec, tmp.path(), &HashMap::new());
+        let _ = stop_service_at(
+            "keep-svc",
+            &keep_spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
     }
 
     #[test]
@@ -2316,14 +2448,28 @@ mod tests {
             oneshot: true,
             ..Default::default()
         };
-        let out_a = ensure_service_at("oneshot-a", &spec_a, tmp.path(), &HashMap::new()).unwrap();
+        let out_a = ensure_service_at(
+            "oneshot-a",
+            &spec_a,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert!(
             matches!(out_a, EnsureOutcome::StartedExternal { .. }),
             "{out_a:?}"
         );
         assert!(!lease_path(tmp.path(), "oneshot-a").exists());
         assert_eq!(
-            stop_service_at("oneshot-a", &spec_a, tmp.path(), &HashMap::new()).unwrap(),
+            stop_service_at(
+                "oneshot-a",
+                &spec_a,
+                tmp.path(),
+                &HashMap::new(),
+                &HashSet::new()
+            )
+            .unwrap(),
             StopOutcome::ExternallyManaged
         );
 
@@ -2348,7 +2494,14 @@ mod tests {
             oneshot: true,
             ..Default::default()
         };
-        let out_b = ensure_service_at("oneshot-b", &spec_b, tmp.path(), &HashMap::new()).unwrap();
+        let out_b = ensure_service_at(
+            "oneshot-b",
+            &spec_b,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert!(
             matches!(out_b, EnsureOutcome::StartedExternal { .. }),
             "{out_b:?}"
@@ -2376,8 +2529,14 @@ mod tests {
             oneshot: true,
             ..Default::default()
         };
-        let err_c =
-            ensure_service_at("oneshot-c", &spec_c, tmp.path(), &HashMap::new()).unwrap_err();
+        let err_c = ensure_service_at(
+            "oneshot-c",
+            &spec_c,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap_err();
         assert!(
             matches!(err_c, ServiceError::ExitedEarly { .. }),
             "{err_c:?}"
@@ -2414,6 +2573,7 @@ mod tests {
             &spec,
             tmp.path(),
             &HashMap::new(),
+            &HashSet::new(),
             &coord,
             |_path, _lease| Err(anyhow::anyhow!("injected lease write failure")),
         )
@@ -2449,7 +2609,14 @@ mod tests {
             ..Default::default()
         };
 
-        let pid = match ensure_service_at("tamper-svc", &spec, tmp.path(), &HashMap::new()).unwrap()
+        let pid = match ensure_service_at(
+            "tamper-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap()
         {
             EnsureOutcome::Started { pid, .. } => pid,
             other => panic!("expected Started, got {other:?}"),
@@ -2476,7 +2643,14 @@ mod tests {
         pgid_tampered.pgid = pid.saturating_add(1);
         write_lease(&lp, &pgid_tampered).unwrap();
         let err = summon_core::i18n::with_language(summon_core::i18n::Language::Chinese, || {
-            stop_service_at("tamper-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err()
+            stop_service_at(
+                "tamper-svc",
+                &spec,
+                tmp.path(),
+                &HashMap::new(),
+                &HashSet::new(),
+            )
+            .unwrap_err()
         });
         assert!(
             matches!(err, ServiceError::LeaseOwnershipInvalid { .. }),
@@ -2490,7 +2664,14 @@ mod tests {
         let mut name_tampered = orig_lease.clone();
         name_tampered.service = "other-svc".to_string();
         write_lease(&lp, &name_tampered).unwrap();
-        let err = stop_service_at("tamper-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err();
+        let err = stop_service_at(
+            "tamper-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, ServiceError::LeaseOwnershipInvalid { .. }),
             "{err:?}"
@@ -2500,15 +2681,27 @@ mod tests {
 
         // 4. 租约 JSON 损坏不可读：stop 与 ensure 均拒绝删改覆盖。
         std::fs::write(&lp, "{broken-json").unwrap();
-        let stop_err =
-            stop_service_at("tamper-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err();
+        let stop_err = stop_service_at(
+            "tamper-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap_err();
         assert!(
             matches!(stop_err, ServiceError::LeaseOwnershipInvalid { .. }),
             "{stop_err:?}"
         );
         let _ = std::fs::remove_file(&ready_file);
-        let ensure_err =
-            ensure_service_at("tamper-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err();
+        let ensure_err = ensure_service_at(
+            "tamper-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap_err();
         assert!(
             matches!(ensure_err, ServiceError::LeaseOwnershipInvalid { .. }),
             "{ensure_err:?}"
@@ -2519,7 +2712,14 @@ mod tests {
         // 还原原租约以便正常清理测试进程。
         write_lease(&lp, &orig_lease).unwrap();
         assert_eq!(
-            stop_service_at("tamper-svc", &spec, tmp.path(), &HashMap::new()).unwrap(),
+            stop_service_at(
+                "tamper-svc",
+                &spec,
+                tmp.path(),
+                &HashMap::new(),
+                &HashSet::new()
+            )
+            .unwrap(),
             StopOutcome::Stopped { pid }
         );
     }
@@ -2552,6 +2752,7 @@ mod tests {
                 &spec_for_t1,
                 &dir_for_t1,
                 &HashMap::new(),
+                &HashSet::new(),
                 &coord_for_t1,
                 write_lease,
             )
@@ -2657,7 +2858,14 @@ mod tests {
             command: Some(vec!["/bin/sh".into(), "-c".into(), "exec sleep 30".into()]),
             ..Default::default()
         };
-        let err = ensure_service_at("tcp-log-svc", &spec, tmp.path(), &HashMap::new()).unwrap_err();
+        let err = ensure_service_at(
+            "tcp-log-svc",
+            &spec,
+            tmp.path(),
+            &HashMap::new(),
+            &HashSet::new(),
+        )
+        .unwrap_err();
         assert!(matches!(err, ServiceError::StartTimeout { .. }), "{err:?}");
         let log_text = std::fs::read_to_string(log_path(tmp.path(), "tcp-log-svc")).unwrap();
         assert!(
@@ -2683,8 +2891,8 @@ feishu:
 "#,
         )
         .unwrap();
-        let services_dir = tmp.path().join("run").join("services");
-        let blocked = blocked_identity_keys_for_services_dir(Some(&services_dir));
+        let custom_agents_dir = tmp.path().join("agents");
+        let blocked = blocked_identity_keys_for_agents_dirs(&[custom_agents_dir.as_path()]);
         assert!(blocked.contains("CUSTOM_SIBLING_SVC_ID"));
         assert!(blocked.contains("CUSTOM_SIBLING_SVC_SECRET"));
 
@@ -2733,5 +2941,114 @@ feishu:
             env_map.get("ALLOWED_OPT").map(String::as_str),
             Some("ok-value")
         );
+    }
+
+    #[test]
+    fn ensure_agent_services_blocks_custom_secrets_from_non_default_agents_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 故意把 agents_dir 放到与 `<summon_root>/agents` 完全无关的自定义目录；
+        // `<summon_root>/agents` 甚至不存在，证明拦截来自实际配置的 `cfg.agents_dir`。
+        let summon_root = tmp.path().join("summon-home");
+        let services_dir = summon_root.join("run").join("services");
+        let custom_agents_dir = tmp.path().join("custom-registry");
+        let sibling_dir = custom_agents_dir.join("sibling");
+        let caller_dir = custom_agents_dir.join("caller");
+        std::fs::create_dir_all(&sibling_dir).unwrap();
+        std::fs::create_dir_all(&caller_dir).unwrap();
+        std::fs::write(
+            sibling_dir.join("agent.yaml"),
+            r#"name: sibling
+runtime:
+  cli: claude
+feishu:
+  app_id_env: CUSTOM_OUTSIDE_DIR_ID
+  app_secret_env: CUSTOM_OUTSIDE_DIR_SECRET
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            caller_dir.join("agent.yaml"),
+            r#"name: caller
+runtime:
+  cli: claude
+  requires:
+    - probe-and-spawn
+"#,
+        )
+        .unwrap();
+
+        let probe_dump = tmp.path().join("probe_env.txt");
+        let svc_dump = tmp.path().join("svc_env.txt");
+        let ready_file = tmp.path().join("ready.flag");
+        let mut env = HashMap::new();
+        env.insert(
+            "LEAKED_FROM_CUSTOM_DIR".to_string(),
+            "${CUSTOM_OUTSIDE_DIR_SECRET}".to_string(),
+        );
+        env.insert(
+            "SAFE_SERVICE_OPT".to_string(),
+            "${SAFE_GLOBAL_SVC_OPT}".to_string(),
+        );
+
+        let spec = ServiceSpec {
+            command: Some(vec![
+                "sh".into(),
+                "-c".into(),
+                format!(
+                    "printf 'LEAK=%s;SAFE=%s\n' \"$LEAKED_FROM_CUSTOM_DIR\" \"$SAFE_SERVICE_OPT\" > '{}'; touch '{}'; sleep 10",
+                    svc_dump.display(),
+                    ready_file.display()
+                ),
+            ]),
+            healthcheck: ServiceHealthcheck {
+                command: Some(vec![
+                    "sh".into(),
+                    "-c".into(),
+                    format!(
+                        "printf 'LEAK=%s;SAFE=%s\n' \"$LEAKED_FROM_CUSTOM_DIR\" \"$SAFE_SERVICE_OPT\" > '{}'; test -f '{}'",
+                        probe_dump.display(),
+                        ready_file.display()
+                    ),
+                ]),
+                timeout_secs: 3,
+                ready_timeout_secs: 5,
+                ..Default::default()
+            },
+            env,
+            ..Default::default()
+        };
+
+        let mut cfg = Config {
+            agents_dir: custom_agents_dir.clone(),
+            ..Default::default()
+        };
+        cfg.services
+            .insert("probe-and-spawn".to_string(), spec.clone());
+
+        let mut global_env = HashMap::new();
+        global_env.insert(
+            "CUSTOM_OUTSIDE_DIR_SECRET".to_string(),
+            "synth-outside-secret-99".to_string(),
+        );
+        global_env.insert("SAFE_GLOBAL_SVC_OPT".to_string(), "safe-val-99".to_string());
+
+        let reg = summon_core::registry::Registry::load(&custom_agents_dir).unwrap();
+        let caller = reg.agents.iter().find(|a| a.name == "caller").unwrap();
+
+        ensure_agent_services_with(caller, &cfg, &services_dir, &global_env).unwrap();
+        let blocked = blocked_identity_keys_for_config(&cfg);
+        assert!(blocked.contains("CUSTOM_OUTSIDE_DIR_SECRET"));
+        let _ = stop_service_at(
+            "probe-and-spawn",
+            &spec,
+            &services_dir,
+            &global_env,
+            &blocked,
+        );
+
+        let probe_out = std::fs::read_to_string(&probe_dump).unwrap();
+        let svc_out = std::fs::read_to_string(&svc_dump).unwrap();
+        assert_eq!(probe_out.trim(), "LEAK=;SAFE=safe-val-99");
+        assert_eq!(svc_out.trim(), "LEAK=;SAFE=safe-val-99");
     }
 }

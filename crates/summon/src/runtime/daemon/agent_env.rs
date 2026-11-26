@@ -365,28 +365,29 @@ pub fn resolve_extra_env(agent: &Agent) -> Vec<(String, String)> {
     if !agent.required_services().is_empty() {
         let cfg_path = agent.effective_global_config_path();
         let global_env = crate::runtime::services::global_dotenv(cfg_path.as_deref());
-        let registered_identity_keys = agent
-            .dir
-            .parent()
-            .map(registered_feishu_identity_keys)
-            .unwrap_or_default();
-        // 共享服务 agent_env 的 `${VAR}` 展开禁止引用任何 runtime/飞书凭据键（含兄弟 agent
-        // 自定义名称的 `app_id_env`/`app_secret_env`），防止凭据被换名注入。
-        let service_lookup = |name: &str| -> Option<String> {
-            if summon_core::agent_identity::is_runtime_owned_env_key(name)
-                || registered_identity_keys.contains(name)
-            {
-                return None;
-            }
-            envfile
-                .get(name)
-                .filter(|v| !v.is_empty())
-                .cloned()
-                .or_else(|| global_env.get(name).filter(|v| !v.is_empty()).cloned())
-                .or_else(|| std::env::var(name).ok().filter(|v| !v.is_empty()))
-        };
         match agent.load_global_config() {
             Ok(cfg) => {
+                let mut agents_dirs: Vec<&std::path::Path> = vec![cfg.agents_dir.as_path()];
+                if let Some(parent) = agent.dir.parent() {
+                    agents_dirs.push(parent);
+                }
+                let registered_identity_keys =
+                    crate::runtime::services::blocked_identity_keys_for_agents_dirs(&agents_dirs);
+                // 共享服务 agent_env 的 `${VAR}` 展开禁止引用任何 runtime/飞书凭据键（含兄弟 agent
+                // 自定义名称的 `app_id_env`/`app_secret_env`），防止凭据被换名注入。
+                let service_lookup = |name: &str| -> Option<String> {
+                    if summon_core::agent_identity::is_runtime_owned_env_key(name)
+                        || registered_identity_keys.contains(name)
+                    {
+                        return None;
+                    }
+                    envfile
+                        .get(name)
+                        .filter(|v| !v.is_empty())
+                        .cloned()
+                        .or_else(|| global_env.get(name).filter(|v| !v.is_empty()).cloned())
+                        .or_else(|| std::env::var(name).ok().filter(|v| !v.is_empty()))
+                };
                 let mut seen = std::collections::HashSet::new();
                 for raw_svc in agent.required_services() {
                     let svc_name = raw_svc.trim();
@@ -399,7 +400,9 @@ pub fn resolve_extra_env(agent: &Agent) -> Vec<(String, String)> {
                     let mut keys: Vec<&String> = spec.agent_env.keys().collect();
                     keys.sort();
                     for key in keys {
-                        if summon_core::agent_identity::is_runtime_owned_env_key(key) {
+                        if summon_core::agent_identity::is_runtime_owned_env_key(key)
+                            || registered_identity_keys.contains(key)
+                        {
                             log(&summon_i18n::format!(
                                 "services.agent_env_skip_runtime_owned",
                                 agent = agent.name,
@@ -2083,6 +2086,67 @@ runtime:
             "sibling custom identity key must not be smuggled: {map:?}"
         );
         assert_eq!(map.get("SAFE_OUT").map(String::as_str), Some("synth-ok-66"));
+    }
+
+    #[test]
+    fn required_service_agent_env_blocks_custom_identity_key_from_configured_agents_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let summon_root = tmp.path().join("summon");
+        let custom_agents_dir = tmp.path().join("external-agents");
+        let sibling_dir = custom_agents_dir.join("sibling");
+        std::fs::create_dir_all(&summon_root).unwrap();
+        std::fs::create_dir_all(&sibling_dir).unwrap();
+        std::fs::write(summon_root.join(".env"), "SAFE_TOKEN=synth-ok-67\n").unwrap();
+        std::fs::write(
+            summon_root.join("config.yaml"),
+            format!(
+                r#"agents_dir: {}
+services:
+  proxy:
+    healthcheck:
+      tcp: 127.0.0.1:18999
+    agent_env:
+      SMUGGLED_EXTERNAL: "${{CUSTOM_EXTERNAL_BOT_SECRET}}"
+      CUSTOM_EXTERNAL_BOT_SECRET: "spoofed-value"
+      SAFE_OUT: "${{SAFE_TOKEN}}"
+"#,
+                custom_agents_dir.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            sibling_dir.join("agent.yaml"),
+            r#"name: sibling
+runtime:
+  cli: claude
+feishu:
+  app_id_env: CUSTOM_EXTERNAL_BOT_ID
+  app_secret_env: CUSTOM_EXTERNAL_BOT_SECRET
+"#,
+        )
+        .unwrap();
+        let agent_dir = tmp.path().join("separate-caller-dir").join("caller");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let mut agent: Agent = serde_yaml::from_str(
+            r#"name: caller
+runtime:
+  cli: claude
+  requires:
+    - proxy
+"#,
+        )
+        .unwrap();
+        agent.dir = agent_dir;
+        agent.global_config_path = Some(summon_root.join("config.yaml"));
+
+        std::env::set_var("CUSTOM_EXTERNAL_BOT_SECRET", "synth-external-secret-67");
+        let merged = resolve_extra_env(&agent);
+        std::env::remove_var("CUSTOM_EXTERNAL_BOT_SECRET");
+
+        let map: std::collections::HashMap<_, _> = merged.into_iter().collect();
+        assert!(!map.contains_key("SMUGGLED_EXTERNAL"), "{map:?}");
+        assert!(!map.contains_key("CUSTOM_EXTERNAL_BOT_SECRET"), "{map:?}");
+        assert_eq!(map.get("SAFE_OUT").map(String::as_str), Some("synth-ok-67"));
     }
 
     #[test]
