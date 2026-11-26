@@ -371,14 +371,21 @@ fn menu_title(lines: &[&str], start: usize, footer: bool) -> String {
     }
 }
 
-/// 对话框顶线:选项上方最近的一条满宽 `─`,且确实属于这个对话框。输入框的上下边框也是这种横线,
-/// 靠它框住的输入行认出来 —— 上边框下一行就是输入行,下边框与上边框之间夹着输入行;顶线到选项之间
-/// 只有对话框自己的标题与正文,再出现输入行就说明这条横线属于更早的转录。
+/// 对话框顶线:选项上方最近的一条满宽 `─` 或 `▔`,且确实属于这个对话框。顶线到选项之间只有对话框
+/// 自己的标题与正文,再出现输入行就说明这条横线属于更早的转录。
+///
+/// `▔` 只画对话框顶线(`/model`、`/effort` 的切换确认)。`─` 还是输入框的上下边框,靠它框住的
+/// 输入行认出来 —— 上边框下一行就是输入行,下边框与上边框之间夹着输入行。
 ///
 /// 顶线之上是什么不参与判断:用户发一条消息、claude 直接弹框时,紧贴顶线的就是那条 prompt 回显。
 fn dialog_top(lines: &[&str], start: usize) -> Option<usize> {
-    let rule = lines[..start].iter().rposition(|l| is_dialog_rule(l))?;
+    let rule = lines[..start]
+        .iter()
+        .rposition(|l| is_dialog_rule(l) || is_dialog_top_bar(l))?;
     let has_prompt = |block: &[&str]| block.iter().any(|l| prompt_rest(l).is_some());
+    if is_dialog_top_bar(lines[rule]) {
+        return (!has_prompt(&lines[rule + 1..start])).then_some(rule);
+    }
     let input_top = rule + 1 < start && prompt_rest(lines[rule + 1]).is_some();
     let input_bottom = lines[..rule]
         .iter()
@@ -402,8 +409,16 @@ fn has_dialog_footer(below: &[&str]) -> bool {
 }
 
 fn is_dialog_rule(line: &str) -> bool {
+    is_full_rule(line, '─')
+}
+
+fn is_dialog_top_bar(line: &str) -> bool {
+    is_full_rule(line, '▔')
+}
+
+fn is_full_rule(line: &str, stroke: char) -> bool {
     let line = line.trim_end();
-    line.chars().count() >= DIALOG_RULE_MIN && line.chars().all(|c| c == '─')
+    line.chars().count() >= DIALOG_RULE_MIN && line.chars().all(|c| c == stroke)
 }
 
 /// 屏幕行整理成一段可读的块:去行尾空白、去首尾空行、连续空行并成一行、整体去掉公共的前导空格。
@@ -711,6 +726,50 @@ This conversation is cached for the current effort level. Switching to xhigh mea
         );
         assert!(st.title.contains("Change effort level?"));
         assert!(st.raw.contains("❯ 1. Yes"));
+    }
+
+    /// claude 2.1.332 `/model` 切换确认:顶线是 `▔`,不是 `─`。顶线上方的回显与输入行不影响取标题。
+    #[test]
+    fn switch_model_dialog_with_upper_bar_top_is_not_cut() {
+        let bar = "▔".repeat(120);
+        let pane = format!(
+            "\
+❯ reply with just: hi
+
+⏺ hi
+
+✻ Brewed for 3s · done 3:21 PM
+
+{bar}
+  Switch model?
+
+  Your next response will be slower and use more tokens
+
+  This conversation is cached for the current model. Switching to Sonnet 5.5 means the full history gets re-read.
+
+  ❯ 1. Yes, switch to Sonnet 5.5
+    2. No, go back
+
+  Enter to confirm · Esc to cancel
+"
+        );
+        let st = awaiting_choice(&pane).expect("应识别为等人选的对话框");
+        assert!(!title_is_cut(&st.title), "顶线在屏上,标题不该标成缺开头");
+        assert!(st.title.starts_with("Switch model?"), "{}", st.title);
+        assert!(!st.title.contains("Brewed"), "顶线上方的转录不进标题");
+        assert_eq!(st.options.len(), 2);
+        assert_eq!(st.options[0].label, "Yes, switch to Sonnet 5.5");
+    }
+
+    /// `▔` 顶线与选项之间夹着输入行时,这条横线属于更早的转录,不能当成这个对话框的顶线。
+    #[test]
+    fn upper_bar_above_a_prompt_line_is_not_the_dialog_top() {
+        let bar = "▔".repeat(40);
+        let pane = format!(
+            "{bar}\n  Old dialog\n❯ typed later\n  Question?\n  ❯ 1. Yes\n    2. No\n\n  Esc to cancel\n"
+        );
+        let st = awaiting_choice(&pane).expect("仍是等人选的菜单");
+        assert!(title_is_cut(&st.title));
     }
 
     /// 正常输出里的编号列表(无 `❯` 光标)绝不能误判成菜单。
