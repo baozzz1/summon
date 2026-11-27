@@ -112,7 +112,10 @@ summon guide
 ```
 
 `onboard` 引导创建机器人配置并连接本地 CLI。在飞书私聊中直接发消息，在群聊中提及机器人。
-具体命令、配置项和故障排查使用随二进制分发的手册：
+
+**summon 的配置尽量交给 agent 来做**：在飞书里告诉它想要的效果，它会查随二进制分发的手册，
+确认字段和生效时机，然后改配置并验证。Summon Guide 各章节，以及 `config.yaml`、`agent.yaml`
+该怎么配，见 [配置 summon](docs/configuration.md)。在终端里也可以直接查手册：
 
 ```sh
 summon guide commands

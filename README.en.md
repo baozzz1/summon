@@ -131,8 +131,12 @@ summon guide
 ```
 
 `onboard` guides you through creating the bot configuration and connecting your local CLI. Message the
-bot directly in a private chat; mention it in a group. Commands, configuration and troubleshooting are
-covered by the manual shipped with the binary:
+bot directly in a private chat; mention it in a group.
+
+**Let an agent configure summon whenever you can**: tell it in Feishu what you want, and it reads the manual
+shipped with the binary, confirms the fields and when they take effect, then edits the configuration and
+verifies it. For the Summon Guide chapters and how to set up `config.yaml` and `agent.yaml`, see
+[Configuring summon](docs/configuration.en.md). You can also read the manual directly in a terminal:
 
 ```sh
 summon guide commands
